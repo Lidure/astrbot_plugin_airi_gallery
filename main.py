@@ -33,7 +33,7 @@ IMAGE_SUFFIXES = {
 
 HELP_TEXT = "\n".join(
     [
-        "Airi 数字图库插件",
+        "Airi 画廊插件",
         "",
         "命令：",
         "- /airi_gallery：查看插件帮助（图片海报）",
@@ -857,7 +857,7 @@ class Main(Star):
             (241, 218, 182, 238),
         ]
 
-        drawer.text((padding, 54), "Airi 数字图库插件", fill=(58, 64, 101), font=title_font)
+        drawer.text((padding, 54), "Airi 画廊插件", fill=(58, 64, 101), font=title_font)
         drawer.text(
             (padding, 126),
             "帮助说明 · 看命令模式随配置变化 · 管理命令用 #",

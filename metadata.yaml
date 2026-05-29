@@ -1,6 +1,6 @@
 name: astrbot_plugin_airi_gallery
-display_name: Airi数字图库🌸
-desc: 数字排序图库插件，支持按分类随机看图、按编号查看、回复上传、删除和本地导入。
+display_name: Airi画廊🌸
+desc: 数字排序画廊插件，支持按分类随机看图、按编号查看、回复上传、删除和本地导入。
 version: v0.3.0
 author: Lidure
 repo: https://github.com/Lidure/astrbot_plugin_airi_gallery
