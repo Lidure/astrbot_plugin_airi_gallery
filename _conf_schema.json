@@ -1,0 +1,34 @@
+{
+  "command_mode": {
+    "type": "string",
+    "description": "看图命令触发模式",
+    "hint": "no_prefix: 看xxx；prefix: /看xxx。该配置仅影响看命令，上传/删除/导入仍支持带或不带 /。",
+    "default": "no_prefix",
+    "options": [
+      "no_prefix",
+      "prefix"
+    ]
+  },
+  "use_permission": {
+    "type": "boolean",
+    "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
+    "default": false,
+    "hint": "开启后，只有配置在 admins 或 whitelist 中的用户可以执行破坏性命令。"
+  },
+  "admins": {
+    "type": "array",
+    "description": "管理员标识列表（用户 id 或 用户名的字符串），优先匹配用户 id。",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  },
+  "whitelist": {
+    "type": "array",
+    "description": "允许执行破坏性操作的额外白名单（用户 id 或 用户名），通常用于临时授权。",
+    "items": {
+      "type": "string"
+    },
+    "default": []
+  }
+}

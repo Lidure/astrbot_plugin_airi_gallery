@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import random
 import re
 import shutil
+import time
 from pathlib import Path
 
 from astrbot.api import logger
@@ -14,6 +16,8 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 DEFAULT_CATEGORY = "default"
+MODE_NO_PREFIX = "no_prefix"
+MODE_PREFIX = "prefix"
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -32,7 +36,11 @@ HELP_TEXT = "\n".join(
         "",
         "命令：",
         "- 看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
+        "- 看<分类>N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
+        "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
         "- 看123：发送编号为 123 的图片或表情包",
+        "- /分类列表：查看当前已创建的分类",
+        "- /创建<分类>：创建一个新的分类文件夹",
         "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
         "- /删除123：删除编号为 123 的图片或表情包",
         "- /导入图库：重新扫描 gallery 并自动整理数字编号",
@@ -55,11 +63,17 @@ def _is_image_file(path: Path) -> bool:
 
 
 class Main(Star):
-    def __init__(self, context: Context) -> None:
+    def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
+        self.config = config or {}
         self.plugin_data_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
         self.gallery_root = self.plugin_data_dir / "gallery"
         self.gallery_root.mkdir(parents=True, exist_ok=True)
+        self.command_mode = self._resolve_command_mode()
+        # 权限相关配置
+        self.use_permission = bool(self.config.get("use_permission", False))
+        self.admins = {str(x) for x in (self.config.get("admins") or [])}
+        self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
@@ -80,18 +94,36 @@ class Main(Star):
             if kind == "help":
                 await event.send(event.plain_result(HELP_TEXT))
             elif kind == "import":
-                renamed_count = await self._normalize_gallery_tree()
-                await event.send(
-                    event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。")
-                )
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                else:
+                    renamed_count = await self._normalize_gallery_tree()
+                    await event.send(
+                        event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。")
+                    )
             elif kind == "view_number":
                 await self._handle_view_number(event, int(payload))
+            elif kind == "view_all_category":
+                await self._handle_view_all_category(event, str(payload))
             elif kind == "view_category":
                 await self._handle_view_category(event, str(payload))
+            elif kind == "view_multiple":
+                cat, cnt = payload
+                await self._handle_view_multiple(event, str(cat), int(cnt))
+            elif kind == "list_categories":
+                await self._handle_list_categories(event)
+            elif kind == "create_category":
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                else:
+                    await self._handle_create_category(event, str(payload))
             elif kind == "upload":
                 await self._handle_upload(event, str(payload))
             elif kind == "delete":
-                await self._handle_delete(event, payload)
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                else:
+                    await self._handle_delete(event, payload)
             else:
                 return
         finally:
@@ -105,6 +137,91 @@ class Main(Star):
     async def terminate(self):
         """插件卸载或停用时调用。"""
 
+    def _resolve_command_mode(self) -> str:
+        mode = str(self.config.get("command_mode", MODE_NO_PREFIX)).strip().lower()
+        if mode not in {MODE_NO_PREFIX, MODE_PREFIX}:
+            return MODE_NO_PREFIX
+        return mode
+
+    def _get_event_actor_identity(self, event: AstrMessageEvent) -> tuple[str | None, str | None]:
+        """尝试从 event 中解析出用户 id 及显示名，尽量兼容不同适配器。"""
+        uid = None
+        name = None
+        # 常见直接属性
+        for attr in ("user_id", "uid", "id"):
+            val = getattr(event, attr, None)
+            if val:
+                uid = str(val)
+                break
+
+        # 发送者信息对象（可能存在 sender、user、author 等）
+        sender = getattr(event, "sender", None) or getattr(event, "user", None) or getattr(event, "author", None)
+        if sender:
+            # 常见子属性
+            for key in ("user_id", "id", "uid"):
+                val = getattr(sender, key, None)
+                if val:
+                    uid = uid or str(val)
+                    break
+            # 名称
+            for key in ("name", "nickname", "display_name", "username"):
+                val = getattr(sender, key, None)
+                if val:
+                    name = str(val)
+                    break
+
+        # 退回到原始事件字典
+        raw = getattr(event, "raw_event", None) or getattr(event, "raw", None)
+        if isinstance(raw, dict):
+            for key in ("user_id", "userId", "id"):
+                if not uid and key in raw and raw[key]:
+                    uid = str(raw[key])
+                    break
+            for key in ("name", "nickname", "username"):
+                if not name and key in raw and raw[key]:
+                    name = str(raw[key])
+                    break
+
+        return uid, name
+
+    def _is_allowed(self, event: AstrMessageEvent) -> bool:
+        """根据配置判断触发者是否有权限执行破坏性操作。"""
+        if not self.use_permission:
+            return True
+
+        # 如果事件或 sender 有 is_admin 属性且为真，则放行
+        if getattr(event, "is_admin", False):
+            return True
+        sender = getattr(event, "sender", None)
+        if sender and getattr(sender, "is_admin", False):
+            return True
+
+        uid, name = self._get_event_actor_identity(event)
+        if uid and uid in self.admins:
+            return True
+        if name and name in self.admins:
+            return True
+        if uid and uid in self.whitelist:
+            return True
+        if name and name in self.whitelist:
+            return True
+
+        return False
+
+    def _match_view_command(self, normalized: str) -> re.Match[str] | None:
+        if self.command_mode == MODE_PREFIX:
+            return re.match(r"^/看\s*(.+)$", normalized)
+        if normalized.startswith("/"):
+            return None
+        return re.match(r"^看\s*(.+)$", normalized)
+
+    def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
+        if self.command_mode == MODE_PREFIX:
+            return re.match(r"^/看全部\s*(.+)$", normalized)
+        if normalized.startswith("/"):
+            return None
+        return re.match(r"^看全部\s*(.+)$", normalized)
+
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
 
@@ -113,6 +230,16 @@ class Main(Star):
 
         if normalized in {"导入图库", "/导入图库"}:
             return "import", None
+
+        if normalized == "/分类列表":
+            return "list_categories", None
+
+        create_match = re.match(r"^/创建\s*(.+)$", normalized)
+        if create_match:
+            target = create_match.group(1).strip()
+            if not target:
+                return None
+            return "create_category", _sanitize_component(target)
 
         upload_match = re.match(r"^/?上传\s*(.+)$", normalized)
         if upload_match:
@@ -127,11 +254,25 @@ class Main(Star):
                 return "delete", numbers
             return None
 
-        view_match = re.match(r"^/?看\s*(.+)$", normalized)
+        view_all_match = self._match_view_all_command(normalized)
+        if view_all_match:
+            target = view_all_match.group(1).strip()
+            if not target:
+                return None
+            return "view_all_category", _sanitize_component(target)
+
+        view_match = self._match_view_command(normalized)
         if view_match:
             target = view_match.group(1).strip()
             if not target:
                 return None
+            # 支持看<分类>N 的语法（例如 看cat3），N 最大为 5
+            many_match = re.match(r"^(.+?)(\d+)$", target)
+            if many_match:
+                cat = many_match.group(1).strip()
+                num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
+                return "view_multiple", (_sanitize_component(cat), max(1, min(5, num)))
+
             if target.isdigit():
                 return "view_number", int(target)
             return "view_category", _sanitize_component(target)
@@ -209,15 +350,92 @@ class Main(Star):
             return
         await event.send(event.image_result(str(random.choice(images))))
 
+    async def _handle_view_all_category(self, event: AstrMessageEvent, category: str):
+        images = self._iter_category_images(category)
+        if not images:
+            await event.send(event.plain_result(f"分类【{category}】里还没有图片或表情包。"))
+            return
+
+        collage_path = await self._build_category_collage(category, images)
+        if not collage_path:
+            await event.send(event.plain_result(f"分类【{category}】拼图生成失败，请检查图片文件。"))
+            return
+
+        await event.send(event.image_result(str(collage_path)))
+
+    async def _handle_view_multiple(self, event: AstrMessageEvent, category: str, count: int):
+        images = self._iter_category_images(category)
+        if not images:
+            await event.send(event.plain_result(f"分类【{category}】里还没有图片或表情包。"))
+            return
+
+        count = max(1, min(5, int(count)))
+        sats = images if len(images) <= count else random.sample(images, count)
+
+        # 构造单条消息，包含多个图片组件
+        try:
+            result = event.make_result()
+            for path in sats:
+                result.file_image(str(path))
+            await event.send(result)
+        except Exception as exc:
+            logger.warning(f"一次性发送多图失败：{exc}")
+            # 退回到逐条发送
+            for path in sats:
+                try:
+                    await event.send(event.image_result(str(path)))
+                except Exception as exc2:
+                    logger.warning(f"发送图片失败 {path}: {exc2}")
+
+    async def _handle_create_category(self, event: AstrMessageEvent, category: str):
+        category_dir = self._category_dir(category)
+        if category_dir.exists():
+            await event.send(event.plain_result(f"分类【{category}】已存在。"))
+            return
+
+        category_dir.mkdir(parents=True, exist_ok=True)
+        await event.send(event.plain_result(f"已创建分类【{category}】。"))
+
+    async def _handle_list_categories(self, event: AstrMessageEvent):
+        if not self.gallery_root.exists():
+            await event.send(event.plain_result("当前没有任何分类。"))
+            return
+
+        categories = sorted(
+            [
+                path.name
+                for path in self.gallery_root.iterdir()
+                if path.is_dir() and path.name != "generated"
+            ],
+            key=lambda name: name.lower(),
+        )
+
+        if not categories:
+            await event.send(event.plain_result("当前没有任何分类。"))
+            return
+
+        await event.send(
+            event.plain_result(
+                f"当前分类共 {len(categories)} 个：\n" + "\n".join(categories)
+            )
+        )
+
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
+        category_dir = self._category_dir(category)
+        if not category_dir.exists():
+            await event.send(
+                event.plain_result(
+                    f"分类【{category}】不存在，请先使用 /创建{category} 创建分类。"
+                )
+            )
+            return
+
         image_info = await self._get_reply_image(event)
         if not image_info:
             await event.send(event.plain_result("请先回复一张图片或表情包，再发送 /上传<分类>。"))
             return
 
         source_path, image_bytes = image_info
-        category_dir = self._category_dir(category)
-        category_dir.mkdir(parents=True, exist_ok=True)
 
         index = self._next_index()
         suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
@@ -305,3 +523,78 @@ class Main(Star):
             used_indices.add(target_index)
 
         return renamed_count
+
+    async def _build_category_collage(self, category: str, images: list[Path]) -> Path | None:
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageDraw, ImageFont, ImageOps
+        except Exception:
+            logger.error("缺少 Pillow 依赖，无法生成看全部拼图")
+            return None
+
+        if not images:
+            return None
+
+        indexed_images = sorted(
+            [
+                (int(path.stem), path)
+                for path in images
+                if path.stem.isdigit()
+            ],
+            key=lambda item: item[0],
+        )
+        if not indexed_images:
+            indexed_images = [(idx + 1, path) for idx, path in enumerate(images)]
+
+        thumb_size = 220
+        label_height = 36
+        padding = 24
+        gap = 18
+        cols = min(5, max(1, math.ceil(math.sqrt(len(indexed_images)))))
+        rows = math.ceil(len(indexed_images) / cols)
+        cell_w = thumb_size
+        cell_h = thumb_size + label_height
+        canvas_w = padding * 2 + cols * cell_w + (cols - 1) * gap
+        canvas_h = padding * 2 + rows * cell_h + (rows - 1) * gap
+
+        canvas = PILImage.new("RGB", (canvas_w, canvas_h), (248, 248, 248))
+        drawer = ImageDraw.Draw(canvas)
+        font = ImageFont.load_default()
+
+        for pos, (index, image_path) in enumerate(indexed_images):
+            row = pos // cols
+            col = pos % cols
+            x = padding + col * (cell_w + gap)
+            y = padding + row * (cell_h + gap)
+
+            drawer.rectangle(
+                [x - 2, y - 2, x + thumb_size + 2, y + thumb_size + 2],
+                fill=(232, 232, 232),
+            )
+
+            try:
+                with PILImage.open(image_path) as img:
+                    rgb_img = img.convert("RGB")
+                    preview = ImageOps.contain(
+                        rgb_img,
+                        (thumb_size, thumb_size),
+                        method=PILImage.Resampling.LANCZOS,
+                    )
+            except Exception as exc:
+                logger.warning(f"拼图读取失败 {image_path}: {exc}")
+                drawer.rectangle([x, y, x + thumb_size, y + thumb_size], fill=(250, 220, 220))
+                drawer.text((x + 8, y + 8), "加载失败", fill=(120, 20, 20), font=font)
+            else:
+                offset_x = x + (thumb_size - preview.width) // 2
+                offset_y = y + (thumb_size - preview.height) // 2
+                drawer.rectangle([x, y, x + thumb_size, y + thumb_size], fill=(255, 255, 255))
+                canvas.paste(preview, (offset_x, offset_y))
+
+            label = f"#{index}"
+            drawer.text((x + 8, y + thumb_size + 8), label, fill=(25, 25, 25), font=font)
+
+        output_dir = self.plugin_data_dir / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"{_sanitize_component(category)}_all_{int(time.time() * 1000)}.png"
+        canvas.save(output_path, format="PNG")
+        return output_path
