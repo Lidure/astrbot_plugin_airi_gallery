@@ -17,7 +17,8 @@
   },
   "admins": {
     "type": "list",
-    "description": "管理员标识列表（用户 id 或 用户名的字符串），优先匹配用户 id。",
+    "description": "管理员 id 或用户名",
+    "hint": "示例：2542219495 或 username；优先匹配用户 id，支持多个条目。",
     "items": {
       "type": "string"
     },
@@ -25,7 +26,8 @@
   },
   "whitelist": {
     "type": "list",
-    "description": "允许执行破坏性操作的额外白名单（用户 id 或 用户名），通常用于临时授权。",
+    "description": "允许的白名单（id 或用户名）",
+    "hint": "示例：2542219495；用于临时授权，支持多个条目。",
     "items": {
       "type": "string"
     },
