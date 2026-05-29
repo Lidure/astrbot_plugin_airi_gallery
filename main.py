@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 import re
 import shutil
@@ -36,7 +37,7 @@ HELP_TEXT = "\n".join(
         "",
         "命令：",
         "- 看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
-        "- 看<分类>N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
+        "- 看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
         "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
         "- 看123：发送编号为 123 的图片或表情包",
         "- /分类列表：查看当前已创建的分类",
@@ -62,6 +63,68 @@ def _is_image_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
 
 
+def _load_collage_font(size: int, font_path: str | None = None):
+    """加载更清晰的拼图编号字体，优先使用系统中文字体。"""
+    try:
+        from PIL import ImageFont
+    except Exception:
+        return None
+
+    candidate_fonts: list[str] = []
+
+    # 优先读取可选配置，方便管理员自己指定字体文件。
+    # 例如在 Linux / macOS 上挂载一款支持中文的字体。
+    if font_path:
+        candidate_fonts.append(str(font_path))
+
+    env_font = os.environ.get("AIRI_GALLERY_FONT_PATH", "").strip()
+    if env_font:
+        candidate_fonts.append(env_font)
+
+    # Windows 常见字体
+    candidate_fonts.extend(
+        [
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\msyhbd.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\simsun.ttc",
+        ]
+    )
+
+    # Linux / Docker 常见字体
+    candidate_fonts.extend(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+    )
+
+    # macOS 常见字体
+    candidate_fonts.extend(
+        [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+    )
+
+    for font_path in candidate_fonts:
+        try:
+            return ImageFont.truetype(font_path, size=size)
+        except Exception:
+            continue
+
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
 class Main(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
@@ -70,6 +133,7 @@ class Main(Star):
         self.gallery_root = self.plugin_data_dir / "gallery"
         self.gallery_root.mkdir(parents=True, exist_ok=True)
         self.command_mode = self._resolve_command_mode()
+        self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         # 权限相关配置
         self.use_permission = bool(self.config.get("use_permission", False))
         self.admins = {str(x) for x in (self.config.get("admins") or [])}
@@ -266,8 +330,9 @@ class Main(Star):
             target = view_match.group(1).strip()
             if not target:
                 return None
-            # 支持看<分类>N 的语法（例如 看cat3），N 最大为 5
-            many_match = re.match(r"^(.+?)(\d+)$", target)
+            # 仅支持“分类 + 空格 + 数字”的写法，例如：看cat 3
+            # 这样可避免把“看602”误判成分类 6、数量 02。
+            many_match = re.match(r"^(.+?)\s+(\d+)$", target)
             if many_match:
                 cat = many_match.group(1).strip()
                 num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
@@ -281,6 +346,22 @@ class Main(Star):
 
     def _category_dir(self, category: str) -> Path:
         return self.gallery_root / _sanitize_component(category)
+
+    def _resolve_existing_category_dir(self, category: str) -> Path | None:
+        """尽量按用户输入匹配已有分类目录，避免因大小写或旧数据造成误判。"""
+        target_name = _sanitize_component(category)
+        direct_dir = self._category_dir(target_name)
+        if direct_dir.exists() and direct_dir.is_dir():
+            return direct_dir
+
+        if not self.gallery_root.exists():
+            return None
+
+        for path in self.gallery_root.iterdir():
+            if path.is_dir() and path.name.lower() == target_name.lower():
+                return path
+
+        return None
 
     def _iter_image_files(self) -> list[Path]:
         if not self.gallery_root.exists():
@@ -421,8 +502,8 @@ class Main(Star):
         )
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
-        category_dir = self._category_dir(category)
-        if not category_dir.exists():
+        category_dir = self._resolve_existing_category_dir(category)
+        if not category_dir:
             await event.send(
                 event.plain_result(
                     f"分类【{category}】不存在，请先使用 /创建{category} 创建分类。"
@@ -559,7 +640,7 @@ class Main(Star):
 
         canvas = PILImage.new("RGB", (canvas_w, canvas_h), (248, 248, 248))
         drawer = ImageDraw.Draw(canvas)
-        font = ImageFont.load_default()
+        font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
 
         for pos, (index, image_path) in enumerate(indexed_images):
             row = pos // cols
@@ -591,7 +672,8 @@ class Main(Star):
                 canvas.paste(preview, (offset_x, offset_y))
 
             label = f"#{index}"
-            drawer.text((x + 8, y + thumb_size + 8), label, fill=(25, 25, 25), font=font)
+            label_y = y + thumb_size + 5
+            drawer.text((x + 8, label_y), label, fill=(25, 25, 25), font=font)
 
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
