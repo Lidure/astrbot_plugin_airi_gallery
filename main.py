@@ -36,11 +36,12 @@ HELP_TEXT = "\n".join(
         "Airi 数字图库插件",
         "",
         "命令：",
+        "- /airi_gallery：查看插件帮助（图片海报）",
         "- 看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
         "- 看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
         "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
         "- 看123：发送编号为 123 的图片或表情包",
-        "- #分类列表：查看当前已创建的分类",
+        "- #分类列表：以图片卡片形式查看当前已创建的分类",
         "- #创建<分类>：创建一个新的分类文件夹",
         "- #上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
         "- #删除123：删除编号为 123 的图片或表情包",
@@ -125,6 +126,11 @@ def _load_collage_font(size: int, font_path: str | None = None):
         return None
 
 
+def _interpolate_color(start: tuple[int, int, int], end: tuple[int, int, int], ratio: float) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, ratio))
+    return tuple(int(start[i] + (end[i] - start[i]) * ratio) for i in range(3))
+
+
 class Main(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
@@ -156,7 +162,11 @@ class Main(Star):
         kind, payload = action
         try:
             if kind == "help":
-                await event.send(event.plain_result(HELP_TEXT))
+                help_path = await self._build_help_image()
+                if help_path:
+                    await event.send(event.image_result(str(help_path)))
+                else:
+                    await event.send(event.plain_result(HELP_TEXT))
             elif kind == "import":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -196,6 +206,10 @@ class Main(Star):
     @filter.command("airi_gallery")
     async def airi_gallery(self, event: AstrMessageEvent):
         """插件帮助。"""
+        help_path = await self._build_help_image()
+        if help_path:
+            yield event.image_result(str(help_path))
+            return
         yield event.plain_result(HELP_TEXT)
 
     async def terminate(self):
@@ -289,7 +303,7 @@ class Main(Star):
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
 
-        if normalized in {"airi_gallery", "/airi_gallery", "图库帮助", "/图库帮助"}:
+        if normalized in {"/airi_gallery", "/图库帮助"}:
             return "help", None
 
         if normalized in {"#导入图库"}:
@@ -397,6 +411,9 @@ class Main(Star):
             key=lambda item: item.relative_to(category_dir).as_posix().lower(),
         )
 
+    def _count_category_images(self, category: str) -> int:
+        return len(self._iter_category_images(category))
+
     def _extract_image_components(self, components: list[object]) -> list[Image]:
         images: list[Image] = []
         for component in components:
@@ -493,6 +510,11 @@ class Main(Star):
 
         if not categories:
             await event.send(event.plain_result("当前没有任何分类。"))
+            return
+
+        card_path = await self._build_category_list_image(categories)
+        if card_path:
+            await event.send(event.image_result(str(card_path)))
             return
 
         await event.send(
@@ -679,4 +701,245 @@ class Main(Star):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{_sanitize_component(category)}_all_{int(time.time() * 1000)}.png"
         canvas.save(output_path, format="PNG")
+        return output_path
+
+    async def _build_category_list_image(self, categories: list[str]) -> Path | None:
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageDraw, ImageFont
+        except Exception:
+            logger.error("缺少 Pillow 依赖，无法生成分类列表图片")
+            return None
+
+        if not categories:
+            return None
+
+        list_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
+        title_font = _load_collage_font(54, self.collage_font_path) or list_font
+        subtitle_font = _load_collage_font(20, self.collage_font_path) or list_font
+        count_font = _load_collage_font(24, self.collage_font_path) or list_font
+
+        cols = 2 if len(categories) <= 4 else 3
+        card_w = 360
+        card_h = 132
+        gap = 24
+        padding_x = 42
+        padding_top = 180
+        padding_bottom = 44
+        rows = math.ceil(len(categories) / cols)
+        width = padding_x * 2 + cols * card_w + (cols - 1) * gap
+        height = padding_top + rows * card_h + max(0, rows - 1) * gap + padding_bottom
+
+        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
+        drawer = ImageDraw.Draw(canvas)
+
+        top_colors = (12, 18, 40)
+        bottom_colors = (51, 28, 78)
+        for y in range(height):
+            ratio = y / max(1, height - 1)
+            color = _interpolate_color(top_colors, bottom_colors, ratio)
+            drawer.line((0, y, width, y), fill=color)
+
+        accent_spots = [
+            ((-120, -90, 430, 360), (88, 180, 255, 46)),
+            ((width - 340, 40, width + 120, 500), (255, 128, 200, 36)),
+            ((width * 0.28, height - 230, width * 0.28 + 320, height + 90), (76, 226, 184, 40)),
+        ]
+        for box, color in accent_spots:
+            drawer.ellipse(box, fill=color)
+
+        drawer.text((padding_x, 48), "分类列表", fill=(255, 255, 255), font=title_font)
+        drawer.text(
+            (padding_x, 112),
+            f"当前共 {len(categories)} 个分类 · 点击分类名即可快速浏览",
+            fill=(214, 222, 240),
+            font=subtitle_font,
+        )
+
+        for index, category in enumerate(categories, start=1):
+            row = (index - 1) // cols
+            col = (index - 1) % cols
+            x = padding_x + col * (card_w + gap)
+            y = padding_top + row * (card_h + gap)
+
+            shadow = PILImage.new("RGBA", (card_w + 14, card_h + 14), (0, 0, 0, 0))
+            shadow_drawer = ImageDraw.Draw(shadow)
+            shadow_drawer.rounded_rectangle(
+                (8, 8, card_w + 8, card_h + 8),
+                radius=28,
+                fill=(0, 0, 0, 72),
+            )
+            canvas.alpha_composite(shadow, (x - 6, y - 2))
+
+            card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+            card_drawer = ImageDraw.Draw(card)
+            card_drawer.rounded_rectangle(
+                (0, 0, card_w - 1, card_h - 1),
+                radius=28,
+                fill=(255, 255, 255, 232),
+                outline=(255, 255, 255, 84),
+                width=2,
+            )
+
+            hue_colors = [
+                (95, 126, 255),
+                (255, 119, 153),
+                (82, 211, 180),
+                (255, 186, 90),
+                (172, 120, 255),
+            ]
+            accent = hue_colors[(index - 1) % len(hue_colors)]
+            card_drawer.rounded_rectangle((18, 18, 78, 78), radius=20, fill=accent + (255,))
+            card_drawer.text((37, 28), str(index), fill=(255, 255, 255), font=list_font)
+
+            image_count = self._count_category_images(category)
+            card_drawer.text((102, 24), category, fill=(24, 30, 46), font=list_font)
+            card_drawer.text((102, 70), f"{image_count} 张图片 / 表情包", fill=(95, 102, 122), font=count_font)
+
+            if image_count == 0:
+                badge_fill = (255, 244, 221, 255)
+                badge_text = "空分类"
+            else:
+                badge_fill = (233, 246, 255, 255)
+                badge_text = "可浏览"
+
+            card_drawer.rounded_rectangle((102, 92, 188, 116), radius=12, fill=badge_fill)
+            card_drawer.text((116, 95), badge_text, fill=(45, 77, 122), font=subtitle_font)
+
+            canvas.alpha_composite(card, (x, y))
+
+        output_dir = self.plugin_data_dir / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"category_list_{int(time.time() * 1000)}.png"
+        canvas.convert("RGB").save(output_path, format="PNG")
+        return output_path
+
+    async def _build_help_image(self) -> Path | None:
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageDraw, ImageFont
+        except Exception:
+            logger.error("缺少 Pillow 依赖，无法生成帮助图片")
+            return None
+
+        help_cards = [
+            ("/airi_gallery", "查看这张帮助海报"),
+            ("看<分类>", "从某个分类里随机返回一张图片或表情包"),
+            ("看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
+            ("看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
+            ("看123", "按编号直接查看指定图片或表情包"),
+            ("#分类列表", "输出漂亮的分类总览图片"),
+            ("#创建<分类>", "创建一个新的分类文件夹"),
+            ("#上传<分类>", "回复图片后上传到指定分类"),
+            ("#删除123", "删除指定编号的图片或表情包"),
+            ("#导入图库", "重新扫描并整理图库编号"),
+        ]
+
+        card_width = 420
+        card_height = 112
+        cols = 2
+        gap = 22
+        padding = 42
+        header_h = 220
+        rows = math.ceil(len(help_cards) / cols)
+        width = padding * 2 + cols * card_width + (cols - 1) * gap
+        height = header_h + rows * card_height + max(0, rows - 1) * gap + 42
+
+        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
+        drawer = ImageDraw.Draw(canvas)
+
+        top_colors = (12, 16, 34)
+        bottom_colors = (47, 22, 68)
+        for y in range(height):
+            ratio = y / max(1, height - 1)
+            drawer.line((0, y, width, y), fill=_interpolate_color(top_colors, bottom_colors, ratio))
+
+        glow_areas = [
+            ((-140, -120, 460, 380), (95, 190, 255, 44)),
+            ((width - 420, 10, width + 120, 500), (255, 126, 194, 34)),
+            ((width * 0.2, height - 180, width * 0.2 + 340, height + 120), (78, 226, 185, 34)),
+        ]
+        for box, color in glow_areas:
+            drawer.ellipse(box, fill=color)
+
+        title_font = _load_collage_font(60, self.collage_font_path) or ImageFont.load_default()
+        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
+        name_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
+        desc_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
+
+        drawer.text((padding, 54), "Airi 数字图库插件", fill=(255, 255, 255), font=title_font)
+        drawer.text(
+            (padding, 126),
+            "现代风帮助海报 · 默认命令前缀 / · 分类总览与管理命令使用 #",
+            fill=(211, 220, 241),
+            font=subtitle_font,
+        )
+        drawer.text(
+            (padding, 160),
+            "提示：看命令支持单图、编号查看与分类拼图，其余管理命令统一使用 # 前缀。",
+            fill=(187, 196, 220),
+            font=subtitle_font,
+        )
+
+        accent_palette = [
+            (94, 128, 255),
+            (255, 124, 156),
+            (88, 214, 189),
+            (255, 183, 89),
+            (176, 126, 255),
+        ]
+
+        for index, (command, desc) in enumerate(help_cards):
+            row = index // cols
+            col = index % cols
+            x = padding + col * (card_width + gap)
+            y = header_h + row * (card_height + gap)
+
+            shadow = PILImage.new("RGBA", (card_width + 16, card_height + 16), (0, 0, 0, 0))
+            shadow_drawer = ImageDraw.Draw(shadow)
+            shadow_drawer.rounded_rectangle((8, 8, card_width + 8, card_height + 8), radius=28, fill=(0, 0, 0, 66))
+            canvas.alpha_composite(shadow, (x - 6, y - 2))
+
+            card = PILImage.new("RGBA", (card_width, card_height), (0, 0, 0, 0))
+            card_drawer = ImageDraw.Draw(card)
+            card_drawer.rounded_rectangle(
+                (0, 0, card_width - 1, card_height - 1),
+                radius=28,
+                fill=(255, 255, 255, 234),
+                outline=(255, 255, 255, 90),
+                width=2,
+            )
+
+            accent = accent_palette[index % len(accent_palette)]
+            card_drawer.rounded_rectangle((18, 18, 82, 82), radius=20, fill=accent + (255,))
+            card_drawer.text((37, 27), str(index + 1), fill=(255, 255, 255), font=name_font)
+
+            card_drawer.text((100, 22), command, fill=(22, 28, 42), font=name_font)
+
+            if len(desc) > 18:
+                words = []
+                line = ""
+                for chunk in re.split(r"(\s+)", desc):
+                    if len(line + chunk) > 24 and line:
+                        words.append(line.rstrip())
+                        line = chunk
+                    else:
+                        line += chunk
+                if line:
+                    words.append(line.rstrip())
+                desc_lines = words[:2]
+            else:
+                desc_lines = [desc]
+
+            y_offset = 60
+            for desc_line in desc_lines:
+                card_drawer.text((100, y_offset), desc_line, fill=(86, 94, 118), font=desc_font)
+                y_offset += 24
+
+            canvas.alpha_composite(card, (x, y))
+
+        output_dir = self.plugin_data_dir / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"help_{int(time.time() * 1000)}.png"
+        canvas.convert("RGB").save(output_path, format="PNG")
         return output_path
