@@ -40,11 +40,11 @@ HELP_TEXT = "\n".join(
         "- 看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
         "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
         "- 看123：发送编号为 123 的图片或表情包",
-        "- /分类列表：查看当前已创建的分类",
-        "- /创建<分类>：创建一个新的分类文件夹",
-        "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
-        "- /删除123：删除编号为 123 的图片或表情包",
-        "- /导入图库：重新扫描 gallery 并自动整理数字编号",
+        "- #分类列表：查看当前已创建的分类",
+        "- #创建<分类>：创建一个新的分类文件夹",
+        "- #上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
+        "- #删除123：删除编号为 123 的图片或表情包",
+        "- #导入图库：重新扫描 gallery 并自动整理数字编号",
         "",
         "说明：",
         f"- 本地数据目录：data/plugin_data/{PLUGIN_NAME}/gallery",
@@ -292,26 +292,26 @@ class Main(Star):
         if normalized in {"airi_gallery", "/airi_gallery", "图库帮助", "/图库帮助"}:
             return "help", None
 
-        if normalized in {"导入图库", "/导入图库"}:
+        if normalized in {"#导入图库"}:
             return "import", None
 
-        if normalized == "/分类列表":
+        if normalized == "#分类列表":
             return "list_categories", None
 
-        create_match = re.match(r"^/创建\s*(.+)$", normalized)
+        create_match = re.match(r"^#创建\s*(.+)$", normalized)
         if create_match:
             target = create_match.group(1).strip()
             if not target:
                 return None
             return "create_category", _sanitize_component(target)
 
-        upload_match = re.match(r"^/?上传\s*(.+)$", normalized)
+        upload_match = re.match(r"^#上传\s*(.+)$", normalized)
         if upload_match:
             parts = upload_match.group(1).strip().split()
             category = parts[0] if parts else DEFAULT_CATEGORY
             return "upload", _sanitize_component(category)
 
-        delete_match = re.match(r"^/?删除\s*(.+)$", normalized)
+        delete_match = re.match(r"^#删除\s*(.+)$", normalized)
         if delete_match:
             numbers = [int(item) for item in delete_match.group(1).split() if item.isdigit()]
             if numbers:
