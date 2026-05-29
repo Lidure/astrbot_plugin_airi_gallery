@@ -44,7 +44,8 @@
 
 <div align="center">
 
-![帮助海报](preview_outputs/preview_help_v7.png)
+<img width="1004" height="1346" alt="16da2be1d4c506b334ddb46c9afd5642" src="https://github.com/user-attachments/assets/eb665ccd-3c14-4622-b8e9-fb9468991817" />
+
 
 </div>
 
@@ -63,7 +64,8 @@
 
 <div align="center">
 
-![分类列表](preview_outputs/preview_category_list_v6.png)
+<img width="972" height="1414" alt="ecc7d6c69d7912ba2b4c7205b9ba0505" src="https://github.com/user-attachments/assets/e67ecc33-04fa-4a7c-baba-099fbe19cfa9" />
+
 
 </div>
 
