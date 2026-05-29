@@ -2,7 +2,7 @@
   "command_mode": {
     "type": "string",
     "description": "看图命令触发模式",
-    "hint": "no_prefix: 看xxx；prefix: /看xxx。该配置仅影响看命令，其余命令统一使用 # 前缀，例如 #分类列表、#上传xxx、#删除123、#导入图库。",
+    "hint": "no_prefix: 看看xxx；prefix: /看看xxx。该配置仅影响看看命令，其余命令统一使用 # 前缀，例如 #分类列表、#上传xxx、#删除123、#导入图库。",
     "default": "no_prefix",
     "options": [
       "no_prefix",

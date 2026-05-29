@@ -37,10 +37,10 @@ HELP_TEXT = "\n".join(
         "",
         "命令：",
         "- /airi_gallery：查看插件帮助（图片海报）",
-        "- 看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
-        "- 看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
+        "- 看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
+        "- 看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
         "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
-        "- 看123：发送编号为 123 的图片或表情包",
+        "- 看看123：发送编号为 123 的图片或表情包",
         "- #分类列表：以图片卡片形式查看当前已创建的分类",
         "- #创建<分类>：创建一个新的分类文件夹",
         "- #上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
@@ -137,6 +137,27 @@ def _draw_cute_background(drawer, width: int, height: int, start: tuple[int, int
         drawer.line((0, y, width, y), fill=_interpolate_color(start, end, ratio))
 
 
+def _wrap_text(drawer, text: str, font, max_width: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for char in text:
+        candidate = current + char
+        bbox = drawer.textbbox((0, 0), candidate, font=font)
+        if bbox[2] - bbox[0] <= max_width or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = char
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
+def _text_size(drawer, text: str, font) -> tuple[int, int]:
+    bbox = drawer.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
 class Main(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
@@ -227,6 +248,9 @@ class Main(Star):
             return MODE_NO_PREFIX
         return mode
 
+    def _get_command_mode_text(self) -> str:
+        return self.command_mode
+
     def _get_event_actor_identity(self, event: AstrMessageEvent) -> tuple[str | None, str | None]:
         """尝试从 event 中解析出用户 id 及显示名，尽量兼容不同适配器。"""
         uid = None
@@ -294,10 +318,10 @@ class Main(Star):
 
     def _match_view_command(self, normalized: str) -> re.Match[str] | None:
         if self.command_mode == MODE_PREFIX:
-            return re.match(r"^/看\s*(.+)$", normalized)
+            return re.match(r"^/看看\s*(.+)$", normalized)
         if normalized.startswith("/"):
             return None
-        return re.match(r"^看\s*(.+)$", normalized)
+        return re.match(r"^看看\s*(.+)$", normalized)
 
     def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
         if self.command_mode == MODE_PREFIX:
@@ -350,8 +374,8 @@ class Main(Star):
             target = view_match.group(1).strip()
             if not target:
                 return None
-            # 仅支持“分类 + 空格 + 数字”的写法，例如：看cat 3
-            # 这样可避免把“看602”误判成分类 6、数量 02。
+            # 仅支持“分类 + 空格 + 数字”的写法，例如：看看cat 3
+            # 这样可避免把“看看602”误判成分类 6、数量 02。
             many_match = re.match(r"^(.+?)\s+(\d+)$", target)
             if many_match:
                 cat = many_match.group(1).strip()
@@ -450,19 +474,16 @@ class Main(Star):
     async def _handle_view_category(self, event: AstrMessageEvent, category: str):
         images = self._iter_category_images(category)
         if not images:
-            await event.send(event.plain_result(f"分类【{category}】里还没有图片或表情包。"))
             return
         await event.send(event.image_result(str(random.choice(images))))
 
     async def _handle_view_all_category(self, event: AstrMessageEvent, category: str):
         images = self._iter_category_images(category)
         if not images:
-            await event.send(event.plain_result(f"分类【{category}】里还没有图片或表情包。"))
             return
 
         collage_path = await self._build_category_collage(category, images)
         if not collage_path:
-            await event.send(event.plain_result(f"分类【{category}】拼图生成失败，请检查图片文件。"))
             return
 
         await event.send(event.image_result(str(collage_path)))
@@ -470,7 +491,6 @@ class Main(Star):
     async def _handle_view_multiple(self, event: AstrMessageEvent, category: str, count: int):
         images = self._iter_category_images(category)
         if not images:
-            await event.send(event.plain_result(f"分类【{category}】里还没有图片或表情包。"))
             return
 
         count = max(1, min(5, int(count)))
@@ -720,94 +740,69 @@ class Main(Star):
         if not categories:
             return None
 
-        list_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
-        title_font = _load_collage_font(54, self.collage_font_path) or list_font
-        subtitle_font = _load_collage_font(20, self.collage_font_path) or list_font
-        count_font = _load_collage_font(24, self.collage_font_path) or list_font
+        title_font = _load_collage_font(54, self.collage_font_path) or ImageFont.load_default()
+        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
+        category_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
+        count_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
+        outline_colors = [
+            (224, 183, 205, 238),
+            (197, 214, 241, 238),
+            (206, 228, 201, 238),
+        ]
 
-        cols = 2 if len(categories) <= 4 else 3
-        card_w = 360
-        card_h = 136
-        gap = 22
+        cols = 3
+        card_w = 284
+        card_h = 78
+        gap_x = 18
+        gap_y = 14
         padding_x = 42
         padding_top = 188
         padding_bottom = 44
         rows = math.ceil(len(categories) / cols)
-        width = padding_x * 2 + cols * card_w + (cols - 1) * gap
-        height = padding_top + rows * card_h + max(0, rows - 1) * gap + padding_bottom
+        width = padding_x * 2 + cols * card_w + (cols - 1) * gap_x
+        height = padding_top + rows * card_h + max(0, rows - 1) * gap_y + padding_bottom
 
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
 
-        _draw_cute_background(drawer, width, height, (255, 240, 248), (248, 228, 244))
-        drawer.ellipse((-90, -60, 360, 280), fill=(255, 255, 255, 42))
-        drawer.ellipse((width - 300, 40, width + 120, 380), fill=(255, 255, 255, 36))
+        _draw_cute_background(drawer, width, height, (255, 238, 246), (248, 236, 255))
 
         drawer.text((padding_x, 48), "分类列表", fill=(57, 64, 100), font=title_font)
         drawer.text(
             (padding_x, 112),
-            f"当前共 {len(categories)} 个分类 · 轻松看看有哪些内容吧",
+            f"当前共 {len(categories)} 个分类",
             fill=(95, 106, 143),
             font=subtitle_font,
         )
-        drawer.rounded_rectangle((padding_x, 148, width - padding_x, 176), radius=14, fill=(255, 255, 255, 168))
-        drawer.text(
-            (padding_x + 16, 152),
-            "提示：分类卡片会显示名称与图片数量，排版更整齐清楚。",
-            fill=(111, 121, 153),
-            font=subtitle_font,
-        )
 
-        for index, category in enumerate(categories, start=1):
-            row = (index - 1) // cols
-            col = (index - 1) % cols
-            x = padding_x + col * (card_w + gap)
-            y = padding_top + row * (card_h + gap)
+        for index, category in enumerate(categories):
+            row = index // cols
+            col = index % cols
+            x = padding_x + col * (card_w + gap_x)
+            y = padding_top + row * (card_h + gap_y)
 
-            shadow = PILImage.new("RGBA", (card_w + 14, card_h + 14), (0, 0, 0, 0))
-            shadow_drawer = ImageDraw.Draw(shadow)
-            shadow_drawer.rounded_rectangle(
-                (8, 8, card_w + 8, card_h + 8),
-                radius=28,
-                fill=(0, 0, 0, 72),
-            )
-            canvas.alpha_composite(shadow, (x - 6, y - 2))
-
-            card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-            card_drawer = ImageDraw.Draw(card)
-            card_drawer.rounded_rectangle(
+            row_card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+            row_drawer = ImageDraw.Draw(row_card)
+            row_drawer.rounded_rectangle(
                 (0, 0, card_w - 1, card_h - 1),
-                radius=28,
-                fill=(255, 255, 255, 246),
-                outline=(252, 213, 229, 120),
+                radius=22,
+                fill=(255, 255, 255, 182),
+                outline=outline_colors[index % len(outline_colors)],
                 width=2,
             )
 
-            hue_colors = [
-                (95, 126, 255),
-                (255, 119, 153),
-                (82, 211, 180),
-                (255, 186, 90),
-                (172, 120, 255),
-            ]
-            accent = hue_colors[(index - 1) % len(hue_colors)]
-            card_drawer.rounded_rectangle((18, 18, 78, 78), radius=20, fill=accent + (255,))
-            card_drawer.rounded_rectangle((24, 24, 72, 72), radius=16, fill=(255, 255, 255, 58))
-            number_bbox = card_drawer.textbbox((0, 0), str(index), font=list_font)
-            number_w = number_bbox[2] - number_bbox[0]
-            number_h = number_bbox[3] - number_bbox[1]
-            card_drawer.text(
-                (48 - number_w / 2, 48 - number_h / 2 - 2),
-                str(index),
-                fill=(255, 255, 255),
-                font=list_font,
+            image_count = self._count_category_images(category)
+            row_drawer.text((20, 18), category, fill=(32, 38, 59), font=category_font)
+            count_text = f"{image_count} 张"
+            count_w, count_h = _text_size(row_drawer, count_text, count_font)
+            row_drawer.text(
+                (card_w - count_w - 20, (card_h - count_h) / 2 - 1),
+                count_text,
+                fill=(100, 109, 136),
+                font=count_font,
             )
 
-            image_count = self._count_category_images(category)
-            card_drawer.text((102, 24), category, fill=(32, 38, 59), font=list_font)
-            card_drawer.text((102, 70), f"{image_count} 张图片 / 表情包", fill=(100, 109, 136), font=count_font)
-
-            canvas.alpha_composite(card, (x, y))
+            canvas.alpha_composite(row_card, (x, y))
 
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -824,11 +819,11 @@ class Main(Star):
             return None
 
         help_cards = [
-            ("/airi_gallery", "查看这张帮助海报"),
-            ("看<分类>", "从某个分类里随机返回一张图片或表情包"),
-            ("看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
+            ("/airi_gallery", "查看帮助说明"),
+            ("看看<分类>", "从某个分类里随机返回一张图片或表情包"),
+            ("看看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
             ("看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
-            ("看123", "按编号直接查看指定图片或表情包"),
+            ("看看123", "按编号直接查看指定图片或表情包"),
             ("#分类列表", "输出漂亮的分类总览图片"),
             ("#创建<分类>", "创建一个新的分类文件夹"),
             ("#上传<分类>", "回复图片后上传到指定分类"),
@@ -836,12 +831,12 @@ class Main(Star):
             ("#导入图库", "重新扫描并整理图库编号"),
         ]
 
-        card_width = 420
-        card_height = 116
-        cols = 2
-        gap = 22
+        card_width = 920
+        card_height = 92
+        cols = 1
+        gap = 16
         padding = 42
-        header_h = 230
+        header_h = 240
         rows = math.ceil(len(help_cards) / cols)
         width = padding * 2 + cols * card_width + (cols - 1) * gap
         height = header_h + rows * card_height + max(0, rows - 1) * gap + 42
@@ -849,43 +844,32 @@ class Main(Star):
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
 
-        _draw_cute_background(drawer, width, height, (255, 236, 245), (246, 232, 255))
-        drawer.ellipse((-100, -70, 380, 300), fill=(255, 255, 255, 38))
-        drawer.ellipse((width - 360, 10, width + 120, 420), fill=(255, 255, 255, 30))
+        _draw_cute_background(drawer, width, height, (255, 238, 246), (247, 235, 255))
 
         title_font = _load_collage_font(60, self.collage_font_path) or ImageFont.load_default()
         subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
         name_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
         desc_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
+        outline_colors = [
+            (224, 183, 205, 238),
+            (197, 214, 241, 238),
+            (206, 228, 201, 238),
+            (241, 218, 182, 238),
+        ]
 
         drawer.text((padding, 54), "Airi 数字图库插件", fill=(58, 64, 101), font=title_font)
         drawer.text(
             (padding, 126),
-            "可爱扁平帮助海报 · 看命令用 / · 分类与管理命令用 #",
+            "帮助说明 · 看命令模式随配置变化 · 管理命令用 #",
             fill=(98, 106, 140),
             font=subtitle_font,
         )
         drawer.text(
             (padding, 160),
-            "提示：帮助页本身就是图片，更适合在群里直接查看。",
-            fill=(118, 126, 156),
+            f"当前模式：{self._get_command_mode_text()}",
+            fill=(92, 98, 128),
             font=subtitle_font,
         )
-        drawer.rounded_rectangle((padding, 192, width - padding, 220), radius=14, fill=(255, 255, 255, 170))
-        drawer.text(
-            (padding + 16, 196),
-            "说明卡片已整理成更轻盈的版式，文字都放进了浅色框内。",
-            fill=(104, 112, 142),
-            font=subtitle_font,
-        )
-
-        accent_palette = [
-            (94, 128, 255),
-            (255, 124, 156),
-            (88, 214, 189),
-            (255, 183, 89),
-            (176, 126, 255),
-        ]
 
         for index, (command, desc) in enumerate(help_cards):
             row = index // cols
@@ -893,63 +877,24 @@ class Main(Star):
             x = padding + col * (card_width + gap)
             y = header_h + row * (card_height + gap)
 
-            shadow = PILImage.new("RGBA", (card_width + 16, card_height + 16), (0, 0, 0, 0))
-            shadow_drawer = ImageDraw.Draw(shadow)
-            shadow_drawer.rounded_rectangle((8, 8, card_width + 8, card_height + 8), radius=28, fill=(0, 0, 0, 66))
-            canvas.alpha_composite(shadow, (x - 6, y - 2))
-
             card = PILImage.new("RGBA", (card_width, card_height), (0, 0, 0, 0))
             card_drawer = ImageDraw.Draw(card)
             card_drawer.rounded_rectangle(
                 (0, 0, card_width - 1, card_height - 1),
-                radius=28,
-                fill=(255, 255, 255, 248),
-                outline=(247, 213, 227, 120),
+                radius=26,
+                fill=(255, 255, 255, 186),
+                outline=outline_colors[index % len(outline_colors)],
                 width=2,
             )
 
-            accent = accent_palette[index % len(accent_palette)]
-            card_drawer.rounded_rectangle((18, 18, 82, 82), radius=20, fill=accent + (255,))
-            card_drawer.rounded_rectangle((26, 26, 74, 74), radius=16, fill=(255, 255, 255, 56))
-            number_bbox = card_drawer.textbbox((0, 0), str(index + 1), font=name_font)
-            number_w = number_bbox[2] - number_bbox[0]
-            number_h = number_bbox[3] - number_bbox[1]
-            card_drawer.text(
-                (50 - number_w / 2, 50 - number_h / 2 - 2),
-                str(index + 1),
-                fill=(255, 255, 255),
-                font=name_font,
-            )
+            card_drawer.text((26, 16), command, fill=(35, 40, 61), font=name_font)
 
-            card_drawer.text((100, 22), command, fill=(35, 40, 61), font=name_font)
-
-            if len(desc) > 18:
-                words = []
-                line = ""
-                for chunk in re.split(r"(\s+)", desc):
-                    if len(line + chunk) > 24 and line:
-                        words.append(line.rstrip())
-                        line = chunk
-                    else:
-                        line += chunk
-                if line:
-                    words.append(line.rstrip())
-                desc_lines = words[:2]
-            else:
-                desc_lines = [desc]
-
-            y_offset = 60
-            for desc_line in desc_lines:
-                text_bbox = card_drawer.textbbox((0, 0), desc_line, font=desc_font)
-                text_w = text_bbox[2] - text_bbox[0]
-                text_h = text_bbox[3] - text_bbox[1]
-                card_drawer.rounded_rectangle(
-                    (96, y_offset - 2, min(card_width - 16, 100 + text_w + 16), y_offset + text_h + 4),
-                    radius=10,
-                    fill=(250, 248, 255, 255),
-                )
-                card_drawer.text((100, y_offset), desc_line, fill=(95, 105, 132), font=desc_font)
-                y_offset += 24
+            desc_lines = _wrap_text(card_drawer, desc, desc_font, card_width - 52)
+            desc_lines = desc_lines[:2]
+            line_height = _text_size(card_drawer, "测", desc_font)[1]
+            desc_y = 52
+            for line_index, desc_line in enumerate(desc_lines):
+                card_drawer.text((26, desc_y + line_index * (line_height + 7)), desc_line, fill=(95, 105, 132), font=desc_font)
 
             canvas.alpha_composite(card, (x, y))
 
