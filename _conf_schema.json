@@ -10,13 +10,13 @@
     ]
   },
   "use_permission": {
-    "type": "boolean",
+    "type": "bool",
     "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
     "default": false,
     "hint": "开启后，只有配置在 admins 或 whitelist 中的用户可以执行破坏性命令。"
   },
   "admins": {
-    "type": "array",
+    "type": "list",
     "description": "管理员标识列表（用户 id 或 用户名的字符串），优先匹配用户 id。",
     "items": {
       "type": "string"
@@ -24,7 +24,7 @@
     "default": []
   },
   "whitelist": {
-    "type": "array",
+    "type": "list",
     "description": "允许执行破坏性操作的额外白名单（用户 id 或 用户名），通常用于临时授权。",
     "items": {
       "type": "string"
