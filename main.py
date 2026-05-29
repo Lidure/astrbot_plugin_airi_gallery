@@ -131,6 +131,37 @@ def _interpolate_color(start: tuple[int, int, int], end: tuple[int, int, int], r
     return tuple(int(start[i] + (end[i] - start[i]) * ratio) for i in range(3))
 
 
+def _draw_cute_background(drawer, width: int, height: int, start: tuple[int, int, int], end: tuple[int, int, int]):
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        drawer.line((0, y, width, y), fill=_interpolate_color(start, end, ratio))
+
+
+def _draw_cute_orbs(drawer, width: int, height: int, palette: list[tuple[int, int, int, int]]):
+    spots = [
+        (-120, -40, 280, 260),
+        (width - 240, -90, width + 120, 220),
+        (width * 0.05, height * 0.72, width * 0.05 + 220, height * 0.72 + 220),
+        (width * 0.72, height * 0.72, width * 0.72 + 250, height * 0.72 + 250),
+    ]
+    for index, box in enumerate(spots):
+        drawer.ellipse(box, fill=palette[index % len(palette)])
+
+
+def _draw_cute_sparkles(drawer, width: int, height: int, color: tuple[int, int, int, int]):
+    sparkle_points = [
+        (int(width * 0.12), int(height * 0.22)),
+        (int(width * 0.84), int(height * 0.18)),
+        (int(width * 0.88), int(height * 0.78)),
+        (int(width * 0.20), int(height * 0.82)),
+    ]
+    for x, y in sparkle_points:
+        drawer.line((x - 12, y, x + 12, y), fill=color, width=3)
+        drawer.line((x, y - 12, x, y + 12), fill=color, width=3)
+        drawer.line((x - 8, y - 8, x + 8, y + 8), fill=color, width=2)
+        drawer.line((x - 8, y + 8, x + 8, y - 8), fill=color, width=2)
+
+
 class Main(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
@@ -721,10 +752,10 @@ class Main(Star):
 
         cols = 2 if len(categories) <= 4 else 3
         card_w = 360
-        card_h = 132
-        gap = 24
+        card_h = 136
+        gap = 22
         padding_x = 42
-        padding_top = 180
+        padding_top = 188
         padding_bottom = 44
         rows = math.ceil(len(categories) / cols)
         width = padding_x * 2 + cols * card_w + (cols - 1) * gap
@@ -733,26 +764,32 @@ class Main(Star):
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
 
-        top_colors = (12, 18, 40)
-        bottom_colors = (51, 28, 78)
-        for y in range(height):
-            ratio = y / max(1, height - 1)
-            color = _interpolate_color(top_colors, bottom_colors, ratio)
-            drawer.line((0, y, width, y), fill=color)
+        _draw_cute_background(drawer, width, height, (255, 247, 252), (236, 246, 255))
+        _draw_cute_orbs(
+            drawer,
+            width,
+            height,
+            [
+                (255, 196, 221, 90),
+                (182, 226, 255, 92),
+                (193, 245, 221, 92),
+                (255, 233, 188, 82),
+            ],
+        )
+        _draw_cute_sparkles(drawer, width, height, (255, 184, 99, 120))
 
-        accent_spots = [
-            ((-120, -90, 430, 360), (88, 180, 255, 46)),
-            ((width - 340, 40, width + 120, 500), (255, 128, 200, 36)),
-            ((width * 0.28, height - 230, width * 0.28 + 320, height + 90), (76, 226, 184, 40)),
-        ]
-        for box, color in accent_spots:
-            drawer.ellipse(box, fill=color)
-
-        drawer.text((padding_x, 48), "分类列表", fill=(255, 255, 255), font=title_font)
+        drawer.text((padding_x, 48), "分类列表", fill=(57, 64, 100), font=title_font)
         drawer.text(
             (padding_x, 112),
-            f"当前共 {len(categories)} 个分类 · 点击分类名即可快速浏览",
-            fill=(214, 222, 240),
+            f"当前共 {len(categories)} 个分类 · 轻松看看有哪些内容吧",
+            fill=(95, 106, 143),
+            font=subtitle_font,
+        )
+        drawer.rounded_rectangle((padding_x, 148, width - padding_x, 172), radius=12, fill=(255, 255, 255, 160))
+        drawer.text(
+            (padding_x + 16, 150),
+            "提示：分类卡片是为了更好看，点击后仍按你的命令继续浏览。",
+            fill=(111, 121, 153),
             font=subtitle_font,
         )
 
@@ -776,8 +813,8 @@ class Main(Star):
             card_drawer.rounded_rectangle(
                 (0, 0, card_w - 1, card_h - 1),
                 radius=28,
-                fill=(255, 255, 255, 232),
-                outline=(255, 255, 255, 84),
+                fill=(255, 255, 255, 246),
+                outline=(252, 213, 229, 120),
                 width=2,
             )
 
@@ -790,21 +827,22 @@ class Main(Star):
             ]
             accent = hue_colors[(index - 1) % len(hue_colors)]
             card_drawer.rounded_rectangle((18, 18, 78, 78), radius=20, fill=accent + (255,))
+            card_drawer.rounded_rectangle((24, 24, 72, 72), radius=16, fill=(255, 255, 255, 58))
             card_drawer.text((37, 28), str(index), fill=(255, 255, 255), font=list_font)
 
             image_count = self._count_category_images(category)
-            card_drawer.text((102, 24), category, fill=(24, 30, 46), font=list_font)
-            card_drawer.text((102, 70), f"{image_count} 张图片 / 表情包", fill=(95, 102, 122), font=count_font)
+            card_drawer.text((102, 24), category, fill=(32, 38, 59), font=list_font)
+            card_drawer.text((102, 70), f"{image_count} 张图片 / 表情包", fill=(100, 109, 136), font=count_font)
 
             if image_count == 0:
-                badge_fill = (255, 244, 221, 255)
+                badge_fill = (255, 240, 226, 255)
                 badge_text = "空分类"
             else:
-                badge_fill = (233, 246, 255, 255)
+                badge_fill = (232, 248, 239, 255)
                 badge_text = "可浏览"
 
             card_drawer.rounded_rectangle((102, 92, 188, 116), radius=12, fill=badge_fill)
-            card_drawer.text((116, 95), badge_text, fill=(45, 77, 122), font=subtitle_font)
+            card_drawer.text((116, 95), badge_text, fill=(78, 109, 84), font=subtitle_font)
 
             canvas.alpha_composite(card, (x, y))
 
@@ -836,11 +874,11 @@ class Main(Star):
         ]
 
         card_width = 420
-        card_height = 112
+        card_height = 116
         cols = 2
         gap = 22
         padding = 42
-        header_h = 220
+        header_h = 230
         rows = math.ceil(len(help_cards) / cols)
         width = padding * 2 + cols * card_width + (cols - 1) * gap
         height = header_h + rows * card_height + max(0, rows - 1) * gap + 42
@@ -848,36 +886,36 @@ class Main(Star):
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
 
-        top_colors = (12, 16, 34)
-        bottom_colors = (47, 22, 68)
-        for y in range(height):
-            ratio = y / max(1, height - 1)
-            drawer.line((0, y, width, y), fill=_interpolate_color(top_colors, bottom_colors, ratio))
-
-        glow_areas = [
-            ((-140, -120, 460, 380), (95, 190, 255, 44)),
-            ((width - 420, 10, width + 120, 500), (255, 126, 194, 34)),
-            ((width * 0.2, height - 180, width * 0.2 + 340, height + 120), (78, 226, 185, 34)),
-        ]
-        for box, color in glow_areas:
-            drawer.ellipse(box, fill=color)
+        _draw_cute_background(drawer, width, height, (255, 248, 244), (244, 247, 255))
+        _draw_cute_orbs(
+            drawer,
+            width,
+            height,
+            [
+                (255, 215, 226, 96),
+                (190, 227, 255, 96),
+                (202, 245, 229, 94),
+                (255, 236, 193, 86),
+            ],
+        )
+        _draw_cute_sparkles(drawer, width, height, (255, 163, 89, 120))
 
         title_font = _load_collage_font(60, self.collage_font_path) or ImageFont.load_default()
         subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
         name_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
         desc_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
 
-        drawer.text((padding, 54), "Airi 数字图库插件", fill=(255, 255, 255), font=title_font)
+        drawer.text((padding, 54), "Airi 数字图库插件", fill=(58, 64, 101), font=title_font)
         drawer.text(
             (padding, 126),
-            "现代风帮助海报 · 默认命令前缀 / · 分类总览与管理命令使用 #",
-            fill=(211, 220, 241),
+            "可爱扁平帮助海报 · 看命令用 / · 分类与管理命令用 #",
+            fill=(98, 106, 140),
             font=subtitle_font,
         )
         drawer.text(
             (padding, 160),
-            "提示：看命令支持单图、编号查看与分类拼图，其余管理命令统一使用 # 前缀。",
-            fill=(187, 196, 220),
+            "提示：帮助页本身就是图片，更适合在群里直接查看。",
+            fill=(118, 126, 156),
             font=subtitle_font,
         )
 
@@ -905,16 +943,17 @@ class Main(Star):
             card_drawer.rounded_rectangle(
                 (0, 0, card_width - 1, card_height - 1),
                 radius=28,
-                fill=(255, 255, 255, 234),
-                outline=(255, 255, 255, 90),
+                fill=(255, 255, 255, 248),
+                outline=(247, 213, 227, 120),
                 width=2,
             )
 
             accent = accent_palette[index % len(accent_palette)]
             card_drawer.rounded_rectangle((18, 18, 82, 82), radius=20, fill=accent + (255,))
+            card_drawer.rounded_rectangle((26, 26, 74, 74), radius=16, fill=(255, 255, 255, 56))
             card_drawer.text((37, 27), str(index + 1), fill=(255, 255, 255), font=name_font)
 
-            card_drawer.text((100, 22), command, fill=(22, 28, 42), font=name_font)
+            card_drawer.text((100, 22), command, fill=(35, 40, 61), font=name_font)
 
             if len(desc) > 18:
                 words = []
@@ -933,7 +972,7 @@ class Main(Star):
 
             y_offset = 60
             for desc_line in desc_lines:
-                card_drawer.text((100, y_offset), desc_line, fill=(86, 94, 118), font=desc_font)
+                card_drawer.text((100, y_offset), desc_line, fill=(95, 105, 132), font=desc_font)
                 y_offset += 24
 
             canvas.alpha_composite(card, (x, y))
