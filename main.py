@@ -879,45 +879,47 @@ class Main(Star):
             margin=22,
         )
 
-        # 标题右侧放置 p3（自动缩放，且避免与右上角角标重叠）
+        # 如果存在 p4.png，把它放在 p2 的左侧并与 p2 高度对齐
         try:
-            p3_path = Path(__file__).resolve().parent / "p3.png"
-            if p3_path.exists():
+            p4_path = Path(__file__).resolve().parent / "p4.png"
+            if p4_path.exists():
                 from PIL import Image as PILImage
-                with PILImage.open(p3_path) as p3:
-                    p3 = p3.convert("RGBA")
-                    # 以 p2 的高度为基准放大 p3（scale=1.5），并限制不超出画布高度
-                    try:
-                        with PILImage.open(p2_path) as p2test:
-                            _p2w, _p2h = p2test.convert("RGBA").size
-                    except Exception:
-                        _p2h = 280
-                    scale = 1
-                    target_h = int((_p2h or 280) * scale)
-                    # 不超过可用画布高度（保留上方与下方边距）
-                    available_height = max(64, canvas.height - (padding_x + 40))
-                    max_h = min(target_h, available_height)
-                    max_w = max_h
-                    p3.thumbnail((max_w, max_h), PILImage.Resampling.LANCZOS)
-                    title_w, title_h = _text_size(drawer, "分类列表", title_font)
-                    p3_x = padding_x + title_w + 16
-                    p3_y = 48 + max(0, (title_h - p3.height) // 2)
+                # 使用与 p2 相同的最大大小进行缩略以保持高度一致感
+                max_size = (160, 160)
+                # 先得到 p2 的显示尺寸（按相同缩放规则）
+                try:
+                    with PILImage.open(p2_path) as _p2test:
+                        p2_thumb = _p2test.convert("RGBA")
+                        p2_thumb.thumbnail(max_size, PILImage.Resampling.LANCZOS)
+                        p2w, p2h = p2_thumb.size
+                except Exception:
+                    p2w, p2h = max_size
 
-                    # 计算右上角 p2 的左边界，确保不重叠
+                with PILImage.open(p4_path) as p4img:
+                    p4img = p4img.convert("RGBA")
+                    p4img.thumbnail((p2w, p2h), PILImage.Resampling.LANCZOS)
+                    # 先缩略到与 p2 相近高度，再尝试放大 2 倍，若空间不足则自适应
+                    desired_w = int(p4img.width * 2)
+                    desired_h = int(p4img.height * 2)
+                    spacing = 12
+                    # 可用最大宽度：从左侧 padding 到 p2 左侧位置减去 spacing
+                    max_allowed = max(40, canvas.width - (p2w + 22) - spacing - padding_x)
+                    final_w = min(desired_w, max_allowed)
+                    final_h = max(1, int(final_w * (p4img.height / max(1, p4img.width))))
                     try:
-                        with PILImage.open(p2_path) as p2test:
-                            p2w, p2h = p2test.convert("RGBA").size
+                        p4_resized = p4img.resize((int(final_w), int(final_h)), PILImage.Resampling.LANCZOS)
                     except Exception:
-                        p2w = 0
-                    right_limit = canvas.width - (p2w + 22) if p2w else canvas.width - 22
-                    # 如会重叠，则缩小 p3 宽度以适配
-                    if p3_x + p3.width + 8 >= right_limit:
-                        available = max(8, right_limit - p3_x - 8)
-                        if available < p3.width:
-                            p3.thumbnail((available, max_h), PILImage.Resampling.LANCZOS)
-                    canvas.alpha_composite(p3, (max(0, int(p3_x)), max(0, int(p3_y))))
+                        p4_resized = p4img
+                    # 微调偏移：向左 / 向上 移动一些以避免与标题区域重合
+                    shift_left = 70
+                    shift_up = 12
+                    x = canvas.width - (p2w + 22) - spacing - p4_resized.width - shift_left
+                    y = 22 + max(0, (p2h - p4_resized.height) // 2) - shift_up
+                    canvas.alpha_composite(p4_resized, (max(0, int(x)), max(0, int(y))))
         except Exception:
             pass
+
+        # p3 support removed — 角标 p3 的逻辑已移除以简化布局
 
         for index, category in enumerate(categories):
             row = index // cols
