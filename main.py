@@ -343,6 +343,13 @@ class Main(Star):
             return f"/{command}"
         if text.startswith("/"):
             return text
+
+        command_pattern = rf"^(?:/)?{re.escape(command)}(?:\s+|$)(.*)$"
+        match = re.match(command_pattern, text)
+        if match:
+            tail = match.group(1).strip()
+            return f"/{command}" if not tail else f"/{command} {tail}"
+
         return f"/{command} {text}"
 
     def _get_event_actor_identity(self, event: AstrMessageEvent) -> tuple[str | None, str | None]:
