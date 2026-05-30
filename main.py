@@ -164,6 +164,8 @@ class Main(Star):
         self.gallery_root.mkdir(parents=True, exist_ok=True)
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
+        self.view_all_collage_compress = self._resolve_view_all_collage_compress()
+        self.view_all_collage_scale = self._resolve_view_all_collage_scale()
         # 权限相关配置
         self.use_permission = bool(self.config.get("use_permission", False))
         self.admins = {str(x) for x in (self.config.get("admins") or [])}
@@ -305,6 +307,17 @@ class Main(Star):
         if mode in {MODE_NO_PREFIX, MODE_PREFIX}:
             return mode
         return MODE_NO_PREFIX
+
+    def _resolve_view_all_collage_compress(self) -> bool:
+        return bool(self.config.get("view_all_collage_compress", False))
+
+    def _resolve_view_all_collage_scale(self) -> float:
+        raw_value = self.config.get("view_all_collage_scale", 0.85)
+        try:
+            scale = float(raw_value)
+        except (TypeError, ValueError):
+            return 0.85
+        return max(0.5, min(1.0, scale))
 
     def _get_view_command_mode_text(self) -> str:
         return self.view_command_mode
@@ -778,10 +791,11 @@ class Main(Star):
         if not indexed_images:
             indexed_images = [(idx + 1, path) for idx, path in enumerate(images)]
 
-        thumb_size = 220
-        label_height = 36
-        padding = 24
-        gap = 18
+        scale = self.view_all_collage_scale if self.view_all_collage_compress else 1.0
+        thumb_size = max(96, int(round(220 * scale)))
+        label_height = max(24, int(round(36 * scale)))
+        padding = max(12, int(round(24 * scale)))
+        gap = max(8, int(round(18 * scale)))
         cols = min(5, max(1, math.ceil(math.sqrt(len(indexed_images)))))
         rows = math.ceil(len(indexed_images) / cols)
         cell_w = thumb_size
@@ -791,7 +805,8 @@ class Main(Star):
 
         canvas = PILImage.new("RGB", (canvas_w, canvas_h), (248, 248, 248))
         drawer = ImageDraw.Draw(canvas)
-        font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
+        font_size = max(18, int(round(28 * scale)))
+        font = _load_collage_font(font_size, self.collage_font_path) or ImageFont.load_default()
 
         for pos, (index, image_path) in enumerate(indexed_images):
             row = pos // cols
@@ -823,13 +838,18 @@ class Main(Star):
                 canvas.paste(preview, (offset_x, offset_y))
 
             label = f"#{index}"
-            label_y = y + thumb_size + 5
-            drawer.text((x + 8, label_y), label, fill=(25, 25, 25), font=font)
+            label_y = y + thumb_size + max(4, int(round(5 * scale)))
+            drawer.text((x + max(6, int(round(8 * scale))), label_y), label, fill=(25, 25, 25), font=font)
 
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{_sanitize_component(category)}_all_{int(time.time() * 1000)}.png"
-        canvas.save(output_path, format="PNG")
+        canvas.save(
+            output_path,
+            format="PNG",
+            optimize=self.view_all_collage_compress,
+            compress_level=9 if self.view_all_collage_compress else 6,
+        )
         return output_path
 
     async def _build_category_list_image(self, categories: list[str]) -> Path | None:

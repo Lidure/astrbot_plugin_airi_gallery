@@ -9,6 +9,18 @@
       "prefix"
     ]
   },
+  "view_all_collage_compress": {
+    "type": "bool",
+    "description": "看全部拼图是否压缩",
+    "default": false,
+    "hint": "开启后会缩小看全部生成图的整体尺寸，并使用更高 PNG 压缩率；关闭时保持原始清晰度。"
+  },
+  "view_all_collage_scale": {
+    "type": "number",
+    "description": "看全部拼图压缩比例",
+    "default": 0.85,
+    "hint": "仅在启用压缩时生效。范围建议 0.5 到 1.0，数值越小图片越紧凑、文件越小。"
+  },
   "use_permission": {
     "type": "bool",
     "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
