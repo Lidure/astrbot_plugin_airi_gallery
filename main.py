@@ -239,8 +239,8 @@ class Main(Star):
     @filter.command("看看")
     async def cmd_look(self, event: AstrMessageEvent):
         """兼容性的展示命令占位，用于在 AstrBot 命令列表中显示 `/看看` 前缀形式。"""
-        # 直接把消息内容交由通用处理器处理
-        text = (event.message_str or "").strip()
+        # 兼容两种情况：命令框架可能传入完整文本，也可能只传入参数部分。
+        text = self._normalize_command_text(event, "看看")
         action = self._parse_action(text)
         if action and action[0] == "view_category":
             await self._handle_view_category(event, str(action[1]))
@@ -253,7 +253,7 @@ class Main(Star):
     @filter.command("创建")
     async def cmd_create(self, event: AstrMessageEvent):
         """注册 `/创建` 命令显示在命令列表并创建分类（参数跟随命令）。"""
-        text = (event.message_str or "").strip()
+        text = self._normalize_command_text(event, "创建")
         action = self._parse_action(text)
         if action and action[0] == "create_category":
             if not self._is_allowed(event):
@@ -264,7 +264,7 @@ class Main(Star):
     @filter.command("上传")
     async def cmd_upload(self, event: AstrMessageEvent):
         """注册 `/上传` 命令显示在命令列表并处理上传逻辑。"""
-        text = (event.message_str or "").strip()
+        text = self._normalize_command_text(event, "上传")
         action = self._parse_action(text)
         if action and action[0] == "upload":
             await self._handle_upload(event, str(action[1]))
@@ -272,7 +272,7 @@ class Main(Star):
     @filter.command("删除")
     async def cmd_delete(self, event: AstrMessageEvent):
         """注册 `/删除` 命令显示在命令列表并删除指定编号图片。"""
-        text = (event.message_str or "").strip()
+        text = self._normalize_command_text(event, "删除")
         action = self._parse_action(text)
         if action and action[0] == "delete":
             if not self._is_allowed(event):
@@ -292,7 +292,7 @@ class Main(Star):
     @filter.command("看全部")
     async def cmd_view_all(self, event: AstrMessageEvent):
         """注册 `/看全部` 命令并展示分类总览（需要带参数）。"""
-        text = (event.message_str or "").strip()
+        text = self._normalize_command_text(event, "看全部")
         action = self._parse_action(text)
         if action and action[0] == "view_all_category":
             await self._handle_view_all_category(event, str(action[1]))
@@ -336,6 +336,14 @@ class Main(Star):
                 "- 子文件夹名就是分类名，文件名会自动保持为数字序号",
             ]
         )
+
+    def _normalize_command_text(self, event: AstrMessageEvent, command: str) -> str:
+        text = (event.message_str or "").strip()
+        if not text:
+            return f"/{command}"
+        if text.startswith("/"):
+            return text
+        return f"/{command} {text}"
 
     def _get_event_actor_identity(self, event: AstrMessageEvent) -> tuple[str | None, str | None]:
         """尝试从 event 中解析出用户 id 及显示名，尽量兼容不同适配器。"""
