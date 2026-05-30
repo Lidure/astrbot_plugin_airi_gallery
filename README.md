@@ -144,9 +144,7 @@
 ---
 
 <div align="center">
-<a href="tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=[QQ号码]">
-    点击添加我的QQ好友
-</a>
+
 **Made with 💕 by Lidure**  
 简单、整洁地管理你的数字画廊。
 
