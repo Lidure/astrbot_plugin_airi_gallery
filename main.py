@@ -135,6 +135,26 @@ def _text_size(drawer, text: str, font) -> tuple[int, int]:
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
+def _paste_corner_overlay(canvas, overlay_path: Path, max_size: tuple[int, int], margin: int = 20) -> None:
+    try:
+        from PIL import Image as PILImage
+    except Exception:
+        return
+
+    if not overlay_path.exists():
+        return
+
+    try:
+        with PILImage.open(overlay_path) as overlay:
+            overlay = overlay.convert("RGBA")
+            overlay.thumbnail(max_size, PILImage.Resampling.LANCZOS)
+            x = canvas.width - overlay.width - margin
+            y = margin
+            canvas.alpha_composite(overlay, (max(0, x), max(0, y)))
+    except Exception as exc:
+        logger.warning(f"加载角标图片失败 {overlay_path}: {exc}")
+
+
 class Main(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
@@ -843,6 +863,13 @@ class Main(Star):
             font=subtitle_font,
         )
 
+        _paste_corner_overlay(
+            canvas,
+            Path(__file__).resolve().parent / "p2.png",
+            (160, 160),
+            margin=22,
+        )
+
         for index, category in enumerate(categories):
             row = index // cols
             col = index % cols
@@ -937,6 +964,13 @@ class Main(Star):
             f"当前模式：{self._get_view_command_mode_text()}",
             fill=(92, 98, 128),
             font=subtitle_font,
+        )
+
+        _paste_corner_overlay(
+            canvas,
+            Path(__file__).resolve().parent / "p1.png",
+            (180, 180),
+            margin=22,
         )
 
         for index, (command, desc) in enumerate(help_cards):

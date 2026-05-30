@@ -44,7 +44,7 @@
 
 <div align="center">
 
-<img width="1004" height="1346" alt="16da2be1d4c506b334ddb46c9afd5642" src="https://github.com/user-attachments/assets/eb665ccd-3c14-4622-b8e9-fb9468991817" />
+![alt text](5639cb25cc5b0a919b19c30d8a6e5072.png)
 
 
 </div>
@@ -64,7 +64,7 @@
 
 <div align="center">
 
-<img width="972" height="1414" alt="ecc7d6c69d7912ba2b4c7205b9ba0505" src="https://github.com/user-attachments/assets/e67ecc33-04fa-4a7c-baba-099fbe19cfa9" />
+![alt text](64e6dc6daa9505cd5c09c7b1a9c2a5cf.png)
 
 
 </div>
