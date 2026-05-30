@@ -8,7 +8,11 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-
+<!-- "添加好友" 按钮 -->
+<a href="tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=YOUR_QQ_NUMBER_HERE">
+    <img src="https://qzonestyle.gtimg.cn/aoi/sns/qq_qr_logo.png" width="20px" style="vertical-align: middle;">
+    <span style="font-weight: bold; font-size: 16px;"> 添加 QQ 好友</span>
+</a>
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
 </a>
