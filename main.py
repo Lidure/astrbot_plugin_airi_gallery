@@ -863,12 +863,51 @@ class Main(Star):
             font=subtitle_font,
         )
 
+        # 绘制总图片数说明
+        try:
+            total_images = sum(self._count_category_images(cat) for cat in categories)
+            drawer.text((padding_x, 140), f"总图片数：{total_images}", fill=(95, 106, 143), font=subtitle_font)
+        except Exception:
+            pass
+
+        # 右上角角标（p2）
+        p2_path = Path(__file__).resolve().parent / "p2.png"
         _paste_corner_overlay(
             canvas,
-            Path(__file__).resolve().parent / "p2.png",
+            p2_path,
             (160, 160),
             margin=22,
         )
+
+        # 标题右侧放置 p3（自动缩放，且避免与右上角角标重叠）
+        try:
+            p3_path = Path(__file__).resolve().parent / "p3.png"
+            if p3_path.exists():
+                from PIL import Image as PILImage
+                with PILImage.open(p3_path) as p3:
+                    p3 = p3.convert("RGBA")
+                    # 预设最大尺寸
+                    max_w, max_h = (90, 90)
+                    p3.thumbnail((max_w, max_h), PILImage.Resampling.LANCZOS)
+                    title_w, title_h = _text_size(drawer, "分类列表", title_font)
+                    p3_x = padding_x + title_w + 16
+                    p3_y = 48 + max(0, (title_h - p3.height) // 2)
+
+                    # 计算右上角 p2 的左边界，确保不重叠
+                    try:
+                        with PILImage.open(p2_path) as p2test:
+                            p2w, p2h = p2test.convert("RGBA").size
+                    except Exception:
+                        p2w = 0
+                    right_limit = canvas.width - (p2w + 22) if p2w else canvas.width - 22
+                    # 如会重叠，则缩小 p3 宽度以适配
+                    if p3_x + p3.width + 8 >= right_limit:
+                        available = max(8, right_limit - p3_x - 8)
+                        if available < p3.width:
+                            p3.thumbnail((available, max_h), PILImage.Resampling.LANCZOS)
+                    canvas.alpha_composite(p3, (max(0, int(p3_x)), max(0, int(p3_y))))
+        except Exception:
+            pass
 
         for index, category in enumerate(categories):
             row = index // cols
@@ -966,12 +1005,23 @@ class Main(Star):
             font=subtitle_font,
         )
 
-        _paste_corner_overlay(
-            canvas,
-            Path(__file__).resolve().parent / "p1.png",
-            (180, 180),
-            margin=22,
-        )
+
+        # 帮助图角标 p1，向左移动半个图片宽度以避免贴边过紧
+        try:
+            p1_path = Path(__file__).resolve().parent / "p1.png"
+            if p1_path.exists():
+                from PIL import Image as PILImage
+                with PILImage.open(p1_path) as p1_img:
+                    p1_img = p1_img.convert("RGBA")
+                    p1_img.thumbnail((180, 180), PILImage.Resampling.LANCZOS)
+                    # 默认 margin
+                    margin = 22
+                    # 向左移动半个图片宽度
+                    x = canvas.width - p1_img.width - margin - (p1_img.width // 2)
+                    y = margin
+                    canvas.alpha_composite(p1_img, (max(0, int(x)), max(0, int(y))))
+        except Exception:
+            pass
 
         for index, (command, desc) in enumerate(help_cards):
             row = index // cols
