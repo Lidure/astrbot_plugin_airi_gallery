@@ -239,6 +239,7 @@ class Main(Star):
         yield event.plain_result(self._build_help_text())
 
     @filter.command("看看")
+    @filter.command("看")
     async def cmd_look(self, event: AstrMessageEvent):
         """兼容性的展示命令占位，用于在 AstrBot 命令列表中显示 `/看看` 前缀形式。"""
         # 兼容两种情况：命令框架可能传入完整文本，也可能只传入参数部分。
@@ -431,11 +432,12 @@ class Main(Star):
         return False
 
     def _match_view_command(self, normalized: str) -> re.Match[str] | None:
+        # 支持两种触发词："看" 与 "看看"，并在是否使用前缀模式时做区分
         if self.view_command_mode == MODE_PREFIX:
-            return re.match(r"^/看看\s*(.+)$", normalized)
+            return re.match(r"^/看(?:看)?\s*(.+)$", normalized)
         if normalized.startswith("/"):
             return None
-        return re.match(r"^看看\s*(.+)$", normalized)
+        return re.match(r"^看(?:看)?\s*(.+)$", normalized)
 
     def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
         if self.view_command_mode == MODE_PREFIX:
