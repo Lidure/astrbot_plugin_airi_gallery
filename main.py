@@ -886,8 +886,18 @@ class Main(Star):
                 from PIL import Image as PILImage
                 with PILImage.open(p3_path) as p3:
                     p3 = p3.convert("RGBA")
-                    # 预设最大尺寸
-                    max_w, max_h = (90, 90)
+                    # 以 p2 的高度为基准放大 p3（scale=1.5），并限制不超出画布高度
+                    try:
+                        with PILImage.open(p2_path) as p2test:
+                            _p2w, _p2h = p2test.convert("RGBA").size
+                    except Exception:
+                        _p2h = 280
+                    scale = 1
+                    target_h = int((_p2h or 280) * scale)
+                    # 不超过可用画布高度（保留上方与下方边距）
+                    available_height = max(64, canvas.height - (padding_x + 40))
+                    max_h = min(target_h, available_height)
+                    max_w = max_h
                     p3.thumbnail((max_w, max_h), PILImage.Resampling.LANCZOS)
                     title_w, title_h = _text_size(drawer, "分类列表", title_font)
                     p3_x = padding_x + title_w + 16
