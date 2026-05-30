@@ -1,8 +1,8 @@
 {
-  "command_mode": {
+  "view_command_mode": {
     "type": "string",
     "description": "看图命令触发模式",
-    "hint": "no_prefix: 看看xxx；prefix: /看看xxx。该配置仅影响看看命令，其余命令统一使用 # 前缀，例如 #分类列表、#上传xxx、#删除123、#导入图库。",
+    "hint": "no_prefix: 看看xxx；prefix: /看看xxx。仅影响看看、看全部、看看123 这类浏览命令，其余管理命令固定使用 / 前缀。",
     "default": "no_prefix",
     "options": [
       "no_prefix",
@@ -13,12 +13,12 @@
     "type": "bool",
     "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
     "default": false,
-    "hint": "开启后，只有配置在 admins 或 whitelist 中的用户可以执行破坏性命令。"
+    "hint": "开启后，仅 admins 和 whitelist 中的用户可以执行创建、上传、删除、导入等管理命令。"
   },
   "admins": {
     "type": "list",
     "description": "管理员 id 或用户名",
-    "hint": "示例：2542219495 或 username；优先匹配用户 id，支持多个条目。",
+    "hint": "用于放行全部受权限控制的管理命令。示例：q账号、username、群聊或平台返回的 UID；支持多个条目。",
     "items": {
       "type": "string"
     },
@@ -27,7 +27,7 @@
   "whitelist": {
     "type": "list",
     "description": "允许的白名单（id 或用户名）",
-    "hint": "示例：2542219495；用于临时授权，支持多个条目。",
+    "hint": "用于给少数用户临时授权执行管理命令。示例：q账号、username、UID；支持多个条目。",
     "items": {
       "type": "string"
     },

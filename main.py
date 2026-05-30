@@ -31,29 +31,6 @@ IMAGE_SUFFIXES = {
     ".webp",
 }
 
-HELP_TEXT = "\n".join(
-    [
-        "Airi 画廊插件",
-        "",
-        "命令：",
-        "- /airi_gallery：查看插件帮助（图片海报）",
-        "- 看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
-        "- 看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
-        "- 看全部<分类>：生成分类总览图，并为每张图标注序号",
-        "- 看看123：发送编号为 123 的图片或表情包",
-        "- #分类列表：以图片卡片形式查看当前已创建的分类",
-        "- #创建<分类>：创建一个新的分类文件夹",
-        "- #上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
-        "- #删除123：删除编号为 123 的图片或表情包",
-        "- #导入图库：重新扫描 gallery 并自动整理数字编号",
-        "",
-        "说明：",
-        f"- 本地数据目录：data/plugin_data/{PLUGIN_NAME}/gallery",
-        "- 子文件夹名就是分类名，文件名会自动保持为数字序号",
-    ]
-)
-
-
 def _sanitize_component(value: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", value.strip())
     cleaned = cleaned.strip(". _")
@@ -165,7 +142,7 @@ class Main(Star):
         self.plugin_data_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
         self.gallery_root = self.plugin_data_dir / "gallery"
         self.gallery_root.mkdir(parents=True, exist_ok=True)
-        self.command_mode = self._resolve_command_mode()
+        self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         # 权限相关配置
         self.use_permission = bool(self.config.get("use_permission", False))
@@ -193,7 +170,7 @@ class Main(Star):
                 if help_path:
                     await event.send(event.image_result(str(help_path)))
                 else:
-                    await event.send(event.plain_result(HELP_TEXT))
+                    await event.send(event.plain_result(self._build_help_text()))
             elif kind == "import":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -237,19 +214,108 @@ class Main(Star):
         if help_path:
             yield event.image_result(str(help_path))
             return
-        yield event.plain_result(HELP_TEXT)
+        yield event.plain_result(self._build_help_text())
+
+    @filter.command("看看")
+    async def cmd_look(self, event: AstrMessageEvent):
+        """兼容性的展示命令占位，用于在 AstrBot 命令列表中显示 `/看看` 前缀形式。"""
+        # 直接把消息内容交由通用处理器处理
+        text = (event.message_str or "").strip()
+        action = self._parse_action(text)
+        if action and action[0] == "view_category":
+            await self._handle_view_category(event, str(action[1]))
+
+    @filter.command("分类列表")
+    async def cmd_list_categories(self, event: AstrMessageEvent):
+        """用于在 AstrBot 命令列表中显示 `/分类列表`。"""
+        await self._handle_list_categories(event)
+
+    @filter.command("创建")
+    async def cmd_create(self, event: AstrMessageEvent):
+        """注册 `/创建` 命令显示在命令列表并创建分类（参数跟随命令）。"""
+        text = (event.message_str or "").strip()
+        action = self._parse_action(text)
+        if action and action[0] == "create_category":
+            if not self._is_allowed(event):
+                await event.send(event.plain_result("没有权限执行此操作。"))
+            else:
+                await self._handle_create_category(event, str(action[1]))
+
+    @filter.command("上传")
+    async def cmd_upload(self, event: AstrMessageEvent):
+        """注册 `/上传` 命令显示在命令列表并处理上传逻辑。"""
+        text = (event.message_str or "").strip()
+        action = self._parse_action(text)
+        if action and action[0] == "upload":
+            await self._handle_upload(event, str(action[1]))
+
+    @filter.command("删除")
+    async def cmd_delete(self, event: AstrMessageEvent):
+        """注册 `/删除` 命令显示在命令列表并删除指定编号图片。"""
+        text = (event.message_str or "").strip()
+        action = self._parse_action(text)
+        if action and action[0] == "delete":
+            if not self._is_allowed(event):
+                await event.send(event.plain_result("没有权限执行此操作。"))
+            else:
+                await self._handle_delete(event, action[1])
+
+    @filter.command("导入图库")
+    async def cmd_import(self, event: AstrMessageEvent):
+        """注册 `/导入图库` 命令显示在命令列表并触发导入整理。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        renamed_count = await self._normalize_gallery_tree()
+        await event.send(event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。"))
+
+    @filter.command("看全部")
+    async def cmd_view_all(self, event: AstrMessageEvent):
+        """注册 `/看全部` 命令并展示分类总览（需要带参数）。"""
+        text = (event.message_str or "").strip()
+        action = self._parse_action(text)
+        if action and action[0] == "view_all_category":
+            await self._handle_view_all_category(event, str(action[1]))
 
     async def terminate(self):
         """插件卸载或停用时调用。"""
 
-    def _resolve_command_mode(self) -> str:
-        mode = str(self.config.get("command_mode", MODE_NO_PREFIX)).strip().lower()
-        if mode not in {MODE_NO_PREFIX, MODE_PREFIX}:
-            return MODE_NO_PREFIX
-        return mode
+    def _resolve_view_command_mode(self) -> str:
+        mode = str(self.config.get("view_command_mode", MODE_NO_PREFIX)).strip().lower()
+        if mode in {MODE_NO_PREFIX, MODE_PREFIX}:
+            return mode
+        return MODE_NO_PREFIX
 
-    def _get_command_mode_text(self) -> str:
-        return self.command_mode
+    def _get_view_command_mode_text(self) -> str:
+        return self.view_command_mode
+
+    def _view_command_prefix(self) -> str:
+        return "/" if self.view_command_mode == MODE_PREFIX else ""
+
+    def _build_help_text(self) -> str:
+        prefix = self._view_command_prefix()
+        return "\n".join(
+            [
+                "Airi 画廊插件",
+                "",
+                "命令：",
+                "- /airi_gallery：查看插件帮助（图片海报）",
+                f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
+                f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
+                f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
+                f"- {prefix}看看123：发送编号为 123 的图片或表情包",
+                "- /分类列表：以图片卡片形式查看当前已创建的分类",
+                "- /创建<分类>：创建一个新的分类文件夹",
+                "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
+                "- /删除123：删除编号为 123 的图片或表情包",
+                "- /导入图库：重新扫描 gallery 并自动整理数字编号",
+                "",
+                "说明：",
+                f"- 当前浏览命令模式：{'前缀 /' if self.view_command_mode == MODE_PREFIX else '无前缀'}",
+                f"- 本地数据目录：data/plugin_data/{PLUGIN_NAME}/gallery",
+                "- 子文件夹名就是分类名，文件名会自动保持为数字序号",
+            ]
+        )
 
     def _get_event_actor_identity(self, event: AstrMessageEvent) -> tuple[str | None, str | None]:
         """尝试从 event 中解析出用户 id 及显示名，尽量兼容不同适配器。"""
@@ -317,14 +383,14 @@ class Main(Star):
         return False
 
     def _match_view_command(self, normalized: str) -> re.Match[str] | None:
-        if self.command_mode == MODE_PREFIX:
+        if self.view_command_mode == MODE_PREFIX:
             return re.match(r"^/看看\s*(.+)$", normalized)
         if normalized.startswith("/"):
             return None
         return re.match(r"^看看\s*(.+)$", normalized)
 
     def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
-        if self.command_mode == MODE_PREFIX:
+        if self.view_command_mode == MODE_PREFIX:
             return re.match(r"^/看全部\s*(.+)$", normalized)
         if normalized.startswith("/"):
             return None
@@ -332,35 +398,37 @@ class Main(Star):
 
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
-
+        # 仅“看图/浏览”类命令遵循 view_command_mode。
+        # 管理类命令固定使用 '/' 前缀，避免和普通聊天文本冲突。
         if normalized in {"/airi_gallery", "/图库帮助"}:
             return "help", None
 
-        if normalized in {"#导入图库"}:
+        if normalized == "/导入图库":
             return "import", None
 
-        if normalized == "#分类列表":
-            return "list_categories", None
+        create_match = re.match(r"^/创建\s*(.+)$", normalized)
+        upload_match = re.match(r"^/上传\s*(.+)$", normalized)
+        delete_match = re.match(r"^/删除\s*(.+)$", normalized)
 
-        create_match = re.match(r"^#创建\s*(.+)$", normalized)
         if create_match:
             target = create_match.group(1).strip()
             if not target:
                 return None
             return "create_category", _sanitize_component(target)
 
-        upload_match = re.match(r"^#上传\s*(.+)$", normalized)
         if upload_match:
             parts = upload_match.group(1).strip().split()
             category = parts[0] if parts else DEFAULT_CATEGORY
             return "upload", _sanitize_component(category)
 
-        delete_match = re.match(r"^#删除\s*(.+)$", normalized)
         if delete_match:
             numbers = [int(item) for item in delete_match.group(1).split() if item.isdigit()]
             if numbers:
                 return "delete", numbers
             return None
+
+        if normalized == "/分类列表":
+            return "list_categories", None
 
         view_all_match = self._match_view_all_command(normalized)
         if view_all_match:
@@ -820,15 +888,15 @@ class Main(Star):
 
         help_cards = [
             ("/airi_gallery", "查看帮助说明"),
-            ("看看<分类>", "从某个分类里随机返回一张图片或表情包"),
-            ("看看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
-            ("看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
-            ("看看123", "按编号直接查看指定图片或表情包"),
-            ("#分类列表", "输出漂亮的分类总览图片"),
-            ("#创建<分类>", "创建一个新的分类文件夹"),
-            ("#上传<分类>", "回复图片后上传到指定分类"),
-            ("#删除123", "删除指定编号的图片或表情包"),
-            ("#导入图库", "重新扫描并整理图库编号"),
+            (f"{self._view_command_prefix()}看看<分类>", "从某个分类里随机返回一张图片或表情包"),
+            (f"{self._view_command_prefix()}看看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
+            (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
+            (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
+            ("/分类列表", "输出漂亮的分类总览图片"),
+            ("/创建<分类>", "创建一个新的分类文件夹"),
+            ("/上传<分类>", "回复图片后上传到指定分类"),
+            ("/删除123", "删除指定编号的图片或表情包"),
+            ("/导入图库", "重新扫描并整理图库编号"),
         ]
 
         card_width = 920
@@ -860,13 +928,13 @@ class Main(Star):
         drawer.text((padding, 54), "Airi 画廊插件", fill=(58, 64, 101), font=title_font)
         drawer.text(
             (padding, 126),
-            "帮助说明 · 看命令模式随配置变化 · 管理命令用 #",
+            "帮助说明 · 看命令模式随配置变化 · 管理命令用 /",
             fill=(98, 106, 140),
             font=subtitle_font,
         )
         drawer.text(
             (padding, 160),
-            f"当前模式：{self._get_command_mode_text()}",
+            f"当前模式：{self._get_view_command_mode_text()}",
             fill=(92, 98, 128),
             font=subtitle_font,
         )
