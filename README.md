@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[点击添加我的QQ好友](tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=YOUR_QQ_NUMBER_HERE)
+
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
 </a>
@@ -16,7 +16,7 @@
 </div>
 
 ---
-
+[点击添加我的QQ好友](tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=2542219495)
 ## ✨ 核心亮点
 
 | 特性 | 描述 |
