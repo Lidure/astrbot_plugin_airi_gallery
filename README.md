@@ -9,7 +9,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
 <!-- "添加好友" 按钮 -->
-<a href="tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=YOUR_QQ_NUMBER_HERE">
+<a href="tencent://AddContact/?fromId=45&fromSubId=1&subcmd=all&uin=2542219495">
     <img src="https://qzonestyle.gtimg.cn/aoi/sns/qq_qr_logo.png" width="20px" style="vertical-align: middle;">
     <span style="font-weight: bold; font-size: 16px;"> 添加 QQ 好友</span>
 </a>
