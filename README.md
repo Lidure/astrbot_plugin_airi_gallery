@@ -16,7 +16,7 @@
 </div>
 
 ---
-[添加我的QQ好友](tencent://ntqq-open?subCmd=profile&action=openMiniBuddyProfile&actionParams={"uin":"2542219495","sourceType":"QrCodeShareBuddyLink"})
+
 ## ✨ 核心亮点
 
 | 特性 | 描述 |
