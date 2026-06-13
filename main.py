@@ -164,6 +164,7 @@ class Main(Star):
         self.gallery_root.mkdir(parents=True, exist_ok=True)
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
+        self.view_multiple_mode = self._resolve_view_multiple_mode()
         self.view_all_collage_compress = self._resolve_view_all_collage_compress()
         self.view_all_collage_scale = self._resolve_view_all_collage_scale()
         # 权限相关配置
@@ -309,6 +310,12 @@ class Main(Star):
             return mode
         return MODE_NO_PREFIX
 
+    def _resolve_view_multiple_mode(self) -> str:
+        mode = str(self.config.get("view_multiple_mode", "single")).strip().lower()
+        if mode in {"single", "forward"}:
+            return mode
+        return "single"
+
     def _resolve_view_all_collage_compress(self) -> bool:
         return bool(self.config.get("view_all_collage_compress", False))
 
@@ -346,6 +353,7 @@ class Main(Star):
                 "",
                 "说明：",
                 f"- 当前浏览命令模式：{'前缀 /' if self.view_command_mode == MODE_PREFIX else '无前缀'}",
+                f"- 多图发送模式：{'合并转发' if self.view_multiple_mode == 'forward' else '单条消息'}",
                 f"- 本地数据目录：data/plugin_data/{PLUGIN_NAME}/gallery",
                 "- 子文件夹名就是分类名，文件名会自动保持为数字序号",
             ]
@@ -614,16 +622,42 @@ class Main(Star):
         count = max(1, min(5, int(count)))
         sats = images if len(images) <= count else random.sample(images, count)
 
-        # 构造单条消息，包含多个图片组件
+        if self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, sats)
+        else:
+            await self._send_as_single(event, sats)
+
+    async def _send_as_forward(self, event: AstrMessageEvent, paths: list[Path]):
+        try:
+            from astrbot.api.message_components import Node
+        except ImportError:
+            await self._send_as_single(event, paths)
+            return
+
+        try:
+            nodes = []
+            for idx, path in enumerate(paths):
+                content = [Image.fromFileSystem(str(path))]
+                node = Node(
+                    uin=event.get_sender_id() or "0",
+                    name=f"图片 {idx + 1}",
+                    content=content,
+                )
+                nodes.append(node)
+            await event.send(event.chain_result(nodes))
+        except Exception as exc:
+            logger.warning(f"合并转发多图失败，回退到单条消息模式：{exc}")
+            await self._send_as_single(event, paths)
+
+    async def _send_as_single(self, event: AstrMessageEvent, paths: list[Path]):
         try:
             result = event.make_result()
-            for path in sats:
+            for path in paths:
                 result.file_image(str(path))
             await event.send(result)
         except Exception as exc:
             logger.warning(f"一次性发送多图失败：{exc}")
-            # 退回到逐条发送
-            for path in sats:
+            for path in paths:
                 try:
                     await event.send(event.image_result(str(path)))
                 except Exception as exc2:
