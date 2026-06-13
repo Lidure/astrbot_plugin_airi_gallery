@@ -342,7 +342,7 @@ class Main(Star):
                 "命令：",
                 "- /airi_gallery：查看插件帮助（图片海报）",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
-                f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 5 张",
+                f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 10 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 "- /分类列表：以图片卡片形式查看当前已创建的分类",
@@ -502,11 +502,11 @@ class Main(Star):
                 return None
             # 仅支持“分类 + 空格 + 数字”的写法，例如：看看cat 3
             # 这样可避免把“看看602”误判成分类 6、数量 02。
-            many_match = re.match(r"^(.+?)\s+(\d+)$", target)
+                many_match = re.match(r"^(.+?)\s+(\d+)$", target)
             if many_match:
                 cat = many_match.group(1).strip()
                 num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
-                return "view_multiple", (_sanitize_component(cat), max(1, min(5, num)))
+                return "view_multiple", (_sanitize_component(cat), num)
 
             if target.isdigit():
                 return "view_number", int(target)
@@ -619,7 +619,11 @@ class Main(Star):
         if not images:
             return
 
-        count = max(1, min(5, int(count)))
+        if count > 10:
+            await event.send(event.plain_result("最多一次查看 10 张图片哦。"))
+            return
+
+        count = max(1, min(10, int(count)))
         sats = images if len(images) <= count else random.sample(images, count)
 
         if self.view_multiple_mode == "forward":
@@ -635,16 +639,15 @@ class Main(Star):
             return
 
         try:
-            nodes = []
-            for idx, path in enumerate(paths):
-                content = [Image.fromFileSystem(str(path))]
-                node = Node(
-                    uin=event.get_sender_id() or "0",
-                    name=f"图片 {idx + 1}",
-                    content=content,
-                )
-                nodes.append(node)
-            await event.send(event.chain_result(nodes))
+            content = []
+            for path in paths:
+                content.append(Image.fromFileSystem(str(path)))
+            node = Node(
+                uin=event.get_sender_id() or "0",
+                name="Airi 画廊",
+                content=content,
+            )
+            await event.send(event.chain_result([node]))
         except Exception as exc:
             logger.warning(f"合并转发多图失败，回退到单条消息模式：{exc}")
             await self._send_as_single(event, paths)
@@ -1038,7 +1041,7 @@ class Main(Star):
         help_cards = [
             ("/airi_gallery", "查看帮助说明"),
             (f"{self._view_command_prefix()}看看<分类>", "从某个分类里随机返回一张图片或表情包"),
-            (f"{self._view_command_prefix()}看看<分类> N", "随机返回 N 张，N 最大 5，分类和数字之间要有空格"),
+            (f"{self._view_command_prefix()}看看<分类> N", "随机返回 N 张，N 最大 10，分类和数字之间要有空格"),
             (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
             (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
             ("/分类列表", "输出漂亮的分类总览图片"),
