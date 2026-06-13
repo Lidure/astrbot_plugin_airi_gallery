@@ -19,6 +19,12 @@
       "forward"
     ]
   },
+  "llm_tool_enabled": {
+    "type": "bool",
+    "description": "启用 LLM 表情包工具",
+    "hint": "开启后，LLM 可以在对话中自动调用本插件的图库来发送表情包/图片。需要 AstrBot 已接入 LLM 提供商。",
+    "default": false
+  },
   "view_all_collage_compress": {
     "type": "bool",
     "description": "看全部拼图是否压缩",
