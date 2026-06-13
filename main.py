@@ -642,8 +642,9 @@ class Main(Star):
             content = []
             for path in paths:
                 content.append(Image.fromFileSystem(str(path)))
+            bot_id = getattr(event.message_obj, "self_id", None) or "0"
             node = Node(
-                uin=event.get_sender_id() or "0",
+                uin=str(bot_id),
                 name="Airi 画廊",
                 content=content,
             )
