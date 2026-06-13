@@ -500,9 +500,9 @@ class Main(Star):
             target = view_match.group(1).strip()
             if not target:
                 return None
-            # 仅支持“分类 + 空格 + 数字”的写法，例如：看看cat 3
-            # 这样可避免把“看看602”误判成分类 6、数量 02。
-                many_match = re.match(r"^(.+?)\s+(\d+)$", target)
+            # 仅支持"分类 + 空格 + 数字"的写法，例如：看看cat 3
+            # 这样可避免把"看看602"误判成分类 6、数量 02。
+            many_match = re.match(r"^(.+?)\s+(\d+)$", target)
             if many_match:
                 cat = many_match.group(1).strip()
                 num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
