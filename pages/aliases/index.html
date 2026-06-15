@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>分类昵称管理</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1 id="heading">分类昵称管理</h1>
+      <p class="subtitle" id="subtitle">管理分类的别名，发送「看看昵称」等同于「看看真实分类名」</p>
+
+      <div class="add-row">
+        <input type="text" id="alias-input" placeholder="昵称，如：爱莉" />
+        <span class="eq">=</span>
+        <select id="category-select">
+          <option value="">选择已有分类...</option>
+        </select>
+        <input type="text" id="category-input" placeholder="或手动输入分类名" />
+        <button id="add-btn" class="btn btn-primary">添加</button>
+      </div>
+
+      <div id="msg" class="msg" style="display:none"></div>
+
+      <table id="alias-table">
+        <thead>
+          <tr>
+            <th>昵称</th>
+            <th>=</th>
+            <th>真实分类名</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="alias-tbody"></tbody>
+      </table>
+
+      <div class="actions">
+        <button id="save-btn" class="btn btn-primary" disabled>保存所有更改</button>
+        <button id="reload-btn" class="btn">重新加载</button>
+      </div>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -222,6 +222,25 @@ class Main(Star):
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
 
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/aliases",
+            self._api_get_aliases,
+            ["GET"],
+            "Get category aliases",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/aliases/save",
+            self._api_save_aliases,
+            ["POST"],
+            "Save category aliases",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/categories",
+            self._api_get_categories,
+            ["GET"],
+            "Get category list",
+        )
+
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
         await self._normalize_gallery_tree()
@@ -353,6 +372,30 @@ class Main(Star):
 
     async def terminate(self):
         """插件卸载或停用时调用。"""
+
+    async def _api_get_aliases(self):
+        from quart import jsonify
+        entries = [f"{alias}={cat}" for alias, cat in self.category_aliases.items()]
+        return jsonify({"aliases": entries})
+
+    async def _api_save_aliases(self):
+        from quart import request, jsonify
+        data = await request.get_json()
+        entries = data.get("aliases", [])
+        self.category_aliases = self._parse_aliases(entries)
+        self.config["category_aliases"] = entries
+        self.config.save_config()
+        return jsonify({"ok": True})
+
+    async def _api_get_categories(self):
+        from quart import jsonify
+        cats = []
+        if self.gallery_root.exists():
+            cats = sorted(
+                [p.name for p in self.gallery_root.iterdir() if p.is_dir() and p.name != "generated"],
+                key=lambda s: s.lower(),
+            )
+        return jsonify({"categories": cats})
 
     def _resolve_view_command_mode(self) -> str:
         mode = str(self.config.get("view_command_mode", MODE_NO_PREFIX)).strip().lower()
