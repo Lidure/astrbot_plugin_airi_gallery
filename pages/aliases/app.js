@@ -15,10 +15,11 @@ const reloadBtn = document.getElementById("reload-btn");
 const msgEl = document.getElementById("msg");
 
 function showMsg(text, ok = true) {
-  msgEl.textContent = text;
+  msgEl.textContent = (ok ? "🌸 " : "💦 ") + text;
   msgEl.className = "msg " + (ok ? "msg-ok" : "msg-err");
   msgEl.style.display = "block";
-  setTimeout(() => { msgEl.style.display = "none"; }, 2500);
+  clearTimeout(showMsg._t);
+  showMsg._t = setTimeout(() => { msgEl.style.display = "none"; }, 2800);
 }
 
 function markDirty() {
@@ -31,7 +32,7 @@ function renderTable() {
   if (!aliases.length) {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
-    tr.innerHTML = '<td colspan="4">暂无昵称，点击上方「添加」创建</td>';
+    tr.innerHTML = '<td colspan="4">还没有昵称哦，去上面添加一个吧～</td>';
     tbody.appendChild(tr);
     return;
   }
@@ -41,7 +42,7 @@ function renderTable() {
       <td><input type="text" value="${esc(a.alias)}" data-idx="${i}" data-field="alias" class="inline-edit" /></td>
       <td class="eq-cell">=</td>
       <td><input type="text" value="${esc(a.category)}" data-idx="${i}" data-field="category" class="inline-edit" /></td>
-      <td class="action-cell"><button class="btn btn-danger" data-idx="${i}">删除</button></td>
+      <td class="action-cell"><button class="btn-del" data-idx="${i}">🗑 删除</button></td>
     `;
     tbody.appendChild(tr);
   });
@@ -49,16 +50,14 @@ function renderTable() {
   tbody.querySelectorAll(".inline-edit").forEach(el => {
     el.addEventListener("input", () => {
       const idx = parseInt(el.dataset.idx);
-      const field = el.dataset.field;
-      aliases[idx][field] = el.value;
+      aliases[idx][el.dataset.field] = el.value;
       markDirty();
     });
   });
 
-  tbody.querySelectorAll(".btn-danger").forEach(el => {
+  tbody.querySelectorAll(".btn-del").forEach(el => {
     el.addEventListener("click", () => {
-      const idx = parseInt(el.dataset.idx);
-      aliases.splice(idx, 1);
+      aliases.splice(parseInt(el.dataset.idx), 1);
       markDirty();
       renderTable();
     });
@@ -66,9 +65,10 @@ function renderTable() {
 }
 
 function renderCategoryOptions() {
-  const existing = categorySelect.querySelector("option[value='']");
+  const placeholder = categorySelect.querySelector("option[value='']");
   categorySelect.innerHTML = "";
-  categorySelect.appendChild(existing || Object.assign(document.createElement("option"), { value: "", textContent: "选择已有分类..." }));
+  const ph = placeholder || Object.assign(document.createElement("option"), { value: "", textContent: "选择已有分类..." });
+  categorySelect.appendChild(ph);
   categories.forEach(c => {
     const opt = document.createElement("option");
     opt.value = c;
@@ -84,16 +84,14 @@ function esc(s) {
 addBtn.addEventListener("click", () => {
   const alias = aliasInput.value.trim();
   const cat = categoryInput.value.trim() || categorySelect.value;
-  if (!alias) { showMsg("请输入昵称", false); return; }
-  if (!cat) { showMsg("请选择或输入分类名", false); return; }
-  if (aliases.some(a => a.alias === alias)) { showMsg("昵称已存在", false); return; }
+  if (!alias) { showMsg("请输入昵称呀～", false); return; }
+  if (!cat) { showMsg("请选择或输入分类名～", false); return; }
+  if (aliases.some(a => a.alias === alias)) { showMsg("这个昵称已经存在啦～", false); return; }
   aliases.push({ alias, category: cat });
   aliasInput.value = "";
-  categoryInput.value = "";
-  categorySelect.value = "";
   markDirty();
   renderTable();
-  showMsg("已添加，记得点保存");
+  showMsg("添加成功！记得点保存哦～");
 });
 
 saveBtn.addEventListener("click", async () => {
@@ -102,15 +100,15 @@ saveBtn.addEventListener("click", async () => {
     await bridge.apiPost("aliases/save", { aliases: entries });
     dirty = false;
     saveBtn.disabled = true;
-    showMsg("保存成功");
+    showMsg("保存成功啦～ 🎉");
   } catch (e) {
-    showMsg("保存失败: " + e.message, false);
+    showMsg("保存失败了呜呜... " + e.message, false);
   }
 });
 
 reloadBtn.addEventListener("click", async () => {
   await load();
-  showMsg("已重新加载");
+  showMsg("已刷新～");
 });
 
 async function load() {
