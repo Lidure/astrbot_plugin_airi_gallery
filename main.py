@@ -1056,7 +1056,7 @@ class Main(Star):
             pass
 
         # 右上角角标（p2）
-        p2_path = Path(__file__).resolve().parent / "p2.png"
+        p2_path = Path(__file__).resolve().parent / "assets" / "p2.png"
         _paste_corner_overlay(
             canvas,
             p2_path,
@@ -1066,7 +1066,7 @@ class Main(Star):
 
         # 如果存在 p4.png，把它放在 p2 的左侧并与 p2 高度对齐
         try:
-            p4_path = Path(__file__).resolve().parent / "p4.png"
+            p4_path = Path(__file__).resolve().parent / "assets" / "p4.png"
             if p4_path.exists():
                 from PIL import Image as PILImage
                 # 使用与 p2 相同的最大大小进行缩略以保持高度一致感
@@ -1205,7 +1205,7 @@ class Main(Star):
 
         # 帮助图角标 p1，向左移动半个图片宽度以避免贴边过紧
         try:
-            p1_path = Path(__file__).resolve().parent / "p1.png"
+            p1_path = Path(__file__).resolve().parent / "assets" / "p1.png"
             if p1_path.exists():
                 from PIL import Image as PILImage
                 with PILImage.open(p1_path) as p1_img:

@@ -28,7 +28,7 @@
   "category_aliases": {
     "type": "list",
     "description": "分类昵称映射",
-    "hint": "每条格式为「昵称=分类名」，例如：爱莉=airi。发送「看看爱莉」等同于「看看airi」。",
+    "hint": "每条格式为「昵称=分类名」，建议去web ui设置",
     "items": {
       "type": "string"
     },
