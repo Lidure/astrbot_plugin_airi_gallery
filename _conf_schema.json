@@ -26,10 +26,13 @@
     "default": false
   },
   "category_aliases": {
-    "type": "dict",
+    "type": "list",
     "description": "分类昵称映射",
-    "hint": "键是昵称，值是真实分类名。例如：{\"爱莉\": \"airi\"}，发送「看看爱莉」等同于「看看airi」。",
-    "default": {}
+    "hint": "每条格式为「昵称=分类名」，例如：爱莉=airi。发送「看看爱莉」等同于「看看airi」。",
+    "items": {
+      "type": "string"
+    },
+    "default": []
   },
   "view_all_collage_compress": {
     "type": "bool",

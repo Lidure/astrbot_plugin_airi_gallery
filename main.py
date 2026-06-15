@@ -218,7 +218,7 @@ class Main(Star):
         self.admins = {str(x) for x in (self.config.get("admins") or [])}
         self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
         self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
-        self.category_aliases = self.config.get("category_aliases") or {}
+        self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
 
@@ -385,6 +385,18 @@ class Main(Star):
 
     def _resolve_alias(self, name: str) -> str:
         return self.category_aliases.get(name, name)
+
+    @staticmethod
+    def _parse_aliases(entries: list) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        for entry in entries:
+            if "=" in entry:
+                alias, target = entry.split("=", 1)
+                alias = alias.strip()
+                target = target.strip()
+                if alias and target:
+                    aliases[alias] = target
+        return aliases
 
     def _build_help_text(self) -> str:
         prefix = self._view_command_prefix()
