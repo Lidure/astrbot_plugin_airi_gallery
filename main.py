@@ -1183,21 +1183,27 @@ class Main(Star):
         if not aliases:
             return None
 
+        grouped: dict[str, list[str]] = {}
+        for alias, category in aliases:
+            grouped.setdefault(category, []).append(alias)
+
         title_font = _load_collage_font(48, self.collage_font_path) or ImageFont.load_default()
         subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        alias_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
-        arrow_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
-        cat_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
+        cat_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
+        alias_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
 
-        card_w = 520
-        card_h = 60
-        gap = 12
         padding_x = 42
         padding_top = 170
         padding_bottom = 44
-        rows = len(aliases)
-        width = padding_x * 2 + card_w
-        height = padding_top + rows * card_h + max(0, rows - 1) * gap + padding_bottom
+        card_gap_x = 18
+        card_gap_y = 14
+        card_w = 380
+        card_h = 100
+        cols = 2 if len(grouped) > 4 else 1
+        row_items = list(grouped.items())
+        rows = math.ceil(len(row_items) / cols)
+        width = padding_x * 2 + cols * card_w + (cols - 1) * card_gap_x
+        height = padding_top + rows * card_h + max(0, rows - 1) * card_gap_y + padding_bottom
 
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
@@ -1206,7 +1212,7 @@ class Main(Star):
         drawer.text((padding_x, 42), "分类昵称映射", fill=(57, 64, 100), font=title_font)
         drawer.text(
             (padding_x, 106),
-            f"当前共 {len(aliases)} 个昵称",
+            f"共 {len(grouped)} 个分类，{len(aliases)} 个昵称",
             fill=(95, 106, 143),
             font=subtitle_font,
         )
@@ -1220,8 +1226,11 @@ class Main(Star):
             (206, 228, 201, 238),
         ]
 
-        for index, (alias, category) in enumerate(aliases):
-            y = padding_top + index * (card_h + gap)
+        for index, (category, alias_list) in enumerate(row_items):
+            col = index % cols
+            row = index // cols
+            x = padding_x + col * (card_w + card_gap_x)
+            y = padding_top + row * (card_h + card_gap_y)
 
             row_card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
             row_drawer = ImageDraw.Draw(row_card)
@@ -1233,17 +1242,14 @@ class Main(Star):
                 width=2,
             )
 
-            row_drawer.text((20, 14), alias, fill=(58, 64, 101), font=alias_font)
+            row_drawer.text((20, 16), category, fill=(58, 64, 101), font=cat_font)
 
-            arrow_text = "→"
-            arrow_w, _ = _text_size(row_drawer, arrow_text, arrow_font)
-            alias_w, _ = _text_size(row_drawer, alias, alias_font)
-            arrow_x = 20 + alias_w + 24
-            row_drawer.text((arrow_x, 16), arrow_text, fill=(180, 160, 190), font=arrow_font)
+            alias_text = "、".join(alias_list)
+            alias_lines = _wrap_text(row_drawer, alias_text, alias_font, card_w - 40)
+            for li, line in enumerate(alias_lines[:2]):
+                row_drawer.text((20, 52 + li * 26), line, fill=(120, 100, 130), font=alias_font)
 
-            row_drawer.text((arrow_x + arrow_w + 20, 16), category, fill=(95, 106, 143), font=cat_font)
-
-            canvas.alpha_composite(row_card, (padding_x, y))
+            canvas.alpha_composite(row_card, (x, y))
 
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1266,6 +1272,7 @@ class Main(Star):
             (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
             (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
             ("/分类列表", "输出漂亮的分类总览图片"),
+            ("/昵称列表", "以图片形式查看当前分类昵称映射"),
             ("/创建<分类>", "创建一个新的分类文件夹"),
             ("/上传<分类>", "回复图片后上传到指定分类"),
             ("/删除123", "删除指定编号的图片或表情包"),
@@ -1308,6 +1315,13 @@ class Main(Star):
         drawer.text(
             (padding, 160),
             f"当前模式：{self._get_view_command_mode_text()}",
+            fill=(92, 98, 128),
+            font=subtitle_font,
+        )
+        llm_text = "LLM 表情包工具：已启用 ✅" if self.llm_tool_enabled else "LLM 表情包工具：未启用"
+        drawer.text(
+            (padding, 188),
+            llm_text,
             fill=(92, 98, 128),
             font=subtitle_font,
         )

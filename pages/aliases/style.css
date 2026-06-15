@@ -309,7 +309,12 @@ td.action-cell { text-align: right; }
 .actions {
   display: flex;
   gap: 10px;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 16px 0 8px;
   margin-top: 4px;
+  border-top: 1px solid var(--border);
 }
 
 /* Footer */
