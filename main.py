@@ -13,12 +13,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Image, Reply
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
-
-from pydantic import Field
-from pydantic.dataclasses import dataclass
-from astrbot.core.agent.run_context import ContextWrapper
-from astrbot.core.agent.tool import FunctionTool, ToolExecResult
-from astrbot.core.astr_agent_context import AstrAgentContext
+from astrbot.core.agent.tool import FunctionTool
 
 
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
@@ -161,52 +156,28 @@ def _paste_corner_overlay(canvas, overlay_path: Path, max_size: tuple[int, int],
         logger.warning(f"加载角标图片失败 {overlay_path}: {exc}")
 
 
-class GallerySendTool(FunctionTool[AstrAgentContext]):
-    name: str = "gallery_send"
-    description: str = "从 Airi 画廊图库中随机发送表情包或图片。适用于聊天中需要发表情包/图片的场景。"
-    parameters: dict = Field(
-        default_factory=lambda: {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "要发送的图片分类名。留空则从所有分类中随机选取。",
-                },
-                "count": {
-                    "type": "integer",
-                    "description": "要发送的图片数量，默认 1，最大 5。",
-                },
-            },
-            "required": [],
-        }
-    )
-
-    def __init__(self, plugin: "Main"):
-        super().__init__()
-        self._plugin = plugin
-
-    async def call(
-        self, context: ContextWrapper[AstrAgentContext], **kwargs
-    ) -> ToolExecResult:
+def _gallery_send_handler(plugin: "Main"):
+    async def _handler(context, **kwargs):
         event = context.context.event
         category = kwargs.get("category", "")
         count = kwargs.get("count", 1)
         count = max(1, min(5, int(count)))
 
-        plugin = self._plugin
         if category:
             images = plugin._iter_category_images(category)
         else:
             images = plugin._iter_image_files()
 
         if not images:
-            return ToolExecResult(result="图库中没有可用的图片。", break_loop=False)
+            return "图库中没有可用的图片。"
 
         picks = images if len(images) <= count else random.sample(images, count)
         for path in picks:
             await event.send(event.image_result(str(path)))
 
-        return ToolExecResult(result=f"已发送 {len(picks)} 张图片。", break_loop=False)
+        return f"已发送 {len(picks)} 张图片。"
+
+    return _handler
 
 
 class Main(Star):
@@ -227,7 +198,26 @@ class Main(Star):
         self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
         self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
         if self.llm_tool_enabled:
-            self.context.add_llm_tools(GallerySendTool(self))
+            tool = FunctionTool(
+                name="gallery_send",
+                description="从 Airi 画廊图库中随机发送表情包或图片。适用于聊天中需要发表情包/图片的场景。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "要发送的图片分类名。留空则从所有分类中随机选取。",
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "要发送的图片数量，默认 1，最大 5。",
+                        },
+                    },
+                    "required": [],
+                },
+                handler=_gallery_send_handler(self),
+            )
+            self.context.add_llm_tools(tool)
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
