@@ -370,6 +370,20 @@ class Main(Star):
         if action and action[0] == "view_all_category":
             await self._handle_view_all_category(event, str(action[1]))
 
+    @filter.command("查看画廊")
+    async def cmd_view_gallery(self, event: AstrMessageEvent):
+        """注册 `/查看画廊` 命令，等同于 `/分类列表`。"""
+        await self._handle_list_categories(event)
+
+    @filter.command("画廊帮助")
+    async def cmd_gallery_help(self, event: AstrMessageEvent):
+        """注册 `/画廊帮助` 命令，等同于 `/airi_gallery`。"""
+        help_path = await self._build_help_image()
+        if help_path:
+            yield event.image_result(str(help_path))
+            return
+        yield event.plain_result(self._build_help_text())
+
     async def terminate(self):
         """插件卸载或停用时调用。"""
 
@@ -382,8 +396,10 @@ class Main(Star):
         from quart import request, jsonify
         data = await request.get_json()
         entries = data.get("aliases", [])
-        self.category_aliases = self._parse_aliases(entries)
-        self.config["category_aliases"] = entries
+        parsed = self._parse_aliases(entries)
+        sorted_items = sorted(parsed.items(), key=lambda item: item[1].lower())
+        self.category_aliases = dict(sorted_items)
+        self.config["category_aliases"] = [f"{k}={v}" for k, v in sorted_items]
         self.config.save_config()
         return jsonify({"ok": True})
 
