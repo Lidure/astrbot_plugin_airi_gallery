@@ -157,8 +157,7 @@ def _paste_corner_overlay(canvas, overlay_path: Path, max_size: tuple[int, int],
 
 
 def _gallery_send_handler(plugin: "Main"):
-    async def _handler(context, **kwargs):
-        event = context.context.event
+    async def _handler(event, **kwargs):
         category = kwargs.get("category", "")
         count = kwargs.get("count", 1)
         count = max(1, min(5, int(count)))
