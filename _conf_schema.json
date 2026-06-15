@@ -19,6 +19,12 @@
       "forward"
     ]
   },
+  "view_multiple_max": {
+    "type": "int",
+    "description": "看看多张的最大数量",
+    "hint": "看看<分类> N 中 N 的最大值，范围 5~10，默认 10。LLM 工具发送数量也受此限制。",
+    "default": 10
+  },
   "llm_tool_enabled": {
     "type": "bool",
     "description": "启用 LLM 表情包工具",

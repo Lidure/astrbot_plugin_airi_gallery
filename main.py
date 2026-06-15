@@ -170,7 +170,7 @@ class GalleryTool(FunctionTool):
                     },
                     "count": {
                         "type": "integer",
-                        "description": "要发送的图片数量，默认 1，最大 5。",
+                        "description": "要发送的图片数量，默认 1，最大随配置变化。",
                     },
                 },
                 "required": [],
@@ -182,7 +182,7 @@ class GalleryTool(FunctionTool):
         event = context.context.event
         category = kwargs.get("category", "")
         count = kwargs.get("count", 1)
-        count = max(1, min(5, int(count)))
+        count = max(1, min(self._plugin.view_multiple_max, int(count)))
 
         plugin = self._plugin
         if category:
@@ -211,6 +211,7 @@ class Main(Star):
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         self.view_multiple_mode = self._resolve_view_multiple_mode()
+        self.view_multiple_max = max(5, min(10, int(self.config.get("view_multiple_max", 10))))
         self.view_all_collage_compress = self._resolve_view_all_collage_compress()
         self.view_all_collage_scale = self._resolve_view_all_collage_scale()
         # 权限相关配置
@@ -479,7 +480,7 @@ class Main(Star):
                 "命令：",
                 "- /airi_gallery：查看插件帮助（图片海报）",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
-                f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 10 张",
+                f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 "- /分类列表：以图片卡片形式查看当前已创建的分类",
@@ -759,11 +760,11 @@ class Main(Star):
         if not images:
             return
 
-        if count > 10:
-            await event.send(event.plain_result("最多一次查看 10 张图片哦。"))
+        if count > self.view_multiple_max:
+            await event.send(event.plain_result(f"最多一次查看 {self.view_multiple_max} 张图片哦。"))
             return
 
-        count = max(1, min(10, int(count)))
+        count = max(1, min(self.view_multiple_max, int(count)))
         sats = images if len(images) <= count else random.sample(images, count)
 
         if self.view_multiple_mode == "forward":
@@ -1268,7 +1269,7 @@ class Main(Star):
         help_cards = [
             ("/airi_gallery", "查看帮助说明"),
             (f"{self._view_command_prefix()}看看<分类>", "从某个分类里随机返回一张图片或表情包"),
-            (f"{self._view_command_prefix()}看看<分类> N", "随机返回 N 张，N 最大 10，分类和数字之间要有空格"),
+            (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，N 最大 {self.view_multiple_max}，分类和数字之间要有空格"),
             (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
             (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
             ("/分类列表", "输出漂亮的分类总览图片"),
