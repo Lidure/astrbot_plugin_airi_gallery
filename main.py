@@ -186,6 +186,7 @@ class GalleryTool(FunctionTool):
 
         plugin = self._plugin
         if category:
+            category = plugin._resolve_alias(category)
             images = plugin._iter_category_images(category)
         else:
             images = plugin._iter_image_files()
@@ -217,6 +218,7 @@ class Main(Star):
         self.admins = {str(x) for x in (self.config.get("admins") or [])}
         self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
         self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
+        self.category_aliases = self.config.get("category_aliases") or {}
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
 
@@ -381,6 +383,9 @@ class Main(Star):
     def _view_command_prefix(self) -> str:
         return "/" if self.view_command_mode == MODE_PREFIX else ""
 
+    def _resolve_alias(self, name: str) -> str:
+        return self.category_aliases.get(name, name)
+
     def _build_help_text(self) -> str:
         prefix = self._view_command_prefix()
         return "\n".join(
@@ -405,6 +410,7 @@ class Main(Star):
                 f"- 本地数据目录：data/plugin_data/{PLUGIN_NAME}/gallery",
                 "- 子文件夹名就是分类名，文件名会自动保持为数字序号",
                 f"- LLM 表情包工具：{'已启用' if self.llm_tool_enabled else '未启用'}",
+                f"- 分类昵称数：{len(self.category_aliases)} 个",
             ]
         )
 
@@ -521,12 +527,12 @@ class Main(Star):
             target = create_match.group(1).strip()
             if not target:
                 return None
-            return "create_category", _sanitize_component(target)
+            return "create_category", _sanitize_component(self._resolve_alias(target))
 
         if upload_match:
             parts = upload_match.group(1).strip().split()
             category = parts[0] if parts else DEFAULT_CATEGORY
-            return "upload", _sanitize_component(category)
+            return "upload", _sanitize_component(self._resolve_alias(category))
 
         if delete_match:
             numbers = [int(item) for item in delete_match.group(1).split() if item.isdigit()]
@@ -542,7 +548,7 @@ class Main(Star):
             target = view_all_match.group(1).strip()
             if not target:
                 return None
-            return "view_all_category", _sanitize_component(target)
+            return "view_all_category", _sanitize_component(self._resolve_alias(target))
 
         view_match = self._match_view_command(normalized)
         if view_match:
@@ -555,11 +561,11 @@ class Main(Star):
             if many_match:
                 cat = many_match.group(1).strip()
                 num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
-                return "view_multiple", (_sanitize_component(cat), num)
+                return "view_multiple", (_sanitize_component(self._resolve_alias(cat)), num)
 
             if target.isdigit():
                 return "view_number", int(target)
-            return "view_category", _sanitize_component(target)
+            return "view_category", _sanitize_component(self._resolve_alias(target))
 
         return None
 
