@@ -156,12 +156,35 @@ def _paste_corner_overlay(canvas, overlay_path: Path, max_size: tuple[int, int],
         logger.warning(f"加载角标图片失败 {overlay_path}: {exc}")
 
 
-def _gallery_send_handler(plugin: "Main"):
-    async def _handler(event, **kwargs):
+class GalleryTool(FunctionTool):
+    def __init__(self, plugin: "Main"):
+        super().__init__(
+            name="gallery_send",
+            description="从 Airi 画廊图库中随机发送表情包或图片。适用于聊天中需要发表情包/图片的场景。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "要发送的图片分类名。留空则从所有分类中随机选取。",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "要发送的图片数量，默认 1，最大 5。",
+                    },
+                },
+                "required": [],
+            },
+        )
+        self._plugin = plugin
+
+    async def call(self, context, **kwargs):
+        event = context.context.event
         category = kwargs.get("category", "")
         count = kwargs.get("count", 1)
         count = max(1, min(5, int(count)))
 
+        plugin = self._plugin
         if category:
             images = plugin._iter_category_images(category)
         else:
@@ -175,8 +198,6 @@ def _gallery_send_handler(plugin: "Main"):
             await event.send(event.image_result(str(path)))
 
         return f"已发送 {len(picks)} 张图片。"
-
-    return _handler
 
 
 class Main(Star):
@@ -197,26 +218,7 @@ class Main(Star):
         self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
         self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
         if self.llm_tool_enabled:
-            tool = FunctionTool(
-                name="gallery_send",
-                description="从 Airi 画廊图库中随机发送表情包或图片。适用于聊天中需要发表情包/图片的场景。",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "category": {
-                            "type": "string",
-                            "description": "要发送的图片分类名。留空则从所有分类中随机选取。",
-                        },
-                        "count": {
-                            "type": "integer",
-                            "description": "要发送的图片数量，默认 1，最大 5。",
-                        },
-                    },
-                    "required": [],
-                },
-                handler=_gallery_send_handler(self),
-            )
-            self.context.add_llm_tools(tool)
+            self.context.add_llm_tools(GalleryTool(self))
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
