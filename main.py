@@ -384,6 +384,19 @@ class Main(Star):
             return
         yield event.plain_result(self._build_help_text())
 
+    @filter.command("昵称列表")
+    async def cmd_alias_list(self, event: AstrMessageEvent):
+        """注册 `/昵称列表` 命令，以图片形式展示当前分类昵称映射。"""
+        if not self.category_aliases:
+            yield event.plain_result("当前没有设置任何分类昵称。")
+            return
+        img_path = await self._build_aliases_image()
+        if img_path:
+            yield event.image_result(str(img_path))
+        else:
+            lines = [f"{alias} → {cat}" for alias, cat in sorted(self.category_aliases.items(), key=lambda x: x[1].lower())]
+            yield event.plain_result("分类昵称映射：\n" + "\n".join(lines))
+
     async def terminate(self):
         """插件卸载或停用时调用。"""
 
@@ -474,6 +487,7 @@ class Main(Star):
                 "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
                 "- /删除123：删除编号为 123 的图片或表情包",
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
+                "- /昵称列表：以图片形式查看当前分类昵称映射",
                 "",
                 "说明：",
                 f"- 当前浏览命令模式：{'前缀 /' if self.view_command_mode == MODE_PREFIX else '无前缀'}",
@@ -1154,6 +1168,86 @@ class Main(Star):
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"category_list_{int(time.time() * 1000)}.png"
+        canvas.convert("RGB").save(output_path, format="PNG")
+        return output_path
+
+    async def _build_aliases_image(self) -> Path | None:
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageDraw, ImageFont
+        except Exception:
+            logger.error("缺少 Pillow 依赖，无法生成昵称列表图片")
+            return None
+
+        aliases = sorted(self.category_aliases.items(), key=lambda x: x[1].lower())
+        if not aliases:
+            return None
+
+        title_font = _load_collage_font(48, self.collage_font_path) or ImageFont.load_default()
+        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
+        alias_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
+        arrow_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
+        cat_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
+
+        card_w = 520
+        card_h = 60
+        gap = 12
+        padding_x = 42
+        padding_top = 170
+        padding_bottom = 44
+        rows = len(aliases)
+        width = padding_x * 2 + card_w
+        height = padding_top + rows * card_h + max(0, rows - 1) * gap + padding_bottom
+
+        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
+        drawer = ImageDraw.Draw(canvas)
+        _draw_cute_background(drawer, width, height, (255, 238, 246), (248, 236, 255))
+
+        drawer.text((padding_x, 42), "分类昵称映射", fill=(57, 64, 100), font=title_font)
+        drawer.text(
+            (padding_x, 106),
+            f"当前共 {len(aliases)} 个昵称",
+            fill=(95, 106, 143),
+            font=subtitle_font,
+        )
+
+        p2_path = Path(__file__).resolve().parent / "assets" / "p2.png"
+        _paste_corner_overlay(canvas, p2_path, (140, 140), margin=22)
+
+        outline_colors = [
+            (224, 183, 205, 238),
+            (197, 214, 241, 238),
+            (206, 228, 201, 238),
+        ]
+
+        for index, (alias, category) in enumerate(aliases):
+            y = padding_top + index * (card_h + gap)
+
+            row_card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+            row_drawer = ImageDraw.Draw(row_card)
+            row_drawer.rounded_rectangle(
+                (0, 0, card_w - 1, card_h - 1),
+                radius=18,
+                fill=(255, 255, 255, 182),
+                outline=outline_colors[index % len(outline_colors)],
+                width=2,
+            )
+
+            row_drawer.text((20, 14), alias, fill=(58, 64, 101), font=alias_font)
+
+            arrow_text = "→"
+            arrow_w, _ = _text_size(row_drawer, arrow_text, arrow_font)
+            alias_w, _ = _text_size(row_drawer, alias, alias_font)
+            arrow_x = 20 + alias_w + 24
+            row_drawer.text((arrow_x, 16), arrow_text, fill=(180, 160, 190), font=arrow_font)
+
+            row_drawer.text((arrow_x + arrow_w + 20, 16), category, fill=(95, 106, 143), font=cat_font)
+
+            canvas.alpha_composite(row_card, (padding_x, y))
+
+        output_dir = self.plugin_data_dir / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"alias_list_{int(time.time() * 1000)}.png"
         canvas.convert("RGB").save(output_path, format="PNG")
         return output_path
 
