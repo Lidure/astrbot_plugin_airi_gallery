@@ -32,6 +32,12 @@ IMAGE_SUFFIXES = {
     ".webp",
 }
 
+# 命令快捷方式映射：快捷命令 → 完整命令（均含 / 前缀）
+COMMAND_ALIASES = {
+    "/sz": "/上传",
+    "/看最近": "/看最近上传",
+}
+
 def _sanitize_component(value: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", value.strip())
     cleaned = cleaned.strip(". _")
@@ -300,6 +306,8 @@ class Main(Star):
                     await event.send(event.plain_result("没有权限执行此操作。"))
                 else:
                     await self._handle_delete(event, payload)
+            elif kind == "view_recent":
+                await self._handle_view_recent(event, int(payload))
             else:
                 return
         finally:
@@ -348,6 +356,14 @@ class Main(Star):
         if action and action[0] == "upload":
             await self._handle_upload(event, str(action[1]))
 
+    @filter.command("sz")
+    async def cmd_sz(self, event: AstrMessageEvent):
+        """`/上传` 的快捷命令 `/sz`。"""
+        text = self._normalize_command_text(event, "sz")
+        action = self._parse_action(text)
+        if action and action[0] == "upload":
+            await self._handle_upload(event, str(action[1]))
+
     @filter.command("删除")
     async def cmd_delete(self, event: AstrMessageEvent):
         """注册 `/删除` 命令显示在命令列表并删除指定编号图片。"""
@@ -358,6 +374,22 @@ class Main(Star):
                 await event.send(event.plain_result("没有权限执行此操作。"))
             else:
                 await self._handle_delete(event, action[1])
+
+    @filter.command("看最近上传")
+    async def cmd_view_recent(self, event: AstrMessageEvent):
+        """注册 `/看最近上传` 命令，以合并转发消息发送最近上传的图片。"""
+        text = self._normalize_command_text(event, "看最近上传")
+        action = self._parse_action(text)
+        if action and action[0] == "view_recent":
+            await self._handle_view_recent(event, int(action[1]))
+
+    @filter.command("看最近")
+    async def cmd_view_recent_short(self, event: AstrMessageEvent):
+        """`/看最近上传` 的快捷命令 `/看最近`。"""
+        text = self._normalize_command_text(event, "看最近")
+        action = self._parse_action(text)
+        if action and action[0] == "view_recent":
+            await self._handle_view_recent(event, int(action[1]))
 
     @filter.command("导入图库")
     async def cmd_import(self, event: AstrMessageEvent):
@@ -476,6 +508,16 @@ class Main(Star):
         return stripped.strip()
 
     @staticmethod
+    def _replace_command_aliases(text: str) -> str:
+        """将命令快捷方式替换为完整命令，如 /sz → /上传。"""
+        for alias, full_cmd in COMMAND_ALIASES.items():
+            if text == alias:
+                return full_cmd
+            if text.startswith(alias + " ") or text.startswith(alias + "\t"):
+                return full_cmd + text[len(alias):]
+        return text
+
+    @staticmethod
     def _parse_aliases(entries: list) -> dict[str, str]:
         aliases: dict[str, str] = {}
         for entry in entries:
@@ -501,8 +543,9 @@ class Main(Star):
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 "- /分类列表：以图片卡片形式查看当前已创建的分类",
                 "- /创建<分类>：创建一个新的分类文件夹",
-                "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类",
+                "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类（快捷：/sz<分类>）",
                 "- /删除123：删除编号为 123 的图片或表情包",
+                "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
                 "- /昵称列表：以图片形式查看当前分类昵称映射",
                 "",
@@ -523,7 +566,7 @@ class Main(Star):
         if not text:
             return f"/{command}"
         if text.startswith("/"):
-            return text
+            return self._replace_command_aliases(text)
 
         command_pattern = rf"^(?:/)?{re.escape(command)}(?:\s+|$)(.*)$"
         match = re.match(command_pattern, text)
@@ -615,6 +658,8 @@ class Main(Star):
 
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
+        # 快捷命令替换：/sz → /上传，/看最近 → /看最近上传 等
+        normalized = self._replace_command_aliases(normalized)
         # 仅“看图/浏览”类命令遵循 view_command_mode。
         # 管理类命令固定使用 '/' 前缀，避免和普通聊天文本冲突。
         if normalized in {"/airi_gallery", "/图库帮助"}:
@@ -643,6 +688,13 @@ class Main(Star):
             if numbers:
                 return "delete", numbers
             return None
+
+        # /看最近上传 或 /看最近上传 N
+        recent_match = re.match(r"^/看最近上传(?:\s+(\d+))?$", normalized)
+        if recent_match:
+            count = int(recent_match.group(1)) if recent_match.group(1) else 10
+            count = max(1, min(count, 50))
+            return "view_recent", count
 
         if normalized == "/分类列表":
             return "list_categories", None
@@ -726,6 +778,16 @@ class Main(Star):
             key=lambda item: item.relative_to(category_dir).as_posix().lower(),
         )
 
+    def _iter_recent_images(self, count: int = 10) -> list[Path]:
+        """按文件修改时间倒序返回最近上传的 N 张图片（排除 generated 目录）。"""
+        generated_dir = self.plugin_data_dir / "generated"
+        all_images = [
+            path for path in self.gallery_root.rglob("*")
+            if _is_image_file(path) and not path.is_relative_to(generated_dir)
+        ]
+        all_images.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return all_images[:count]
+
     def _count_category_images(self, category: str) -> int:
         return len(self._iter_category_images(category))
 
@@ -789,6 +851,15 @@ class Main(Star):
             await self._send_as_forward(event, sats)
         else:
             await self._send_as_single(event, sats)
+
+    async def _handle_view_recent(self, event: AstrMessageEvent, count: int):
+        """以合并转发消息发送最近上传的 N 张图片。"""
+        images = self._iter_recent_images(count)
+        if not images:
+            await event.send(event.plain_result("图库中还没有任何图片。"))
+            return
+
+        await self._send_as_forward(event, images)
 
     async def _send_as_forward(self, event: AstrMessageEvent, paths: list[Path]):
         try:
@@ -1297,8 +1368,9 @@ class Main(Star):
             ("/分类列表", "输出漂亮的分类总览图片"),
             ("/昵称列表", "以图片形式查看当前分类昵称映射"),
             ("/创建<分类>", "创建一个新的分类文件夹"),
-            ("/上传<分类>", "回复图片后上传到指定分类"),
+            ("/上传<分类>", "回复图片后上传到指定分类（快捷 /sz）"),
             ("/删除123", "删除指定编号的图片或表情包"),
+            ("/看最近上传", "以合并转发查看最近上传的图片，可追加 N（快捷 /看最近）"),
             ("/导入图库", "重新扫描并整理图库编号"),
         ]
 
