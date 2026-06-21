@@ -310,7 +310,9 @@ class Main(Star):
                 await self._handle_view_recent(event, int(payload))
             else:
                 return
-        finally:
+            event.stop_event()
+        except Exception as e:
+            logger.error(f"Gallery handler error: {e}")
             event.stop_event()
 
     @filter.command("airi_gallery")
