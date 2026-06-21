@@ -252,6 +252,11 @@ class Main(Star):
         if not text:
             return
 
+        # 去掉回复/@bot 时自动附加的前缀，确保正则 ^/命令 能正确匹配
+        text = self._strip_at_prefix(text)
+        if not text:
+            return
+
         action = self._parse_action(text)
         if not action:
             return
@@ -460,6 +465,17 @@ class Main(Star):
         return self.category_aliases.get(name, name)
 
     @staticmethod
+    def _strip_at_prefix(text: str) -> str:
+        """去掉消息文本开头的 @提及 前缀。
+
+        当用户回复消息或在群聊中 @bot 后发送命令时，
+        event.message_str 可能包含 @昵称(QQ号) 前缀，
+        导致以 ^/ 开头的正则无法匹配。这里统一剥离。
+        """
+        stripped = re.sub(r"^@\S+(\(\d+\))?\s*", "", text)
+        return stripped.strip()
+
+    @staticmethod
     def _parse_aliases(entries: list) -> dict[str, str]:
         aliases: dict[str, str] = {}
         for entry in entries:
@@ -502,6 +518,8 @@ class Main(Star):
 
     def _normalize_command_text(self, event: AstrMessageEvent, command: str) -> str:
         text = (event.message_str or "").strip()
+        # 去掉回复/@bot 时自动附加的前缀
+        text = self._strip_at_prefix(text) if text else ""
         if not text:
             return f"/{command}"
         if text.startswith("/"):
@@ -865,6 +883,10 @@ class Main(Star):
 
         index = self._next_index()
         suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
+        # 动画图片（如 GIF）统一以 .jpg 扩展名存储，保留原始动画数据，
+        # 发送时大部分平台仍能正确识别并播放动画。
+        if suffix == ".gif":
+            suffix = ".jpg"
         target_path = category_dir / f"{index}{suffix}"
 
         while target_path.exists():
