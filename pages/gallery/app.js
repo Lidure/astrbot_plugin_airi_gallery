@@ -52,7 +52,7 @@ function renderTabs() {
 
 async function loadCnt(cat) {
   try {
-    const d = await bridge.apiGet("category_images", { category: cat });
+    const d = await bridge.apiGet("category_images?category=" + encodeURIComponent(cat));
     const el = document.getElementById("n-" + cat);
     if (el) el.textContent = d.images ? d.images.length + "张" : "";
   } catch (e) {}
@@ -73,7 +73,7 @@ function renderOptions() {
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
   try {
-    const d = await bridge.apiGet("category_images", { category: currentCat });
+    const d = await bridge.apiGet("category_images?category=" + encodeURIComponent(currentCat));
     const imgs = d.images || [];
     if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
     grid.innerHTML = "";
@@ -110,7 +110,8 @@ async function loadImgs() {
 
 async function loadBlob(cat, name) {
   try {
-    const d = await bridge.apiGet("category_image", { category: cat, name: name });
+    const ep = "category_image?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(name);
+    const d = await bridge.apiGet(ep);
     if (d && d.data) {
       const bin = atob(d.data);
       const arr = new Uint8Array(bin.length);
