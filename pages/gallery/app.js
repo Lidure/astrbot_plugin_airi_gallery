@@ -113,15 +113,7 @@ async function loadBlob(apiUrl) {
   try {
     const resp = await bridge.apiGet(apiUrl);
     if (resp instanceof Blob) return URL.createObjectURL(resp);
-    if (resp && typeof resp === "object" && resp.arrayBuffer) return URL.createObjectURL(new Blob([resp]));
-  } catch (e) {}
-  try {
-    const url = "/api/plug/astrbot_plugin_airi_gallery/" + apiUrl;
-    const token = document.cookie.match(/astrbot_jwt=([^;]+)/);
-    const headers = {};
-    if (token) headers["Authorization"] = "Bearer " + token[1];
-    const resp = await fetch(url, { headers });
-    if (resp.ok) return URL.createObjectURL(await resp.blob());
+    if (resp instanceof ArrayBuffer) return URL.createObjectURL(new Blob([resp]));
   } catch (e) {}
   return "";
 }
@@ -166,8 +158,17 @@ upBtn.onclick = async () => {
     const fd = new FormData();
     fd.append("category", cat);
     pendingFiles.forEach(f => fd.append("images", f));
-    const r = await fetch("/api/plug/astrbot_plugin_airi_gallery/upload", { method: "POST", body: fd });
-    const d = await r.json();
+    let d;
+    if (bridge.apiUpload) {
+      d = await bridge.apiUpload("upload", fd);
+    } else {
+      const r = await fetch("/api/plug/astrbot_plugin_airi_gallery/upload", {
+        method: "POST",
+        body: fd,
+        credentials: "include"
+      });
+      d = await r.json();
+    }
     if (d.ok) {
       showMsg(umsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];
