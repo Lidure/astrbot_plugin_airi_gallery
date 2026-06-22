@@ -698,13 +698,6 @@ class Main(Star):
             count = max(1, min(count, 50))
             return "view_recent", count
 
-        # 看最近（无 / 前缀，兼容直接发送）
-        recent_short_match = re.match(r"^看最近(?:\s+(\d+))?$", normalized)
-        if recent_short_match:
-            count = int(recent_short_match.group(1)) if recent_short_match.group(1) else 10
-            count = max(1, min(count, 50))
-            return "view_recent", count
-
         if normalized == "/分类列表":
             return "list_categories", None
 
@@ -864,11 +857,13 @@ class Main(Star):
     async def _handle_view_recent(self, event: AstrMessageEvent, count: int):
         """发送最近上传的 N 张图片。"""
         images = self._iter_recent_images(count)
+        logger.info(f"[看最近] gallery_root={self.gallery_root}, exists={self.gallery_root.exists()}, count={count}, found={len(images)}, paths={[str(p) for p in images[:3]]}")
         if not images:
             await event.send(event.plain_result("图库中还没有任何图片。"))
             return
 
         for path in images:
+            logger.info(f"[看最近] sending: {path}, exists={path.exists()}")
             try:
                 await event.send(event.image_result(str(path)))
             except Exception as exc:
