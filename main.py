@@ -247,30 +247,6 @@ class Main(Star):
             ["GET"],
             "Get category list",
         )
-        context.register_web_api(
-            f"/{PLUGIN_NAME}/category_images",
-            self._api_category_images,
-            ["GET"],
-            "Get images in category",
-        )
-        context.register_web_api(
-            f"/{PLUGIN_NAME}/upload",
-            self._api_upload_images,
-            ["POST"],
-            "Upload images to category",
-        )
-        context.register_web_api(
-            f"/{PLUGIN_NAME}/category_image",
-            self._api_category_image,
-            ["GET"],
-            "Serve single image",
-        )
-        context.register_web_api(
-            f"/{PLUGIN_NAME}/delete_image",
-            self._api_delete_image,
-            ["POST"],
-            "Delete image from category",
-        )
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
