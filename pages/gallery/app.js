@@ -52,7 +52,7 @@ function renderTabs() {
 
 async function loadCnt(cat) {
   try {
-    const d = await bridge.apiGet("category_images?category=" + encodeURIComponent(cat));
+    const d = await bridge.apiGet("category_images", { category: cat });
     const el = document.getElementById("n-" + cat);
     if (el) el.textContent = d.images ? d.images.length + "张" : "";
   } catch (e) {}
@@ -73,7 +73,7 @@ function renderOptions() {
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
   try {
-    const d = await bridge.apiGet("category_images?category=" + encodeURIComponent(currentCat));
+    const d = await bridge.apiGet("category_images", { category: currentCat });
     const imgs = d.images || [];
     if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
     grid.innerHTML = "";
@@ -81,10 +81,9 @@ async function loadImgs() {
       const div = document.createElement("div");
       div.className = "gi";
       const idx = name.match(/^(\d+)/);
-      const apiUrl = "category_image?category=" + encodeURIComponent(currentCat) + "&name=" + encodeURIComponent(name);
       const img = document.createElement("img");
       img.loading = "lazy";
-      img.src = await loadBlob(apiUrl);
+      img.src = await loadBlob(currentCat, name);
       const span = document.createElement("span");
       span.className = "idx";
       span.textContent = "#" + (idx ? idx[1] : "?");
@@ -103,15 +102,15 @@ async function loadImgs() {
       div.appendChild(img);
       div.appendChild(span);
       div.appendChild(del);
-      div.onclick = () => { mimg.src = "/api/plug/astrbot_plugin_airi_gallery/" + apiUrl; mask.classList.add("on"); };
+      div.onclick = async () => { mimg.src = await loadBlob(currentCat, name); mask.classList.add("on"); };
       grid.appendChild(div);
     }
   } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
 
-async function loadBlob(apiUrl) {
+async function loadBlob(cat, name) {
   try {
-    const d = await bridge.apiGet(apiUrl);
+    const d = await bridge.apiGet("category_image", { category: cat, name: name });
     if (d && d.data) {
       const bin = atob(d.data);
       const arr = new Uint8Array(bin.length);
