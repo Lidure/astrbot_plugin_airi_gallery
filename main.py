@@ -809,16 +809,18 @@ class Main(Star):
                 images.extend(self._extract_image_components(list(component.chain)))
         return images
 
-    async def _get_reply_image(self, event: AstrMessageEvent) -> tuple[Path, bytes] | None:
+    async def _get_reply_images(self, event: AstrMessageEvent) -> list[tuple[Path, bytes]]:
+        """提取回复消息中的所有图片，支持多图回复和转发消息。"""
+        results: list[tuple[Path, bytes]] = []
         components = list(event.get_messages())
         for image_component in self._extract_image_components(components):
             try:
                 image_path = Path(await image_component.convert_to_file_path())
                 if image_path.exists():
-                    return image_path, image_path.read_bytes()
+                    results.append((image_path, image_path.read_bytes()))
             except Exception as exc:
                 logger.warning(f"读取引用图片失败: {exc}")
-        return None
+        return results
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):
         image_path = self._find_by_index(index)
@@ -961,29 +963,28 @@ class Main(Star):
             )
             return
 
-        image_info = await self._get_reply_image(event)
-        if not image_info:
-            await event.send(event.plain_result("请先回复一张图片或表情包，再发送 /上传<分类>。"))
+        all_images = await self._get_reply_images(event)
+        if not all_images:
+            await event.send(event.plain_result("请先回复一张或多张图片/表情包，再发送 /上传<分类>。"))
             return
 
-        source_path, image_bytes = image_info
-
-        index = self._next_index()
-        suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
-        # 动画图片（如 GIF）统一以 .jpg 扩展名存储，保留原始动画数据，
-        # 发送时大部分平台仍能正确识别并播放动画。
-        if suffix == ".gif":
-            suffix = ".jpg"
-        target_path = category_dir / f"{index}{suffix}"
-
-        while target_path.exists():
-            index += 1
+        uploaded: list[str] = []
+        for source_path, image_bytes in all_images:
+            index = self._next_index()
+            suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
+            if suffix == ".gif":
+                suffix = ".jpg"
             target_path = category_dir / f"{index}{suffix}"
+            while target_path.exists():
+                index += 1
+                target_path = category_dir / f"{index}{suffix}"
+            target_path.write_bytes(image_bytes)
+            uploaded.append(target_path.name)
 
-        target_path.write_bytes(image_bytes)
-        await event.send(
-            event.plain_result(f"已上传到【{category}】：{target_path.name}")
-        )
+        if len(uploaded) == 1:
+            await event.send(event.plain_result(f"已上传到【{category}】：{uploaded[0]}"))
+        else:
+            await event.send(event.plain_result(f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
