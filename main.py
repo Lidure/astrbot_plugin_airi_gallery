@@ -855,13 +855,16 @@ class Main(Star):
             await self._send_as_single(event, sats)
 
     async def _handle_view_recent(self, event: AstrMessageEvent, count: int):
-        """以合并转发消息发送最近上传的 N 张图片。"""
+        """发送最近上传的 N 张图片。"""
         images = self._iter_recent_images(count)
         if not images:
             await event.send(event.plain_result("图库中还没有任何图片。"))
             return
 
-        await self._send_as_forward(event, images)
+        if self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, images)
+        else:
+            await self._send_as_single(event, images)
 
     async def _send_as_forward(self, event: AstrMessageEvent, paths: list[Path]):
         try:
