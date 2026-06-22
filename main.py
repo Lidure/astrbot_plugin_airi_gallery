@@ -693,10 +693,17 @@ class Main(Star):
                 return "delete", numbers
             return None
 
-        # /看最近上传 或 /看最近上传 N
-        recent_match = re.match(r"^/看最近上传(?:\s+(\d+))?$", normalized)
+        # /看最近上传 或 /看最近上传 N（兼容无前缀）
+        recent_match = re.match(r"^(?:/)?看最近上传(?:\s+(\d+))?$", normalized)
         if recent_match:
             count = int(recent_match.group(1)) if recent_match.group(1) else 10
+            count = max(1, min(count, 50))
+            return "view_recent", count
+
+        # 看最近（快捷命令，兼容无前缀）
+        recent_short_match = re.match(r"^(?:/)?看最近(?:\s+(\d+))?$", normalized)
+        if recent_short_match:
+            count = int(recent_short_match.group(1)) if recent_short_match.group(1) else 10
             count = max(1, min(count, 50))
             return "view_recent", count
 
