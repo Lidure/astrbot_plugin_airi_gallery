@@ -148,6 +148,15 @@ function renderPreview() {
   });
 }
 
+async function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 upBtn.onclick = async () => {
   const cat = upInput.value.trim() || upSel.value;
   if (!cat) { showMsg(umsg, "请选择或输入分类", false); return; }
@@ -155,20 +164,11 @@ upBtn.onclick = async () => {
   upBtn.disabled = true;
   upBtn.textContent = "上传中...";
   try {
-    const fd = new FormData();
-    fd.append("category", cat);
-    pendingFiles.forEach(f => fd.append("images", f));
-    let d;
-    if (bridge.apiUpload) {
-      d = await bridge.apiUpload("upload", fd);
-    } else {
-      const r = await fetch("/api/plug/astrbot_plugin_airi_gallery/upload", {
-        method: "POST",
-        body: fd,
-        credentials: "include"
-      });
-      d = await r.json();
+    const images = [];
+    for (const f of pendingFiles) {
+      images.push({ name: f.name, data: await fileToBase64(f) });
     }
+    const d = await bridge.apiPost("upload", { category: cat, images });
     if (d.ok) {
       showMsg(umsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];

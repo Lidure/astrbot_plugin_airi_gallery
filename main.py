@@ -506,21 +506,25 @@ class Main(Star):
 
     async def _api_upload_images(self):
         from quart import request, jsonify
+        import base64 as b64mod
         try:
-            category = request.form.get("category", "").strip()
+            data = await request.get_json()
+            category = data.get("category", "").strip()
+            images = data.get("images", [])
             if not category:
                 return jsonify({"ok": False, "error": "请选择分类"}), 400
+            if not images:
+                return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
             category = _sanitize_component(category)
             category_dir = self._category_dir(category)
             category_dir.mkdir(parents=True, exist_ok=True)
-            files = request.files.getlist("images")
-            if not files:
-                return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
             uploaded: list[str] = []
-            for f in files:
-                if not f.filename:
+            for img in images:
+                name = img.get("name", "")
+                data_b64 = img.get("data", "")
+                if not name or not data_b64:
                     continue
-                ext = Path(f.filename).suffix.lower()
+                ext = Path(name).suffix.lower()
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
                 index = self._next_index()
@@ -528,8 +532,7 @@ class Main(Star):
                 while target.exists():
                     index += 1
                     target = category_dir / f"{index}{ext}"
-                data = await f.read()
-                target.write_bytes(data)
+                target.write_bytes(b64mod.b64decode(data_b64))
                 uploaded.append(target.name)
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
         except Exception as exc:
