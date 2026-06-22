@@ -540,17 +540,19 @@ class Main(Star):
             return jsonify({"ok": False, "error": str(exc)}), 500
 
     async def _api_category_image(self):
-        from quart import request, Response
+        from quart import request, jsonify
+        import base64 as b64mod
         category = request.args.get("category", "").strip()
         name = request.args.get("name", "").strip()
         if not category or not name:
-            return Response("missing params", status=400)
+            return jsonify({"error": "missing params"}), 400
         img_path = self._category_dir(category) / name
         if not img_path.exists() or not _is_image_file(img_path):
-            return Response("not found", status=404)
+            return jsonify({"error": "not found"}), 404
         suffix = img_path.suffix.lower()
         ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
-        return Response(img_path.read_bytes(), content_type=ct)
+        data = b64mod.b64encode(img_path.read_bytes()).decode()
+        return jsonify({"data": data, "content_type": ct})
 
     async def _api_delete_image(self):
         from quart import request, jsonify

@@ -111,9 +111,13 @@ async function loadImgs() {
 
 async function loadBlob(apiUrl) {
   try {
-    const resp = await bridge.apiGet(apiUrl);
-    if (resp instanceof Blob) return URL.createObjectURL(resp);
-    if (resp instanceof ArrayBuffer) return URL.createObjectURL(new Blob([resp]));
+    const d = await bridge.apiGet(apiUrl);
+    if (d && d.data) {
+      const bin = atob(d.data);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([arr], { type: d.content_type || "image/png" }));
+    }
   } catch (e) {}
   return "";
 }
