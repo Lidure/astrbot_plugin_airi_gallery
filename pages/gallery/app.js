@@ -111,9 +111,16 @@ async function loadImgs() {
 
 async function loadBlob(apiUrl) {
   try {
-    const resp = await fetch("/api/plug/astrbot_plugin_airi_gallery/" + apiUrl, {
-      headers: { "Authorization": "Bearer " + (ctx.token || ctx.jwt || "") }
-    });
+    const resp = await bridge.apiGet(apiUrl);
+    if (resp instanceof Blob) return URL.createObjectURL(resp);
+    if (resp && typeof resp === "object" && resp.arrayBuffer) return URL.createObjectURL(new Blob([resp]));
+  } catch (e) {}
+  try {
+    const url = "/api/plug/astrbot_plugin_airi_gallery/" + apiUrl;
+    const token = document.cookie.match(/astrbot_jwt=([^;]+)/);
+    const headers = {};
+    if (token) headers["Authorization"] = "Bearer " + token[1];
+    const resp = await fetch(url, { headers });
     if (resp.ok) return URL.createObjectURL(await resp.blob());
   } catch (e) {}
   return "";

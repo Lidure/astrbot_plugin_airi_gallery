@@ -506,31 +506,35 @@ class Main(Star):
 
     async def _api_upload_images(self):
         from quart import request, jsonify
-        category = request.form.get("category", "").strip()
-        if not category:
-            return jsonify({"ok": False, "error": "请选择分类"}), 400
-        category = _sanitize_component(category)
-        category_dir = self._category_dir(category)
-        category_dir.mkdir(parents=True, exist_ok=True)
-        files = await request.files.getlist("images")
-        if not files:
-            return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
-        uploaded: list[str] = []
-        for f in files:
-            if not f.filename:
-                continue
-            ext = Path(f.filename).suffix.lower()
-            if ext not in IMAGE_SUFFIXES:
-                ext = ".png"
-            index = self._next_index()
-            target = category_dir / f"{index}{ext}"
-            while target.exists():
-                index += 1
+        try:
+            category = request.form.get("category", "").strip()
+            if not category:
+                return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            category_dir = self._category_dir(category)
+            category_dir.mkdir(parents=True, exist_ok=True)
+            files = request.files.getlist("images")
+            if not files:
+                return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            uploaded: list[str] = []
+            for f in files:
+                if not f.filename:
+                    continue
+                ext = Path(f.filename).suffix.lower()
+                if ext not in IMAGE_SUFFIXES:
+                    ext = ".png"
+                index = self._next_index()
                 target = category_dir / f"{index}{ext}"
-            data = await f.read()
-            target.write_bytes(data)
-            uploaded.append(target.name)
-        return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+                while target.exists():
+                    index += 1
+                    target = category_dir / f"{index}{ext}"
+                data = await f.read()
+                target.write_bytes(data)
+                uploaded.append(target.name)
+            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+        except Exception as exc:
+            logger.error(f"上传API错误: {exc}")
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     async def _api_category_image(self):
         from quart import request, Response
