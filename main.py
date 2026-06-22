@@ -861,10 +861,11 @@ class Main(Star):
             await event.send(event.plain_result("图库中还没有任何图片。"))
             return
 
-        if self.view_multiple_mode == "forward":
-            await self._send_as_forward(event, images)
-        else:
-            await self._send_as_single(event, images)
+        for path in images:
+            try:
+                await event.send(event.image_result(str(path)))
+            except Exception as exc:
+                logger.warning(f"发送图片失败 {path}: {exc}")
 
     async def _send_as_forward(self, event: AstrMessageEvent, paths: list[Path]):
         try:
