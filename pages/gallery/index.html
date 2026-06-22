@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Airi Gallery</title>
+<style>
+:root{--bg:#fef7f9;--card:#fff;--text:#3d2c3e;--sec:#9b8a9d;--border:#f3e4ee;--pink:#f472b6;--pink-l:#fdf2f8;--purple:#a78bfa;--green:#34d399;--green-l:#ecfdf5;--red:#fb7185;--red-l:#fff1f2;--input:#fdf8fa;--shadow:0 2px 12px rgba(244,114,182,.08);--r:16px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:24px 16px}
+.wrap{max-width:800px;margin:0 auto}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.hdr-icon{font-size:32px;animation:float 3s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+h1{font-size:22px;font-weight:700;background:linear-gradient(135deg,var(--pink),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.card{background:var(--card);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.card-title{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:6px 14px;border-radius:20px;border:1.5px solid var(--border);background:var(--card);font-size:13px;cursor:pointer;transition:all .2s}
+.tab:hover{border-color:var(--pink)}
+.tab.active{background:linear-gradient(135deg,var(--pink),var(--purple));color:#fff;border-color:transparent}
+.tab .cnt{font-size:11px;opacity:.7;margin-left:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}
+.grid-item{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;border:2px solid var(--border);background:var(--input);cursor:pointer;transition:all .2s}
+.grid-item:hover{border-color:var(--pink);transform:scale(1.03)}
+.grid-item img{width:100%;height:100%;object-fit:cover}
+.grid-item .idx{position:absolute;bottom:2px;left:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:6px}
+.grid-item .del{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:11px;cursor:pointer;display:none;align-items:center;justify-content:center}
+.grid-item:hover .del{display:flex}
+.upload-zone{border:2px dashed var(--border);border-radius:12px;padding:28px;text-align:center;cursor:pointer;transition:all .25s;background:var(--input)}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--pink);background:var(--pink-l)}
+.upload-zone .icon{font-size:28px;margin-bottom:6px}
+.upload-zone .hint{font-size:12px;color:var(--sec)}
+.up-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:6px;margin-top:10px}
+.up-item{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1.5px solid var(--border)}
+.up-item img{width:100%;height:100%;object-fit:cover}
+.up-item .rm{position:absolute;top:1px;right:1px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+select,input[type="text"]{padding:7px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--input);color:var(--text);font-size:13px;outline:none}
+select:focus,input:focus{border-color:var(--pink)}
+.btn{padding:7px 16px;border-radius:10px;border:none;font-size:13px;font-weight:500;cursor:pointer;transition:all .2s}
+.btn-p{background:linear-gradient(135deg,var(--pink),var(--purple));color:#fff}
+.btn-p:disabled{opacity:.4;cursor:not-allowed}
+.btn-o{background:var(--card);color:var(--text);border:1.5px solid var(--border)}
+.btn-o:hover{border-color:var(--pink)}
+.msg{padding:10px 14px;border-radius:10px;margin-top:10px;font-size:12px;font-weight:500}
+.msg-ok{background:var(--green-l);color:#047857;border:1.5px solid var(--green)}
+.msg-err{background:var(--red-l);color:#be123c;border:1.5px solid var(--red)}
+.empty{text-align:center;color:var(--sec);padding:24px;font-size:13px}
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-mask.show{display:flex}
+.modal{background:var(--card);border-radius:var(--r);padding:20px;max-width:90vw;max-height:90vh;position:relative}
+.modal img{max-width:100%;max-height:80vh;border-radius:8px}
+.modal .close{position:absolute;top:8px;right:12px;font-size:20px;cursor:pointer;color:var(--sec)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="hdr-icon">🌸</div>
+    <h1>Airi Gallery</h1>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📤 上传图片</div>
+    <div class="actions">
+      <select id="up-cat-sel"><option value="">选择分类...</option></select>
+      <input type="text" id="up-cat-input" placeholder="或手动输入" style="width:120px" />
+    </div>
+    <div class="upload-zone" id="drop-zone" style="margin-top:10px">
+      <div class="icon">📁</div>
+      <p>点击或拖拽图片到这里</p>
+      <p class="hint">支持多选</p>
+      <input type="file" id="file-input" multiple accept="image/*" style="display:none" />
+    </div>
+    <div id="up-preview" class="up-grid" style="display:none"></div>
+    <div class="actions" id="up-actions" style="display:none">
+      <button class="btn btn-p" id="up-btn">上传 (<span id="up-count">0</span>) 张</button>
+    </div>
+    <div id="up-msg" class="msg" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🗂️ 图库分类</div>
+    <div class="tabs" id="cat-tabs"></div>
+    <div id="img-grid" class="grid"></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="modal-mask">
+  <div class="modal">
+    <span class="close" id="modal-close">&times;</span>
+    <img id="modal-img" src="" />
+  </div>
+</div>
+
+<script>
+(async function(){
+  const B=window.AstrBotPluginPage;
+  let apiGet,apiPost;
+  if(B){try{await B.ready();}catch(e){}}
+  if(B&&B.apiGet){apiGet=(e)=>B.apiGet(e);apiPost=(e,b)=>B.apiPost(e,b)}
+  else{const base="/api/plug/astrbot_plugin_airi_gallery/";apiGet=async(e)=>(await fetch(base+e)).json();apiPost=async(e,b)=>(await fetch(base+e,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)})).json()}
+
+  let categories=[],currentCat="",pendingFiles=[];
+  const $=id=>document.getElementById(id);
+  const catTabs=$("cat-tabs"),imgGrid=$("img-grid"),upCatSel=$("up-cat-sel"),upCatInput=$("up-cat-input"),dropZone=$("drop-zone"),fileInput=$("file-input"),upPreview=$("up-preview"),upActions=$("up-actions"),upBtn=$("up-btn"),upCount=$("up-count"),upMsg=$("up-msg"),modalMask=$("modal-mask"),modalImg=$("modal-img"),modalClose=$("modal-close");
+
+  function showMsg(el,text,ok=true){el.textContent=(ok?"🌸 ":"💦 ")+text;el.className="msg "+(ok?"msg-ok":"msg-err");el.style.display="block";clearTimeout(showMsg._t);showMsg._t=setTimeout(()=>{el.style.display="none"},3500)}
+
+  async function loadCats(){
+    try{const d=await apiGet("categories");categories=d.categories||[]}catch(e){categories=[]}
+    renderTabs();renderCatOptions();
+  }
+
+  function renderTabs(){
+    catTabs.innerHTML="";
+    if(!categories.length){catTabs.innerHTML='<span style="color:var(--sec);font-size:13px">暂无分类</span>';return}
+    categories.forEach(c=>{
+      const t=document.createElement("div");t.className="tab"+(c===currentCat?" active":"");
+      t.innerHTML=c+' <span class="cnt" id="cnt-'+c+'"></span>';
+      t.onclick=()=>{currentCat=c;renderTabs();loadImages()};
+      catTabs.appendChild(t);
+      loadCatCount(c);
+    });
+  }
+
+  async function loadCatCount(cat){
+    try{const d=await apiGet("category_images?category="+encodeURIComponent(cat));const el=document.getElementById("cnt-"+cat);if(el)el.textContent=d.images?d.images.length+"张":""}catch(e){}
+  }
+
+  function renderCatOptions(){
+    const ph=upCatSel.querySelector("option[value='']");
+    upCatSel.innerHTML="";upCatSel.appendChild(ph||Object.assign(document.createElement("option"),{value:"",textContent:"选择分类..."}));
+    categories.forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c;upCatSel.appendChild(o)});
+  }
+
+  async function loadImages(){
+    if(!currentCat){imgGrid.innerHTML='<div class="empty">选择一个分类查看图片</div>';return}
+    try{
+      const d=await apiGet("category_images?category="+encodeURIComponent(currentCat));
+      const imgs=d.images||[];
+      if(!imgs.length){imgGrid.innerHTML='<div class="empty">该分类暂无图片</div>';return}
+      imgGrid.innerHTML="";
+      imgs.forEach(name=>{
+        const div=document.createElement("div");div.className="grid-item";
+        const idx=Path_parse(name);
+        const imgUrl="/api/plug/astrbot_plugin_airi_gallery/category_image?category="+encodeURIComponent(currentCat)+"&name="+encodeURIComponent(name);
+        div.innerHTML='<img src="'+imgUrl+'" loading="lazy" /><span class="idx">#'+idx+'</span><button class="del" data-name="'+name+'">&times;</button>';
+        div.querySelector("img").onclick=()=>{modalImg.src=imgUrl;modalMask.classList.add("show")};
+        div.querySelector(".del").onclick=async(e)=>{
+          e.stopPropagation();
+          if(!confirm("删除 "+name+" ?"))return;
+          try{await apiPost("delete_image",{category:currentCat,name:name});loadImages();loadCatCount(currentCat)}catch(e){showMsg(upMsg,"删除失败",false)}
+        };
+        imgGrid.appendChild(div);
+      });
+    }catch(e){imgGrid.innerHTML='<div class="empty">加载失败</div>'}
+  }
+
+  function Path_parse(name){const m=name.match(/^(\d+)/);return m?m[1]:"?"}
+
+  dropZone.onclick=()=>fileInput.click();
+  dropZone.ondragover=e=>{e.preventDefault();dropZone.classList.add("dragover")};
+  dropZone.ondragleave=()=>dropZone.classList.remove("dragover");
+  dropZone.ondrop=e=>{e.preventDefault();dropZone.classList.remove("dragover");addFiles(e.dataTransfer.files)};
+  fileInput.onchange=()=>{addFiles(fileInput.files);fileInput.value=""};
+
+  function addFiles(fl){for(const f of fl){if(!f.type.startsWith("image/"))continue;if(pendingFiles.some(s=>s.name===f.name&&s.size===f.size))continue;pendingFiles.push(f)}renderUpPreview()}
+
+  function renderUpPreview(){
+    upPreview.innerHTML="";
+    if(!pendingFiles.length){upPreview.style.display="none";upActions.style.display="none";return}
+    upPreview.style.display="grid";upActions.style.display="flex";upCount.textContent=pendingFiles.length;
+    pendingFiles.forEach((f,i)=>{
+      const d=document.createElement("div");d.className="up-item";
+      d.innerHTML='<img src="'+URL.createObjectURL(f)+'" /><button class="rm">&times;</button>';
+      d.querySelector(".rm").onclick=()=>{pendingFiles.splice(i,1);renderUpPreview()};
+      upPreview.appendChild(d);
+    });
+  }
+
+  upBtn.onclick=async()=>{
+    const cat=upCatInput.value.trim()||upCatSel.value;
+    if(!cat){showMsg(upMsg,"请选择或输入分类",false);return}
+    if(!pendingFiles.length){showMsg(upMsg,"请选择图片",false);return}
+    upBtn.disabled=true;upBtn.textContent="上传中...";
+    try{
+      const fd=new FormData();fd.append("category",cat);pendingFiles.forEach(f=>fd.append("images",f));
+      const r=await fetch("/api/plug/astrbot_plugin_airi_gallery/upload",{method:"POST",body:fd});
+      const d=await r.json();
+      if(d.ok){showMsg(upMsg,"成功上传 "+d.count+" 张到【"+cat+"】");pendingFiles=[];renderUpPreview();loadCats();if(currentCat===cat)loadImages()}
+      else showMsg(upMsg,d.error||"上传失败",false)
+    }catch(e){showMsg(upMsg,"上传失败: "+e.message,false)}
+    finally{upBtn.disabled=false;upBtn.textContent="上传 ("+pendingFiles.length+") 张"}
+  };
+
+  modalClose.onclick=()=>modalMask.classList.remove("show");
+  modalMask.onclick=e=>{if(e.target===modalMask)modalMask.classList.remove("show")};
+
+  await loadCats();
+  if(categories.length){currentCat=categories[0];renderTabs();loadImages()}
+})();
+</script>
+</body>
+</html>

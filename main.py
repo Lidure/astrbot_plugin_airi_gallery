@@ -247,6 +247,30 @@ class Main(Star):
             ["GET"],
             "Get category list",
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/category_images",
+            self._api_category_images,
+            ["GET"],
+            "Get images in category",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/upload",
+            self._api_upload_images,
+            ["POST"],
+            "Upload images to category",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/category_image",
+            self._api_category_image,
+            ["GET"],
+            "Serve single image",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/delete_image",
+            self._api_delete_image,
+            ["POST"],
+            "Delete image from category",
+        )
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
@@ -465,6 +489,74 @@ class Main(Star):
                 key=lambda s: s.lower(),
             )
         return jsonify({"categories": cats})
+
+    async def _api_category_images(self):
+        from quart import request, jsonify
+        category = request.args.get("category", "").strip()
+        if not category:
+            return jsonify({"error": "缺少 category 参数"}), 400
+        category_dir = self._category_dir(category)
+        if not category_dir.exists():
+            return jsonify({"images": []})
+        images = sorted(
+            [p.name for p in category_dir.iterdir() if _is_image_file(p)],
+            key=lambda s: int(Path(s).stem) if Path(s).stem.isdigit() else 0,
+        )
+        return jsonify({"images": images, "category": category})
+
+    async def _api_upload_images(self):
+        from quart import request, jsonify
+        category = request.form.get("category", "").strip()
+        if not category:
+            return jsonify({"ok": False, "error": "请选择分类"}), 400
+        category = _sanitize_component(category)
+        category_dir = self._category_dir(category)
+        category_dir.mkdir(parents=True, exist_ok=True)
+        files = await request.files.getlist("images")
+        if not files:
+            return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+        uploaded: list[str] = []
+        for f in files:
+            if not f.filename:
+                continue
+            ext = Path(f.filename).suffix.lower()
+            if ext not in IMAGE_SUFFIXES:
+                ext = ".png"
+            index = self._next_index()
+            target = category_dir / f"{index}{ext}"
+            while target.exists():
+                index += 1
+                target = category_dir / f"{index}{ext}"
+            data = await f.read()
+            target.write_bytes(data)
+            uploaded.append(target.name)
+        return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+
+    async def _api_category_image(self):
+        from quart import request, Response
+        category = request.args.get("category", "").strip()
+        name = request.args.get("name", "").strip()
+        if not category or not name:
+            return Response("missing params", status=400)
+        img_path = self._category_dir(category) / name
+        if not img_path.exists() or not _is_image_file(img_path):
+            return Response("not found", status=404)
+        suffix = img_path.suffix.lower()
+        ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
+        return Response(img_path.read_bytes(), content_type=ct)
+
+    async def _api_delete_image(self):
+        from quart import request, jsonify
+        data = await request.get_json()
+        category = data.get("category", "").strip()
+        name = data.get("name", "").strip()
+        if not category or not name:
+            return jsonify({"ok": False, "error": "参数不完整"})
+        img_path = self._category_dir(category) / name
+        if not img_path.exists():
+            return jsonify({"ok": False, "error": "文件不存在"})
+        img_path.unlink()
+        return jsonify({"ok": True})
 
     def _resolve_view_command_mode(self) -> str:
         mode = str(self.config.get("view_command_mode", MODE_NO_PREFIX)).strip().lower()
