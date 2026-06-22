@@ -108,9 +108,20 @@ async function loadImgs() {
   } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
 
-async function loadBlob(cat, name) {
+function getToken() {
   try {
-    const d = await bridge.apiGet("category_image", { category: cat, name: name });
+    const u = new URL(window.location.href);
+    return u.searchParams.get("asset_token") || "";
+  } catch (e) { return ""; }
+}
+
+async function loadBlob(cat, name) {
+  const token = getToken();
+  const url = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(name) + "&asset_token=" + encodeURIComponent(token);
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return "";
+    const d = await resp.json();
     if (d && d.data) {
       const bin = atob(d.data);
       const arr = new Uint8Array(bin.length);
