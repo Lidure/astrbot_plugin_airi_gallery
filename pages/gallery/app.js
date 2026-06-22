@@ -75,6 +75,15 @@ function renderCatOptions() {
   });
 }
 
+async function fetchImageBlob(apiUrl) {
+  try {
+    const resp = await bridge.apiGet(apiUrl);
+    if (resp instanceof Blob) return URL.createObjectURL(resp);
+    if (resp && resp ArrayBuffer) return URL.createObjectURL(new Blob([resp]));
+  } catch (e) {}
+  return "";
+}
+
 async function loadImages() {
   if (!currentCat) {
     imgGrid.innerHTML = '<div class="empty">选择一个分类查看图片</div>';
@@ -88,14 +97,21 @@ async function loadImages() {
       return;
     }
     imgGrid.innerHTML = "";
-    imgs.forEach(name => {
+    for (const name of imgs) {
       const div = document.createElement("div");
       div.className = "grid-item";
       const idx = name.match(/^(\d+)/);
-      const imgUrl = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(currentCat) + "&name=" + encodeURIComponent(name);
-      div.innerHTML = '<img src="' + imgUrl + '" loading="lazy" /><span class="idx">#' + (idx ? idx[1] : "?") + '</span><button class="del" data-name="' + name + '">&times;</button>';
-      div.querySelector("img").onclick = () => { modalImg.src = imgUrl; modalMask.classList.add("show"); };
-      div.querySelector(".del").onclick = async (e) => {
+      const apiUrl = "category_image?category=" + encodeURIComponent(currentCat) + "&name=" + encodeURIComponent(name);
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.src = await fetchImageBlob(apiUrl);
+      const span = document.createElement("span");
+      span.className = "idx";
+      span.textContent = "#" + (idx ? idx[1] : "?");
+      const del = document.createElement("button");
+      del.className = "del";
+      del.textContent = "\u00d7";
+      del.onclick = async (e) => {
         e.stopPropagation();
         if (!confirm("删除 " + name + " ?")) return;
         try {
@@ -106,8 +122,13 @@ async function loadImages() {
           showMsg(upMsg, "删除失败", false);
         }
       };
+      div.appendChild(img);
+      div.appendChild(span);
+      div.appendChild(del);
+      const fullUrl = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(currentCat) + "&name=" + encodeURIComponent(name);
+      div.onclick = () => { modalImg.src = fullUrl; modalMask.classList.add("show"); };
       imgGrid.appendChild(div);
-    });
+    }
   } catch (e) {
     imgGrid.innerHTML = '<div class="empty">加载失败</div>';
   }
