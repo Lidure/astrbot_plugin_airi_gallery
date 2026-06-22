@@ -255,6 +255,7 @@ class Main(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
     async def handle_gallery_message(self, event: AstrMessageEvent):
         text = (event.message_str or "").strip()
+        logger.info(f"[Gallery] raw: {text!r}")
         if not text:
             return
 
@@ -264,6 +265,7 @@ class Main(Star):
             return
 
         action = self._parse_action(text)
+        logger.info(f"[Gallery] text={text!r} -> action={action}")
         if not action:
             return
 
