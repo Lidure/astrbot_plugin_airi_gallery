@@ -492,17 +492,25 @@ class Main(Star):
 
     async def _api_category_images(self):
         from quart import request, jsonify
+        import base64 as b64mod
         category = request.args.get("category", "").strip()
         if not category:
             return jsonify({"error": "缺少 category 参数"}), 400
         category_dir = self._category_dir(category)
         if not category_dir.exists():
             return jsonify({"images": []})
-        images = sorted(
-            [p.name for p in category_dir.iterdir() if _is_image_file(p)],
-            key=lambda s: int(Path(s).stem) if Path(s).stem.isdigit() else 0,
-        )
-        return jsonify({"images": images, "category": category})
+        result = []
+        for p in sorted(category_dir.iterdir(), key=lambda x: int(x.stem) if x.stem.isdigit() else 0):
+            if not _is_image_file(p):
+                continue
+            try:
+                data = b64mod.b64encode(p.read_bytes()).decode()
+                suffix = p.suffix.lower()
+                ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
+                result.append({"name": p.name, "data": data, "ct": ct})
+            except Exception:
+                result.append({"name": p.name, "data": "", "ct": ""})
+        return jsonify({"images": result, "category": category})
 
     async def _api_upload_images(self):
         from quart import request, jsonify

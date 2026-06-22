@@ -70,6 +70,16 @@ function renderOptions() {
   });
 }
 
+function makeBlobUrl(data, ct) {
+  if (!data) return "";
+  try {
+    const bin = atob(data);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([arr], { type: ct || "image/png" }));
+  } catch (e) { return ""; }
+}
+
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
   try {
@@ -77,13 +87,14 @@ async function loadImgs() {
     const imgs = d.images || [];
     if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
     grid.innerHTML = "";
-    for (const name of imgs) {
+    for (const item of imgs) {
+      const name = item.name;
       const div = document.createElement("div");
       div.className = "gi";
       const idx = name.match(/^(\d+)/);
       const img = document.createElement("img");
       img.loading = "lazy";
-      img.src = await loadBlob(currentCat, name);
+      img.src = makeBlobUrl(item.data, item.ct);
       const span = document.createElement("span");
       span.className = "idx";
       span.textContent = "#" + (idx ? idx[1] : "?");
@@ -102,24 +113,16 @@ async function loadImgs() {
       div.appendChild(img);
       div.appendChild(span);
       div.appendChild(del);
-      div.onclick = async () => { mimg.src = await loadBlob(currentCat, name); mask.classList.add("on"); };
+      div.onclick = () => { mimg.src = makeBlobUrl(item.data, item.ct); mask.classList.add("on"); };
       grid.appendChild(div);
     }
   } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
 
-function getToken() {
-  try {
-    const u = new URL(window.location.href);
-    return u.searchParams.get("asset_token") || "";
-  } catch (e) { return ""; }
-}
-
 async function loadBlob(cat, name) {
-  const token = getToken();
-  const url = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(name) + "&asset_token=" + encodeURIComponent(token);
+  const url = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(name);
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { credentials: "include" });
     if (!resp.ok) return "";
     const d = await resp.json();
     if (d && d.data) {
