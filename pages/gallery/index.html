@@ -49,9 +49,12 @@ select:focus,input:focus{border-color:var(--pink)}
 .modal{background:var(--card);border-radius:var(--r);padding:20px;max-width:90vw;max-height:90vh;position:relative}
 .modal img{max-width:100%;max-height:80vh;border-radius:8px}
 .modal .close{position:absolute;top:8px;right:12px;font-size:20px;cursor:pointer;color:var(--sec)}
-.pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:14px}
-.pager .btn{min-width:60px;text-align:center}
-.pager .info{font-size:13px;color:var(--sec)}
+.pager{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap}
+.pager .btn{min-width:50px;text-align:center;font-size:12px;padding:5px 12px}
+.pager select{padding:5px 8px;border:1.5px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);font-size:12px}
+.grid-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.grid-toolbar label{font-size:12px;color:var(--sec)}
+.grid-toolbar select{padding:5px 8px;border:1.5px solid var(--border);border-radius:8px;background:var(--input);color:var(--text);font-size:12px}
 </style>
 </head>
 <body>
@@ -70,11 +73,20 @@ select:focus,input:focus{border-color:var(--pink)}
   <div class="card">
     <div class="card-title">🗂️ 图库分类</div>
     <div class="tabs" id="tabs"></div>
+    <div class="grid-toolbar">
+      <select id="per-page-sel">
+        <option value="12">12 张/页</option>
+        <option value="21" selected>21 张/页</option>
+        <option value="42">42 张/页</option>
+      </select>
+    </div>
     <div id="grid" class="grid"></div>
     <div class="pager" id="pager" style="display:none">
+      <button class="btn" id="first-btn" style="display:none">首页</button>
       <button class="btn" id="prev-btn" style="display:none">上一页</button>
-      <span class="info" id="page-info"></span>
+      <select id="page-sel"></select>
       <button class="btn" id="next-btn" style="display:none">下一页</button>
+      <button class="btn" id="last-btn" style="display:none">末页</button>
     </div>
   </div>
 </div>

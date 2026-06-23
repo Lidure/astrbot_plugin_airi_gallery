@@ -33,6 +33,7 @@ let categories = [];
 let currentCat = "";
 let currentPage = 1;
 let totalPages = 1;
+let perPage = 21;
 let pendingFiles = [];
 const imgCache = {};
 
@@ -50,10 +51,13 @@ const upMsg = document.getElementById("umsg");
 const mask = document.getElementById("mask");
 const mimg = document.getElementById("mimg");
 const closeBtn = document.getElementById("close");
-const pageInfo = document.getElementById("page-info");
 const pager = document.getElementById("pager");
 const prevBtn = document.getElementById("prev-btn");
 const nextBtn = document.getElementById("next-btn");
+const firstBtn = document.getElementById("first-btn");
+const lastBtn = document.getElementById("last-btn");
+const pageSel = document.getElementById("page-sel");
+const perPageSel = document.getElementById("per-page-sel");
 
 function showMsg(el, text, ok = true) {
   el.textContent = (ok ? "🌸 " : "💦 ") + text;
@@ -108,14 +112,15 @@ function renderOptions() {
 
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
-  const cacheKey = currentCat + "_" + currentPage;
-  if (imgCache[cacheKey]) { renderGrid(imgCache[cacheKey]); return; }
+  const cacheKey = currentCat + "_" + currentPage + "_" + perPage;
+  if (imgCache[cacheKey]) { renderGrid(imgCache[cacheKey]); renderPagination(); return; }
   grid.innerHTML = '<div class="empty">加载中...</div>';
   try {
-    const d = await apiGet("category_images", { category: currentCat, page: currentPage, per_page: 20 });
+    const d = await apiGet("category_images", { category: currentCat, page: currentPage, per_page: perPage });
     const imgs = d.images || [];
     const total = d.total || 0;
-    totalPages = Math.max(1, Math.ceil(total / 20));
+    totalPages = Math.max(1, Math.ceil(total / perPage));
+    if (currentPage > totalPages) currentPage = totalPages;
     imgCache[cacheKey] = { imgs, total };
     renderGrid({ imgs, total });
     renderPagination();
@@ -159,13 +164,26 @@ function renderGrid(data) {
 function renderPagination() {
   if (totalPages <= 1) { pager.style.display = "none"; return; }
   pager.style.display = "flex";
-  pageInfo.textContent = currentPage + " / " + totalPages;
+  firstBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
   prevBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
   nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
+  lastBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
+  pageSel.innerHTML = "";
+  for (let i = 1; i <= totalPages; i++) {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = i + " / " + totalPages;
+    if (i === currentPage) opt.selected = true;
+    pageSel.appendChild(opt);
+  }
 }
 
+if (firstBtn) firstBtn.onclick = () => { if (currentPage > 1) { currentPage = 1; loadImgs(); } };
 if (prevBtn) prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
 if (nextBtn) nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
+if (lastBtn) lastBtn.onclick = () => { if (currentPage < totalPages) { currentPage = totalPages; loadImgs(); } };
+if (pageSel) pageSel.onchange = () => { const p = parseInt(pageSel.value); if (p !== currentPage) { currentPage = p; loadImgs(); } };
+if (perPageSel) perPageSel.onchange = () => { perPage = parseInt(perPageSel.value); currentPage = 1; Object.keys(imgCache).forEach(k => delete imgCache[k]); loadImgs(); };
 
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add("on"); };
@@ -222,7 +240,7 @@ upBtn.onclick = async () => {
       showMsg(upMsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];
       renderPreview();
-      Object.keys(imgCache).forEach(k => { if (k.startsWith(cat)) delete imgCache[k]; });
+      Object.keys(imgCache).forEach(k => { if (k.startsWith(currentCat)) delete imgCache[k]; });
       if (currentCat === cat) { currentPage = 1; loadImgs(); }
     } else showMsg(upMsg, d.error || "上传失败", false);
   } catch (e) { showMsg(upMsg, "上传失败: " + e.message, false); }
