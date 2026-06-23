@@ -31,24 +31,28 @@ async function apiPost(endpoint, data) {
 
 let categories = [];
 let currentCat = "";
+let currentPage = 1;
+let totalPages = 1;
 let pendingFiles = [];
 const imgCache = {};
-const cntCache = {};
 
 const tabs = document.getElementById("tabs");
 const grid = document.getElementById("grid");
 const upSel = document.getElementById("up-sel");
 const upInput = document.getElementById("up-input");
-const drop = document.getElementById("drop");
-const file = document.getElementById("file");
+const dropZone = document.getElementById("drop-zone");
+const fileInput = document.getElementById("file-input");
 const preview = document.getElementById("preview");
 const upActions = document.getElementById("up-actions");
 const upBtn = document.getElementById("up-btn");
-const cnt = document.getElementById("cnt");
-const umsg = document.getElementById("umsg");
+const upCount = document.getElementById("up-count");
+const upMsg = document.getElementById("umsg");
 const mask = document.getElementById("mask");
 const mimg = document.getElementById("mimg");
 const closeBtn = document.getElementById("close");
+const pageInfo = document.getElementById("page-info");
+const prevBtn = document.getElementById("prev-btn");
+const nextBtn = document.getElementById("next-btn");
 
 function showMsg(el, text, ok = true) {
   el.textContent = (ok ? "🌸 " : "💦 ") + text;
@@ -58,14 +62,21 @@ function showMsg(el, text, ok = true) {
   showMsg._t = setTimeout(() => { el.style.display = "none"; }, 3500);
 }
 
+function makeBlobUrl(data, ct) {
+  if (!data) return "";
+  try {
+    const bin = atob(data);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([arr], { type: ct || "image/png" }));
+  } catch (e) { return ""; }
+}
+
 async function loadCats() {
   try {
     const d = await apiGet("categories");
     categories = d.categories || [];
-  } catch (e) {
-    console.error("[gallery] loadCats error:", e);
-    categories = [];
-  }
+  } catch (e) { categories = []; }
   renderTabs();
   renderOptions();
 }
@@ -76,35 +87,10 @@ function renderTabs() {
   categories.forEach(c => {
     const t = document.createElement("div");
     t.className = "tab" + (c === currentCat ? " on" : "");
-    const cntText = cntCache[c] !== undefined ? cntCache[c] + "张" : "";
-    t.innerHTML = c + ' <span class="n" id="n-' + c + '">' + cntText + '</span>';
-    t.onclick = () => { currentCat = c; renderTabs(); loadImgs(); };
+    t.textContent = c;
+    t.onclick = () => { currentCat = c; currentPage = 1; renderTabs(); loadImgs(); };
     tabs.appendChild(t);
   });
-}
-
-async function loadAllCnts() {
-  for (const c of categories) {
-    if (cntCache[c] === undefined) {
-      await loadCnt(c);
-    }
-  }
-}
-
-async function loadCnt(cat) {
-  if (cntCache[cat] !== undefined) {
-    const el = document.getElementById("n-" + cat);
-    if (el) el.textContent = cntCache[cat] + "张";
-    return;
-  }
-  try {
-    const d = await apiGet("category_images", { category: cat });
-    const count = d.images ? d.images.length : 0;
-    cntCache[cat] = count;
-    imgCache[cat] = d.images || [];
-    const el = document.getElementById("n-" + cat);
-    if (el) el.textContent = count + "张";
-  } catch (e) {}
 }
 
 function renderOptions() {
@@ -119,86 +105,71 @@ function renderOptions() {
   });
 }
 
-function makeBlobUrl(data, ct) {
-  if (!data) return "";
-  try {
-    const bin = atob(data);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    return URL.createObjectURL(new Blob([arr], { type: ct || "image/png" }));
-  } catch (e) { return ""; }
-}
-
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
-  if (imgCache[currentCat]) { renderGrid(imgCache[currentCat]); return; }
+  const cacheKey = currentCat + "_" + currentPage;
+  if (imgCache[cacheKey]) { renderGrid(imgCache[cacheKey]); return; }
+  grid.innerHTML = '<div class="empty">加载中...</div>';
   try {
-    const d = await apiGet("category_images", { category: currentCat });
+    const d = await apiGet("category_images", { category: currentCat, page: currentPage, per_page: 20 });
     const imgs = d.images || [];
-    imgCache[currentCat] = imgs;
-    cntCache[currentCat] = imgs.length;
-    const el = document.getElementById("n-" + currentCat);
-    if (el) el.textContent = imgs.length + "张";
-    renderGrid(imgs);
+    const total = d.total || 0;
+    totalPages = Math.max(1, Math.ceil(total / 20));
+    imgCache[cacheKey] = { imgs, total };
+    renderGrid({ imgs, total });
+    renderPagination();
   } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
 
-function renderGrid(imgs) {
+function renderGrid(data) {
+  const { imgs, total } = data;
   if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
   grid.innerHTML = "";
   for (const item of imgs) {
-      const name = item.name;
-      const div = document.createElement("div");
-      div.className = "gi";
-      const idx = name.match(/^(\d+)/);
-      const img = document.createElement("img");
-      img.loading = "lazy";
-      img.src = makeBlobUrl(item.data, item.ct);
-      const span = document.createElement("span");
-      span.className = "idx";
-      span.textContent = "#" + (idx ? idx[1] : "?");
-      const del = document.createElement("button");
-      del.className = "del";
-      del.textContent = "\u00d7";
-      del.onclick = async (e) => {
-        e.stopPropagation();
-        try {
-          await apiPost("delete_image", { category: currentCat, name: name });
-          delete imgCache[currentCat];
-          loadImgs();
-          loadCnt(currentCat);
-          showMsg(umsg, "已删除 " + name);
-        } catch (e) { showMsg(umsg, "删除失败", false); }
-      };
-      div.appendChild(img);
-      div.appendChild(span);
-      div.appendChild(del);
-      div.onclick = () => { mimg.src = makeBlobUrl(item.data, item.ct); mask.classList.add("on"); };
-      grid.appendChild(div);
-    }
+    const name = item.name;
+    const div = document.createElement("div");
+    div.className = "gi";
+    const idx = name.match(/^(\d+)/);
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.src = makeBlobUrl(item.data, item.ct);
+    const span = document.createElement("span");
+    span.className = "idx";
+    span.textContent = "#" + (idx ? idx[1] : "?");
+    const del = document.createElement("button");
+    del.className = "del";
+    del.textContent = "\u00d7";
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      try {
+        await apiPost("delete_image", { category: currentCat, name: name });
+        Object.keys(imgCache).forEach(k => { if (k.startsWith(currentCat)) delete imgCache[k]; });
+        loadImgs();
+      } catch (e) { showMsg(upMsg, "删除失败", false); }
+    };
+    div.appendChild(img);
+    div.appendChild(span);
+    div.appendChild(del);
+    div.onclick = () => { mimg.src = makeBlobUrl(item.data, item.ct); mask.classList.add("on"); };
+    grid.appendChild(div);
+  }
 }
 
-async function loadBlob(cat, name) {
-  const url = "/api/plug/astrbot_plugin_airi_gallery/category_image?category=" + encodeURIComponent(cat) + "&name=" + encodeURIComponent(name);
-  try {
-    const resp = await fetch(url, { credentials: "include" });
-    if (!resp.ok) return "";
-    const d = await resp.json();
-    if (d && d.data) {
-      const bin = atob(d.data);
-      const arr = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      return URL.createObjectURL(new Blob([arr], { type: d.content_type || "image/png" }));
-    }
-  } catch (e) {}
-  return "";
+function renderPagination() {
+  if (totalPages <= 1) { pageInfo.textContent = ""; prevBtn.style.display = "none"; nextBtn.style.display = "none"; return; }
+  pageInfo.textContent = currentPage + " / " + totalPages;
+  prevBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
+  nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
 }
 
-drop.onclick = () => file.click();
-drop.ondragover = e => { e.preventDefault(); drop.classList.add("on"); };
-drop.ondragleave = () => drop.classList.remove("on");
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove("on"); addFiles(e.dataTransfer.files); };
-file.onchange = () => { addFiles(file.files); file.value = ""; };
+prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
+nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
+
+dropZone.onclick = () => fileInput.click();
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add("on"); };
+dropZone.ondragleave = () => dropZone.classList.remove("on");
+dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove("on"); addFiles(e.dataTransfer.files); };
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ""; };
 
 function addFiles(fl) {
   for (const f of fl) {
@@ -214,7 +185,7 @@ function renderPreview() {
   if (!pendingFiles.length) { preview.style.display = "none"; upActions.style.display = "none"; return; }
   preview.style.display = "grid";
   upActions.style.display = "flex";
-  cnt.textContent = pendingFiles.length;
+  upCount.textContent = pendingFiles.length;
   pendingFiles.forEach((f, i) => {
     const d = document.createElement("div");
     d.className = "item";
@@ -224,7 +195,7 @@ function renderPreview() {
   });
 }
 
-async function fileToBase64(file) {
+function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result.split(",")[1]);
@@ -235,8 +206,8 @@ async function fileToBase64(file) {
 
 upBtn.onclick = async () => {
   const cat = upInput.value.trim() || upSel.value;
-  if (!cat) { showMsg(umsg, "请选择或输入分类", false); return; }
-  if (!pendingFiles.length) { showMsg(umsg, "请选择图片", false); return; }
+  if (!cat) { showMsg(upMsg, "请选择或输入分类", false); return; }
+  if (!pendingFiles.length) { showMsg(upMsg, "请选择图片", false); return; }
   upBtn.disabled = true;
   upBtn.textContent = "上传中...";
   try {
@@ -246,14 +217,13 @@ upBtn.onclick = async () => {
     }
     const d = await apiPost("upload", { category: cat, images });
     if (d.ok) {
-      showMsg(umsg, "成功上传 " + d.count + " 张到【" + cat + "】");
+      showMsg(upMsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];
       renderPreview();
-      delete imgCache[cat];
-      loadCats();
-      if (currentCat === cat) loadImgs();
-    } else showMsg(umsg, d.error || "上传失败", false);
-  } catch (e) { showMsg(umsg, "上传失败: " + e.message, false); }
+      Object.keys(imgCache).forEach(k => { if (k.startsWith(cat)) delete imgCache[k]; });
+      if (currentCat === cat) { currentPage = 1; loadImgs(); }
+    } else showMsg(upMsg, d.error || "上传失败", false);
+  } catch (e) { showMsg(upMsg, "上传失败: " + e.message, false); }
   finally { upBtn.disabled = false; upBtn.textContent = "上传 (" + pendingFiles.length + ") 张"; }
 };
 
@@ -266,7 +236,6 @@ try {
     currentCat = categories[0];
     renderTabs();
     await loadImgs();
-    loadAllCnts();
   }
 } catch (e) {
   console.error("[gallery] init error:", e);

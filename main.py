@@ -625,15 +625,22 @@ class Main(Star):
         from quart import request, jsonify
         import base64 as b64mod
         category = request.args.get("category", "").strip()
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = max(1, min(50, int(request.args.get("per_page", 20))))
         if not category:
             return jsonify({"error": "缺少 category 参数"}), 400
         category_dir = self._category_dir(category)
         if not category_dir.exists():
-            return jsonify({"images": []})
+            return jsonify({"images": [], "total": 0, "page": page, "per_page": per_page})
+        all_files = sorted(
+            [p for p in category_dir.iterdir() if _is_image_file(p)],
+            key=lambda x: int(x.stem) if x.stem.isdigit() else 0,
+        )
+        total = len(all_files)
+        start = (page - 1) * per_page
+        page_files = all_files[start:start + per_page]
         result = []
-        for p in sorted(category_dir.iterdir(), key=lambda x: int(x.stem) if x.stem.isdigit() else 0):
-            if not _is_image_file(p):
-                continue
+        for p in page_files:
             try:
                 data = b64mod.b64encode(p.read_bytes()).decode()
                 suffix = p.suffix.lower()
@@ -641,7 +648,7 @@ class Main(Star):
                 result.append({"name": p.name, "data": data, "ct": ct})
             except Exception:
                 result.append({"name": p.name, "data": "", "ct": ""})
-        return jsonify({"images": result, "category": category})
+        return jsonify({"images": result, "total": total, "page": page, "per_page": per_page, "category": category})
 
     async def _api_upload_images(self):
         from quart import request, jsonify

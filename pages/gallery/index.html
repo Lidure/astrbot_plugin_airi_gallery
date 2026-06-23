@@ -2,8 +2,57 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Airi Gallery</title>
-<link rel="stylesheet" href="./style.css" />
+<style>
+:root{--bg:#fef7f9;--card:#fff;--text:#3d2c3e;--sec:#9b8a9d;--border:#f3e4ee;--pink:#f472b6;--pink-l:#fdf2f8;--purple:#a78bfa;--green:#34d399;--green-l:#ecfdf5;--red:#fb7185;--red-l:#fff1f2;--input:#fdf8fa;--shadow:0 2px 12px rgba(244,114,182,.08);--r:16px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:24px 16px}
+.wrap{max-width:800px;margin:0 auto}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.hdr-icon{font-size:32px;animation:f 3s ease-in-out infinite}
+@keyframes f{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+h1{font-size:22px;font-weight:700;background:linear-gradient(135deg,var(--pink),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.card{background:var(--card);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.card-title{font-size:15px;font-weight:600;margin-bottom:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+select,input[type="text"]{padding:7px 12px;border:1.5px solid var(--border);border-radius:10px;background:var(--input);color:var(--text);font-size:13px;outline:none}
+select:focus,input:focus{border-color:var(--pink)}
+.drop{border:2px dashed var(--border);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all .25s;background:var(--input);margin-top:10px}
+.drop:hover,.drop.on{border-color:var(--pink);background:var(--pink-l)}
+.drop .icon{font-size:28px;margin-bottom:4px}
+.drop .hint{font-size:12px;color:var(--sec)}
+.preview{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:6px;margin-top:10px}
+.preview .item{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1.5px solid var(--border)}
+.preview .item img{width:100%;height:100%;object-fit:cover}
+.preview .item .rm{position:absolute;top:1px;right:1px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:6px 14px;border-radius:20px;border:1.5px solid var(--border);background:var(--card);font-size:13px;cursor:pointer;transition:all .2s}
+.tab:hover{border-color:var(--pink)}
+.tab.on{background:linear-gradient(135deg,var(--pink),var(--purple));color:#fff;border-color:transparent}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}
+.gi{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;border:2px solid var(--border);background:var(--input);cursor:pointer;transition:all .2s}
+.gi:hover{border-color:var(--pink);transform:scale(1.03)}
+.gi img{width:100%;height:100%;object-fit:cover}
+.gi .idx{position:absolute;bottom:2px;left:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:6px}
+.gi .del{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:11px;cursor:pointer;display:none;align-items:center;justify-content:center}
+.gi:hover .del{display:flex}
+.btn{padding:7px 16px;border-radius:10px;border:none;font-size:13px;font-weight:500;cursor:pointer;transition:all .2s}
+.bp{background:linear-gradient(135deg,var(--pink),var(--purple));color:#fff}
+.bp:disabled{opacity:.4;cursor:not-allowed}
+.msg{padding:10px 14px;border-radius:10px;margin-top:10px;font-size:12px;font-weight:500}
+.msg-ok{background:var(--green-l);color:#047857;border:1.5px solid var(--green)}
+.msg-err{background:var(--red-l);color:#be123c;border:1.5px solid var(--red)}
+.empty{text-align:center;color:var(--sec);padding:24px;font-size:13px}
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:100}
+.mask.on{display:flex}
+.modal{background:var(--card);border-radius:var(--r);padding:20px;max-width:90vw;max-height:90vh;position:relative}
+.modal img{max-width:100%;max-height:80vh;border-radius:8px}
+.modal .close{position:absolute;top:8px;right:12px;font-size:20px;cursor:pointer;color:var(--sec)}
+.pager{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:14px}
+.pager .btn{min-width:60px;text-align:center}
+.pager .info{font-size:13px;color:var(--sec)}
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -22,9 +71,14 @@
     <div class="card-title">🗂️ 图库分类</div>
     <div class="tabs" id="tabs"></div>
     <div id="grid" class="grid"></div>
+    <div class="pager" id="pager" style="display:none">
+      <button class="btn" id="prev-btn" style="display:none">上一页</button>
+      <span class="info" id="page-info"></span>
+      <button class="btn" id="next-btn" style="display:none">下一页</button>
+    </div>
   </div>
 </div>
 <div class="mask" id="mask"><div class="modal"><span class="close" id="close">&times;</span><img id="mimg" /></div></div>
-<script type="module" src="./app.js?v=2"></script>
+<script type="module" src="./app.js?v=3"></script>
 </body>
 </html>
