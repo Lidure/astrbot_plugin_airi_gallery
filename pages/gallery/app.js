@@ -111,12 +111,12 @@ function renderGrid(imgs) {
       del.textContent = "\u00d7";
       del.onclick = async (e) => {
         e.stopPropagation();
-        if (!confirm("删除 " + name + " ?")) return;
         try {
           await bridge.apiPost("delete_image", { category: currentCat, name: name });
           delete imgCache[currentCat];
           loadImgs();
           loadCnt(currentCat);
+          showMsg(umsg, "已删除 " + name);
         } catch (e) { showMsg(umsg, "删除失败", false); }
       };
       div.appendChild(img);
