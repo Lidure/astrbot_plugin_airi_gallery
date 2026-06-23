@@ -11,7 +11,7 @@ from pathlib import Path
 ASTRBOT_URL = "http://localhost:6185"
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 API_PREFIX = f"{ASTRBOT_URL}/api/plug/{PLUGIN_NAME}"
-GALLERY_DIR = Path(__file__).resolve().parent / "pages" / "gallery"
+GALLERY_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "pages" / "gallery"
 JWT = {"token": None, "expires": 0}
 
 

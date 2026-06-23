@@ -559,6 +559,7 @@ class Main(Star):
                             self.send_response(200)
                             ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(_os.path.splitext(fp)[1], "application/octet-stream")
                             self.send_header("Content-Type", ct)
+                            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
                             self.end_headers()
                             with open(fp, "rb") as f:
                                 self.wfile.write(f.read())
