@@ -26,8 +26,7 @@ const upActions = $("up-actions"), upBtn = $("up-btn"), upCount = $("up-count");
 const mask = $("mask"), mimg = $("mimg"), closeBtn = $("close");
 const pager = $("pager"), prevBtn = $("prev-btn"), nextBtn = $("next-btn");
 const firstBtn = $("first-btn"), lastBtn = $("last-btn");
-const pageInfo = $("page-info");
-const perPageSel = $("per-page-sel");
+const pageSel = $("page-sel"), perPageInput = $("per-page-input");
 
 function showMsg(text, ok = true) {
   const old = document.querySelector(".toast");
@@ -131,14 +130,28 @@ function renderPagination() {
   prevBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
   nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
   lastBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
-  pageInfo.textContent = currentPage + " / " + totalPages;
+  pageSel.innerHTML = "";
+  for (let i = 1; i <= totalPages; i++) {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = i + " / " + totalPages;
+    if (i === currentPage) o.selected = true;
+    pageSel.appendChild(o);
+  }
 }
 
 firstBtn.onclick = () => { if (currentPage > 1) { currentPage = 1; loadImgs(); } };
 prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
 nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
 lastBtn.onclick = () => { if (currentPage < totalPages) { currentPage = totalPages; loadImgs(); } };
-perPageSel.onchange = () => { perPage = parseInt(perPageSel.value); currentPage = 1; Object.keys(imgCache).forEach(k => delete imgCache[k]); loadImgs(); };
+pageSel.onchange = () => { const p = parseInt(pageSel.value); if (p !== currentPage) { currentPage = p; loadImgs(); } };
+perPageInput.onchange = () => {
+  let v = parseInt(perPageInput.value);
+  if (isNaN(v) || v < 1) v = 21;
+  v = Math.max(1, Math.min(200, v));
+  perPageInput.value = v;
+  if (v !== perPage) { perPage = v; currentPage = 1; Object.keys(imgCache).forEach(k => delete imgCache[k]); loadImgs(); }
+};
+perPageInput.onkeydown = e => { if (e.key === "Enter") perPageInput.onchange(); };
 
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add("dragover"); };

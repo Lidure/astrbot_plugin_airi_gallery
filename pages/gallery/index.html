@@ -91,8 +91,8 @@ body {
 }
 
 /* Inputs */
-input[type="text"], select {
-  width: 100%; height: 40px;
+input[type="text"], input[type="password"], select {
+  height: 40px;
   padding: 0 14px;
   border: 2px solid var(--border);
   border-radius: var(--radius-sm);
@@ -102,11 +102,37 @@ input[type="text"], select {
   outline: none;
   transition: all 0.2s;
 }
-input:focus, select:focus {
+input[type="text"]:focus, input[type="password"]:focus, select:focus {
   border-color: var(--pink);
   box-shadow: 0 0 0 4px rgba(244,114,182,0.12);
 }
 select { cursor: pointer; appearance: auto; }
+.input-sm {
+  width: 64px; height: 36px;
+  padding: 0 10px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px; text-align: center;
+  outline: none; transition: all 0.2s;
+  -moz-appearance: textfield;
+}
+.input-sm::-webkit-outer-spin-button, .input-sm::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.input-sm:focus { border-color: var(--pink); box-shadow: 0 0 0 4px rgba(244,114,182,0.12); }
+.select-cute {
+  height: 32px;
+  padding: 0 28px 0 12px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--pink-soft);
+  color: var(--text);
+  font-size: 12px; font-weight: 600;
+  outline: none; cursor: pointer;
+  appearance: auto;
+  transition: all 0.2s;
+}
+.select-cute:focus { border-color: var(--pink); box-shadow: 0 0 0 4px rgba(244,114,182,0.12); }
 
 /* Buttons */
 .btn {
@@ -198,17 +224,11 @@ select { cursor: pointer; appearance: auto; }
 
 /* Grid toolbar */
 .grid-toolbar {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 8px;
   margin-bottom: 12px;
 }
 .grid-toolbar label {
   font-size: 12px; font-weight: 600; color: var(--muted);
-}
-.grid-toolbar select {
-  width: auto; height: 32px;
-  padding: 0 24px 0 10px;
-  font-size: 12px;
-  border-radius: var(--radius-xs);
 }
 
 /* Image grid */
@@ -369,18 +389,14 @@ select { cursor: pointer; appearance: auto; }
     <div class="tabs" id="tabs"></div>
     <div class="grid-toolbar">
       <label>每页</label>
-      <select id="per-page-sel">
-        <option value="12">12 张</option>
-        <option value="21" selected>21 张</option>
-        <option value="42">42 张</option>
-      </select>
+      <input type="number" id="per-page-input" value="21" min="1" max="100" class="input-sm" />
       <label>张</label>
     </div>
     <div id="grid" class="grid"></div>
     <div class="pager" id="pager" style="display:none">
       <button class="btn btn-sm" id="first-btn" style="display:none">首页</button>
       <button class="btn btn-sm" id="prev-btn" style="display:none">上一页</button>
-      <span class="page-indicator" id="page-info">1 / 1</span>
+      <select id="page-sel" class="select-cute"></select>
       <button class="btn btn-sm" id="next-btn" style="display:none">下一页</button>
       <button class="btn btn-sm" id="last-btn" style="display:none">末页</button>
     </div>
