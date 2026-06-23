@@ -478,7 +478,9 @@ class Main(Star):
         """在后台启动gallery代理服务器"""
         import threading
 
-        gallery_page_dir = Path(__file__).resolve().parent / "pages" / "gallery"
+        gallery_page_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME / "pages" / "gallery"
+        if not gallery_page_dir.exists():
+            gallery_page_dir = Path(__file__).resolve().parent / "pages" / "gallery"
 
         def run_server():
             import http.server
@@ -593,7 +595,7 @@ class Main(Star):
 
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
-        logger.info("Airi Gallery 代理服务器已启动在 http://localhost:8080")
+        logger.info(f"Airi Gallery 代理服务器已启动在 http://localhost:8080 (页面目录: {gallery_page_dir})")
 
     async def terminate(self):
         """插件卸载或停用时调用。"""
