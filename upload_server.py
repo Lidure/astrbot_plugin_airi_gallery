@@ -82,16 +82,7 @@ async def static_files(filename):
 
 @app.route("/api/categories")
 async def api_categories():
-    result = await _proxy_get("/pub/categories", {"token": "public"})
-    return jsonify(result)
-
-
-@app.route("/api/category_count", methods=["GET"])
-async def api_category_count():
-    category = request.args.get("category", "")
-    result = await _proxy_get("/category_images", {"category": category})
-    count = len(result.get("images", [])) if isinstance(result, dict) else 0
-    return jsonify({"count": count})
+    return jsonify(await _proxy_get("/pub/categories", {"token": "public"}))
 
 
 @app.route("/api/category_images", methods=["GET"])
