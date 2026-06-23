@@ -49,8 +49,15 @@ function renderTabs() {
     t.innerHTML = c + ' <span class="n" id="n-' + c + '">' + cntText + '</span>';
     t.onclick = () => { currentCat = c; renderTabs(); loadImgs(); };
     tabs.appendChild(t);
-    if (cntCache[c] === undefined) loadCnt(c);
   });
+}
+
+async function loadAllCnts() {
+  for (const c of categories) {
+    if (cntCache[c] === undefined) {
+      await loadCnt(c);
+    }
+  }
 }
 
 async function loadCnt(cat) {
@@ -223,4 +230,9 @@ closeBtn.onclick = () => mask.classList.remove("on");
 mask.onclick = e => { if (e.target === mask) mask.classList.remove("on"); };
 
 await loadCats();
-if (categories.length) { currentCat = categories[0]; renderTabs(); loadImgs(); }
+if (categories.length) {
+  currentCat = categories[0];
+  renderTabs();
+  await loadImgs();
+  loadAllCnts();
+}
