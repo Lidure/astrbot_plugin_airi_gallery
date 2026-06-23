@@ -543,7 +543,7 @@ class Main(Star):
                         try:
                             body, status = proxy("GET", self.path[4:])
                             self.send_response(status)
-                            self.send_header("Content-Type", "application/json")
+                            self.send_header("Content-Type", "application/json; charset=utf-8")
                             self._cors()
                             self.end_headers()
                             self.wfile.write(body)
@@ -551,13 +551,13 @@ class Main(Star):
                             self.send_response(502)
                             self._cors()
                             self.end_headers()
-                            self.wfile.write(_json.dumps({"error": str(e)}).encode())
+                            self.wfile.write(_json.dumps({"error": str(e)}).encode("utf-8"))
                     else:
                         p = self.path.split("?")[0].lstrip("/") or "index.html"
                         fp = _os.path.join(gallery_dir, p)
                         if _os.path.isfile(fp):
                             self.send_response(200)
-                            ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(_os.path.splitext(fp)[1], "application/octet-stream")
+                            ct = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "application/javascript; charset=utf-8"}.get(_os.path.splitext(fp)[1], "application/octet-stream")
                             self.send_header("Content-Type", ct)
                             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
                             self.end_headers()
