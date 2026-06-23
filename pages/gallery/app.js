@@ -4,6 +4,7 @@ const ctx = await bridge.ready();
 let categories = [];
 let currentCat = "";
 let pendingFiles = [];
+const imgCache = {};
 
 const tabs = document.getElementById("tabs");
 const grid = document.getElementById("grid");
@@ -82,12 +83,19 @@ function makeBlobUrl(data, ct) {
 
 async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
+  if (imgCache[currentCat]) { renderGrid(imgCache[currentCat]); return; }
   try {
     const d = await bridge.apiGet("category_images", { category: currentCat });
     const imgs = d.images || [];
-    if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
-    grid.innerHTML = "";
-    for (const item of imgs) {
+    imgCache[currentCat] = imgs;
+    renderGrid(imgs);
+  } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
+}
+
+function renderGrid(imgs) {
+  if (!imgs.length) { grid.innerHTML = '<div class="empty">该分类暂无图片</div>'; return; }
+  grid.innerHTML = "";
+  for (const item of imgs) {
       const name = item.name;
       const div = document.createElement("div");
       div.className = "gi";
@@ -106,6 +114,7 @@ async function loadImgs() {
         if (!confirm("删除 " + name + " ?")) return;
         try {
           await bridge.apiPost("delete_image", { category: currentCat, name: name });
+          delete imgCache[currentCat];
           loadImgs();
           loadCnt(currentCat);
         } catch (e) { showMsg(umsg, "删除失败", false); }
@@ -190,6 +199,7 @@ upBtn.onclick = async () => {
       showMsg(umsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];
       renderPreview();
+      delete imgCache[cat];
       loadCats();
       if (currentCat === cat) loadImgs();
     } else showMsg(umsg, d.error || "上传失败", false);
