@@ -162,8 +162,8 @@ function renderPagination() {
   nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
 }
 
-prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
-nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
+if (prevBtn) prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
+if (nextBtn) nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
 
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add("on"); };
