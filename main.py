@@ -544,10 +544,13 @@ class Main(Star):
                             self.end_headers()
                             self.wfile.write(_json.dumps({"error": str(e)}).encode())
                     else:
-                        file_path = gallery_page_dir / self.path.lstrip("/")
+                        req_path = self.path.split("?")[0].lstrip("/")
+                        if not req_path or req_path == "/":
+                            req_path = "index.html"
+                        file_path = gallery_page_dir / req_path
                         if file_path.is_file():
                             self.send_response(200)
-                            ct = {".html": "text/html", ".css": "text/css", ".js": "application/javascript"}.get(file_path.suffix, "application/octet-stream")
+                            ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(file_path.suffix, "application/octet-stream")
                             self.send_header("Content-Type", ct)
                             self.end_headers()
                             self.wfile.write(file_path.read_bytes())
