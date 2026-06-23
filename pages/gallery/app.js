@@ -125,7 +125,6 @@ function renderGrid(imgs) {
       div.onclick = () => { mimg.src = makeBlobUrl(item.data, item.ct); mask.classList.add("on"); };
       grid.appendChild(div);
     }
-  } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
 
 async function loadBlob(cat, name) {
