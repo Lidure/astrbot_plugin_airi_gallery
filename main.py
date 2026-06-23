@@ -550,6 +550,7 @@ class Main(Star):
                         if not req_path or req_path == "/":
                             req_path = "index.html"
                         file_path = gallery_page_dir / req_path
+                        print(f"[proxy] {self.path} -> {file_path} exists={file_path.exists()}")
                         if file_path.is_file():
                             self.send_response(200)
                             ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(file_path.suffix, "application/octet-stream")
