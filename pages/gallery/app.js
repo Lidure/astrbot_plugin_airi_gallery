@@ -1,5 +1,33 @@
 const bridge = window.AstrBotPluginPage;
-const ctx = await bridge.ready();
+let ctx = null;
+if (bridge) { try { ctx = await bridge.ready(); } catch (e) {} }
+
+const API_BASE = "/api";
+
+async function apiGet(endpoint, params) {
+  if (bridge && bridge.apiGet) {
+    return await bridge.apiGet(endpoint, params);
+  }
+  let url = API_BASE + "/" + endpoint;
+  if (params) {
+    const qs = Object.entries(params).map(([k, v]) => encodeURIComponent(k) + "=" + encodeURIComponent(v)).join("&");
+    url += "?" + qs;
+  }
+  const r = await fetch(url);
+  return await r.json();
+}
+
+async function apiPost(endpoint, data) {
+  if (bridge && bridge.apiPost) {
+    return await bridge.apiPost(endpoint, data);
+  }
+  const r = await fetch(API_BASE + "/" + endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data)
+  });
+  return await r.json();
+}
 
 let categories = [];
 let currentCat = "";
@@ -32,7 +60,7 @@ function showMsg(el, text, ok = true) {
 
 async function loadCats() {
   try {
-    const d = await bridge.apiGet("categories");
+    const d = await apiGet("categories");
     categories = d.categories || [];
   } catch (e) { categories = []; }
   renderTabs();
@@ -67,7 +95,7 @@ async function loadCnt(cat) {
     return;
   }
   try {
-    const d = await bridge.apiGet("category_images", { category: cat });
+    const d = await apiGet("category_images", { category: cat });
     const count = d.images ? d.images.length : 0;
     cntCache[cat] = count;
     imgCache[cat] = d.images || [];
@@ -102,7 +130,7 @@ async function loadImgs() {
   if (!currentCat) { grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>'; return; }
   if (imgCache[currentCat]) { renderGrid(imgCache[currentCat]); return; }
   try {
-    const d = await bridge.apiGet("category_images", { category: currentCat });
+    const d = await apiGet("category_images", { category: currentCat });
     const imgs = d.images || [];
     imgCache[currentCat] = imgs;
     cntCache[currentCat] = imgs.length;
@@ -132,7 +160,7 @@ function renderGrid(imgs) {
       del.onclick = async (e) => {
         e.stopPropagation();
         try {
-          await bridge.apiPost("delete_image", { category: currentCat, name: name });
+          await apiPost("delete_image", { category: currentCat, name: name });
           delete imgCache[currentCat];
           loadImgs();
           loadCnt(currentCat);
@@ -213,7 +241,7 @@ upBtn.onclick = async () => {
     for (const f of pendingFiles) {
       images.push({ name: f.name, data: await fileToBase64(f) });
     }
-    const d = await bridge.apiPost("upload", { category: cat, images });
+    const d = await apiPost("upload", { category: cat, images });
     if (d.ok) {
       showMsg(umsg, "成功上传 " + d.count + " 张到【" + cat + "】");
       pendingFiles = [];
