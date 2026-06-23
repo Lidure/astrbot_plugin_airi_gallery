@@ -1,6 +1,6 @@
-const bridge = window.AstrBotPluginPage;
-let ctx = null;
-if (bridge) { try { ctx = await bridge.ready(); } catch (e) {} }
+let bridge, ctx;
+try { bridge = window.AstrBotPluginPage; } catch (e) { bridge = null; }
+try { if (bridge) ctx = await bridge.ready(); } catch (e) { ctx = null; }
 
 const API_BASE = "/api";
 
