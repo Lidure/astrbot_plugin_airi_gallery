@@ -475,110 +475,26 @@ class Main(Star):
             yield event.plain_result("分类昵称映射：\n" + "\n".join(lines))
 
     def _start_proxy_server(self):
-        """在后台启动公开上传代理服务器"""
+        """在后台启动gallery页面静态服务器"""
         import threading
 
-        plugin = self
         gallery_page_dir = Path(__file__).resolve().parent / "pages" / "gallery"
 
         def run_server():
-            import asyncio
-            from quart import Quart, request as q_request, jsonify, send_file
-            import aiohttp as _aiohttp
+            import http.server
+            import os
 
-            proxy_app = Quart(__name__)
-            _jwt = {"token": None, "expires": 0}
-
-            async def get_jwt():
-                if _jwt["token"] and time.time() < _jwt["expires"]:
-                    return _jwt["token"]
-                try:
-                    async with _aiohttp.ClientSession() as s:
-                        async with s.post(
-                            "http://localhost:6185/api/auth/login",
-                            json={"username": "小浅子", "password": "Ctx2003923"},
-                        ) as resp:
-                            data = await resp.json()
-                            if resp.status == 200 and data.get("data", {}).get("token"):
-                                _jwt["token"] = data["data"]["token"]
-                                _jwt["expires"] = time.time() + 3500
-                                return _jwt["token"]
-                except Exception as e:
-                    logger.warning(f"代理登录失败: {e}")
-                return None
-
-            async def proxy_get(path, params=None):
-                token = await get_jwt()
-                if not token:
-                    return {"error": "无法连接 AstrBot"}
-                headers = {"Authorization": f"Bearer {token}"}
-                async with _aiohttp.ClientSession() as s:
-                    async with s.get(f"http://localhost:6185/api/plug/{PLUGIN_NAME}{path}", params=params, headers=headers) as resp:
-                        return await resp.json()
-
-            async def proxy_post(path, data):
-                token = await get_jwt()
-                if not token:
-                    return {"error": "无法连接 AstrBot"}
-                headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-                async with _aiohttp.ClientSession() as s:
-                    async with s.post(f"http://localhost:6185/api/plug/{PLUGIN_NAME}{path}", json=data, headers=headers) as resp:
-                        return await resp.json()
-
-            @proxy_app.route("/")
-            async def index():
-                index_file = gallery_page_dir / "index.html"
-                if index_file.exists():
-                    return await send_file(str(index_file))
-                return "Gallery page not found", 404
-
-            @proxy_app.route("/<path:filename>")
-            async def static_files(filename):
-                file_path = gallery_page_dir / filename
-                if file_path.exists() and file_path.is_file():
-                    return await send_file(str(file_path))
-                return "Not found", 404
-
-            @proxy_app.route("/api/categories")
-            async def api_categories():
-                return jsonify(await proxy_get("/pub/categories", {"token": "public"}))
-
-            @proxy_app.route("/api/category_images", methods=["GET"])
-            async def api_category_images():
-                category = q_request.args.get("category", "")
-                return jsonify(await proxy_get("/category_images", {"category": category}))
-
-            @proxy_app.route("/api/category_image", methods=["GET"])
-            async def api_category_image():
-                category = q_request.args.get("category", "")
-                name = q_request.args.get("name", "")
-                return jsonify(await proxy_get("/category_image", {"category": category, "name": name}))
-
-            @proxy_app.route("/api/upload", methods=["POST"])
-            async def api_upload():
-                data = await q_request.get_json()
-                return jsonify(await proxy_post("/pub/upload", data))
-
-            @proxy_app.route("/api/delete_image", methods=["POST"])
-            async def api_delete_image():
-                data = await q_request.get_json()
-                return jsonify(await proxy_post("/delete_image", data))
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            os.chdir(str(gallery_page_dir))
+            handler = http.server.SimpleHTTPRequestHandler
+            server = http.server.HTTPServer(("0.0.0.0", 8080), handler)
             try:
-                from hypercorn.config import Config
-                from hypercorn.asyncio import serve
-                config = Config()
-                config.bind = ["0.0.0.0:8080"]
-                config.use_reloader = False
-                loop.run_until_complete(serve(proxy_app, config))
+                server.serve_forever()
             except Exception as e:
-                logger.warning(f"代理服务器启动失败: {e}")
+                logger.warning(f"Gallery页面服务器启动失败: {e}")
 
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
-        logger.info("Airi Gallery 代理服务器已启动在 http://localhost:8080")
+        logger.info("Airi Gallery 页面服务器已启动在 http://localhost:8080")
 
     async def terminate(self):
         """插件卸载或停用时调用。"""
