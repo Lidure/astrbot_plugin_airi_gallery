@@ -2,14 +2,7 @@ const bridge = window.AstrBotPluginPage;
 let ctx = null;
 if (bridge) { try { ctx = await bridge.ready(); } catch (e) {} }
 
-function getApiBase() {
-  const host = location.hostname;
-  if (host === "localhost" || host === "127.0.0.1") {
-    return "http://localhost:6185/api/plug/astrbot_plugin_airi_gallery";
-  }
-  return location.origin + "/api/plug/astrbot_plugin_airi_gallery";
-}
-const API_BASE = getApiBase();
+const API_BASE = "/api";
 
 async function apiGet(endpoint, params) {
   if (bridge && bridge.apiGet) {
