@@ -95,6 +95,14 @@ async function loadCnt(cat) {
     return;
   }
   try {
+    const d = await apiGet("category_count", { category: cat });
+    const count = d.count || 0;
+    cntCache[cat] = count;
+    const el = document.getElementById("n-" + cat);
+    if (el) el.textContent = count + "张";
+  } catch (e) {}
+}
+  try {
     const d = await apiGet("category_images", { category: cat });
     const count = d.images ? d.images.length : 0;
     cntCache[cat] = count;

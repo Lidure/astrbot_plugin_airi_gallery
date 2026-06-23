@@ -15,8 +15,8 @@ import aiohttp
 app = Quart(__name__)
 
 ASTRBOT_URL = os.environ.get("ASTRBOT_URL", "http://localhost:6185")
-ASTRBOT_USER = os.environ.get("ASTRBOT_USER", "admin")
-ASTRBOT_PASS = os.environ.get("ASTRBOT_PASS", "admin")
+ASTRBOT_USER = os.environ.get("ASTRBOT_USER", "小浅子")
+ASTRBOT_PASS = os.environ.get("ASTRBOT_PASS", "Ctx2003923")
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 API_BASE = f"{ASTRBOT_URL}/api/plug/{PLUGIN_NAME}"
 PAGE_DIR = Path(__file__).resolve().parent / "pages" / "gallery"
@@ -82,7 +82,16 @@ async def static_files(filename):
 
 @app.route("/api/categories")
 async def api_categories():
-    return jsonify(await _proxy_get("/pub/categories", {"token": "public"}))
+    result = await _proxy_get("/pub/categories", {"token": "public"})
+    return jsonify(result)
+
+
+@app.route("/api/category_count", methods=["GET"])
+async def api_category_count():
+    category = request.args.get("category", "")
+    result = await _proxy_get("/category_images", {"category": category})
+    count = len(result.get("images", [])) if isinstance(result, dict) else 0
+    return jsonify({"count": count})
 
 
 @app.route("/api/category_images", methods=["GET"])
