@@ -287,6 +287,7 @@ class Main(Star):
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
         await self._normalize_gallery_tree()
+        self._start_gallery_server()
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
     async def handle_gallery_message(self, event: AstrMessageEvent):
@@ -475,6 +476,123 @@ class Main(Star):
 
     async def terminate(self):
         """插件卸载或停用时调用。"""
+
+    def _start_gallery_server(self):
+        """在后台启动gallery页面+API代理服务器"""
+        import threading, http.server, json as _json, urllib.request, os as _os
+
+        gallery_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "pages", "gallery")
+        if not _os.path.isdir(gallery_dir):
+            gallery_dir = _os.path.join(
+                _os.path.dirname(get_astrbot_plugin_data_path()), "plugins", PLUGIN_NAME, "pages", "gallery"
+            )
+
+        def run():
+            ASTRBOT = "http://localhost:6185"
+            PREFIX = f"{ASTRBOT}/api/plug/{PLUGIN_NAME}"
+            jwt = [None, 0]
+
+            def get_jwt():
+                import time as _t
+                if jwt[0] and _t.time() < jwt[1]:
+                    return jwt[0]
+                try:
+                    d = _json.dumps({"username": "小浅子", "password": "Ctx2003923"}).encode()
+                    req = urllib.request.Request(f"{ASTRBOT}/api/auth/login", data=d, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        r = _json.loads(resp.read())
+                        if resp.status == 200 and r.get("data", {}).get("token"):
+                            jwt[0] = r["data"]["token"]
+                            jwt[1] = _t.time() + 3500
+                            return jwt[0]
+                except Exception:
+                    pass
+                return None
+
+            def proxy(method, path, body=None):
+                token = get_jwt()
+                if not token:
+                    raise Exception("auth failed")
+                h = {"Authorization": f"Bearer {token}"}
+                url = f"{PREFIX}{path}"
+                if body:
+                    h["Content-Type"] = "application/json"
+                    data = body.encode()
+                else:
+                    data = None
+                req = urllib.request.Request(url, data=data, headers=h, method=method)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return resp.read(), resp.status
+
+            class H(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def _cors(self):
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+                    self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+                def do_OPTIONS(self):
+                    self.send_response(200)
+                    self._cors()
+                    self.end_headers()
+
+                def do_GET(self):
+                    if self.path.startswith("/api/"):
+                        try:
+                            body, status = proxy("GET", self.path[4:])
+                            self.send_response(status)
+                            self.send_header("Content-Type", "application/json")
+                            self._cors()
+                            self.end_headers()
+                            self.wfile.write(body)
+                        except Exception as e:
+                            self.send_response(502)
+                            self._cors()
+                            self.end_headers()
+                            self.wfile.write(_json.dumps({"error": str(e)}).encode())
+                    else:
+                        p = self.path.split("?")[0].lstrip("/") or "index.html"
+                        fp = _os.path.join(gallery_dir, p)
+                        if _os.path.isfile(fp):
+                            self.send_response(200)
+                            ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(_os.path.splitext(fp)[1], "application/octet-stream")
+                            self.send_header("Content-Type", ct)
+                            self.end_headers()
+                            with open(fp, "rb") as f:
+                                self.wfile.write(f.read())
+                        else:
+                            self.send_response(404)
+                            self.end_headers()
+
+                def do_POST(self):
+                    if self.path.startswith("/api/"):
+                        length = int(self.headers.get("Content-Length", 0))
+                        body = self.rfile.read(length).decode() if length else None
+                        try:
+                            body, status = proxy("POST", self.path[4:], body)
+                            self.send_response(status)
+                            self.send_header("Content-Type", "application/json")
+                            self._cors()
+                            self.end_headers()
+                            self.wfile.write(body)
+                        except Exception as e:
+                            self.send_response(502)
+                            self._cors()
+                            self.end_headers()
+                            self.wfile.write(_json.dumps({"error": str(e)}).encode())
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+
+            try:
+                http.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+            except Exception as e:
+                logger.warning(f"Gallery服务器启动失败: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
+        logger.info("Airi Gallery 服务器已启动在 http://localhost:8080")
 
     async def _api_get_aliases(self):
         from quart import jsonify
