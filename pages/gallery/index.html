@@ -258,15 +258,19 @@ select { cursor: pointer; appearance: auto; }
 /* Pager */
 .pager {
   display: flex; align-items: center; justify-content: center;
-  gap: 6px; margin-top: 16px;
+  gap: 8px; margin-top: 16px;
   padding-top: 16px;
   border-top: 1.5px solid var(--border);
 }
-.pager select {
-  width: auto; height: 32px;
-  padding: 0 28px 0 10px;
-  font-size: 12px;
+.pager .btn-sm { border-radius: var(--radius-xs); }
+.page-indicator {
+  font-size: 13px; font-weight: 600;
+  color: var(--text);
+  padding: 4px 14px;
+  background: var(--pink-soft);
   border-radius: var(--radius-xs);
+  min-width: 70px;
+  text-align: center;
 }
 
 /* Toast */
@@ -374,11 +378,11 @@ select { cursor: pointer; appearance: auto; }
     </div>
     <div id="grid" class="grid"></div>
     <div class="pager" id="pager" style="display:none">
-      <button class="btn btn-sm btn-ghost" id="first-btn" style="display:none">⏮</button>
-      <button class="btn btn-sm btn-ghost" id="prev-btn" style="display:none">◀</button>
-      <select id="page-sel"></select>
-      <button class="btn btn-sm btn-ghost" id="next-btn" style="display:none">▶</button>
-      <button class="btn btn-sm btn-ghost" id="last-btn" style="display:none">⏭</button>
+      <button class="btn btn-sm" id="first-btn" style="display:none">首页</button>
+      <button class="btn btn-sm" id="prev-btn" style="display:none">上一页</button>
+      <span class="page-indicator" id="page-info">1 / 1</span>
+      <button class="btn btn-sm" id="next-btn" style="display:none">下一页</button>
+      <button class="btn btn-sm" id="last-btn" style="display:none">末页</button>
     </div>
   </div>
 </div>

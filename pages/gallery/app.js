@@ -26,7 +26,8 @@ const upActions = $("up-actions"), upBtn = $("up-btn"), upCount = $("up-count");
 const mask = $("mask"), mimg = $("mimg"), closeBtn = $("close");
 const pager = $("pager"), prevBtn = $("prev-btn"), nextBtn = $("next-btn");
 const firstBtn = $("first-btn"), lastBtn = $("last-btn");
-const pageSel = $("page-sel"), perPageSel = $("per-page-sel");
+const pageInfo = $("page-info");
+const perPageSel = $("per-page-sel");
 
 function showMsg(text, ok = true) {
   const old = document.querySelector(".toast");
@@ -130,20 +131,13 @@ function renderPagination() {
   prevBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
   nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
   lastBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
-  pageSel.innerHTML = "";
-  for (let i = 1; i <= totalPages; i++) {
-    const o = document.createElement("option");
-    o.value = i; o.textContent = i + " / " + totalPages;
-    if (i === currentPage) o.selected = true;
-    pageSel.appendChild(o);
-  }
+  pageInfo.textContent = currentPage + " / " + totalPages;
 }
 
 firstBtn.onclick = () => { if (currentPage > 1) { currentPage = 1; loadImgs(); } };
 prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; loadImgs(); } };
 nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; loadImgs(); } };
 lastBtn.onclick = () => { if (currentPage < totalPages) { currentPage = totalPages; loadImgs(); } };
-pageSel.onchange = () => { const p = parseInt(pageSel.value); if (p !== currentPage) { currentPage = p; loadImgs(); } };
 perPageSel.onchange = () => { perPage = parseInt(perPageSel.value); currentPage = 1; Object.keys(imgCache).forEach(k => delete imgCache[k]); loadImgs(); };
 
 dropZone.onclick = () => fileInput.click();
