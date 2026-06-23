@@ -5,6 +5,7 @@ let categories = [];
 let currentCat = "";
 let pendingFiles = [];
 const imgCache = {};
+const cntCache = {};
 
 const tabs = document.getElementById("tabs");
 const grid = document.getElementById("grid");
@@ -44,18 +45,27 @@ function renderTabs() {
   categories.forEach(c => {
     const t = document.createElement("div");
     t.className = "tab" + (c === currentCat ? " on" : "");
-    t.innerHTML = c + ' <span class="n" id="n-' + c + '"></span>';
+    const cntText = cntCache[c] !== undefined ? cntCache[c] + "张" : "";
+    t.innerHTML = c + ' <span class="n" id="n-' + c + '">' + cntText + '</span>';
     t.onclick = () => { currentCat = c; renderTabs(); loadImgs(); };
     tabs.appendChild(t);
-    loadCnt(c);
+    if (cntCache[c] === undefined) loadCnt(c);
   });
 }
 
 async function loadCnt(cat) {
+  if (cntCache[cat] !== undefined) {
+    const el = document.getElementById("n-" + cat);
+    if (el) el.textContent = cntCache[cat] + "张";
+    return;
+  }
   try {
     const d = await bridge.apiGet("category_images", { category: cat });
+    const count = d.images ? d.images.length : 0;
+    cntCache[cat] = count;
+    imgCache[cat] = d.images || [];
     const el = document.getElementById("n-" + cat);
-    if (el) el.textContent = d.images ? d.images.length + "张" : "";
+    if (el) el.textContent = count + "张";
   } catch (e) {}
 }
 
@@ -88,6 +98,9 @@ async function loadImgs() {
     const d = await bridge.apiGet("category_images", { category: currentCat });
     const imgs = d.images || [];
     imgCache[currentCat] = imgs;
+    cntCache[currentCat] = imgs.length;
+    const el = document.getElementById("n-" + currentCat);
+    if (el) el.textContent = imgs.length + "张";
     renderGrid(imgs);
   } catch (e) { grid.innerHTML = '<div class="empty">加载失败</div>'; }
 }
