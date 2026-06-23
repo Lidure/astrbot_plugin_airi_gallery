@@ -567,7 +567,12 @@ class Main(Star):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(proxy_app.run_task(host="0.0.0.0", port=8080))
+                from hypercorn.config import Config
+                from hypercorn.asyncio import serve
+                config = Config()
+                config.bind = ["0.0.0.0:8080"]
+                config.use_reloader = False
+                loop.run_until_complete(serve(proxy_app, config))
             except Exception as e:
                 logger.warning(f"代理服务器启动失败: {e}")
 
