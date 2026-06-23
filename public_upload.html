@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Airi Gallery - 上传</title>
+<style>
+:root{--bg:#fef7f9;--card:#fff;--text:#3d2c3e;--sec:#9b8a9d;--border:#f3e4ee;--pink:#f472b6;--pink-l:#fdf2f8;--purple:#a78bfa;--green:#34d399;--green-l:#ecfdf5;--red:#fb7185;--red-l:#fff1f2;--input:#fdf8fa;--shadow:0 2px 12px rgba(244,114,182,.08);--r:16px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:32px 16px}
+.wrap{max-width:560px;margin:0 auto}
+.hdr{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.hdr-icon{font-size:32px;animation:f 3s ease-in-out infinite}
+@keyframes f{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+h1{font-size:22px;font-weight:700;background:linear-gradient(135deg,var(--pink),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sub{font-size:13px;color:var(--sec);width:100%;margin-top:-8px}
+.card{background:var(--card);border-radius:var(--r);padding:20px;margin-bottom:14px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.card-title{font-size:15px;font-weight:600;margin-bottom:14px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.field label{font-size:12px;font-weight:600;color:var(--sec);text-transform:uppercase;letter-spacing:.5px}
+input,select{padding:10px 14px;border:2px solid var(--border);border-radius:12px;background:var(--input);color:var(--text);font-size:14px;outline:none;width:100%}
+input:focus,select:focus{border-color:var(--pink);box-shadow:0 0 0 3px rgba(244,114,182,.15)}
+select{cursor:pointer}
+.drop{border:2px dashed var(--border);border-radius:12px;padding:28px;text-align:center;cursor:pointer;transition:all .25s;background:var(--input)}
+.drop:hover,.drop.on{border-color:var(--pink);background:var(--pink-l)}
+.drop .icon{font-size:28px;margin-bottom:4px}
+.drop .hint{font-size:12px;color:var(--sec)}
+.preview{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:6px;margin-top:12px}
+.preview .item{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;border:1.5px solid var(--border)}
+.preview .item img{width:100%;height:100%;object-fit:cover}
+.preview .item .rm{position:absolute;top:1px;right:1px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.row{display:flex;gap:8px;align-items:center;margin-top:12px}
+.btn{padding:10px 20px;border-radius:12px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s}
+.bp{background:linear-gradient(135deg,var(--pink),var(--purple));color:#fff}
+.bp:disabled{opacity:.4;cursor:not-allowed}
+.msg{padding:12px 16px;border-radius:12px;margin-top:12px;font-size:13px;font-weight:500}
+.msg-ok{background:var(--green-l);color:#047857;border:1.5px solid var(--green)}
+.msg-err{background:var(--red-l);color:#be123c;border:1.5px solid var(--red)}
+.footer{text-align:center;font-size:12px;color:var(--sec);margin-top:24px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="hdr-icon">🌸</div>
+    <h1>Airi Gallery 上传</h1>
+    <p class="sub">选择图片和分类，一键上传到画廊</p>
+  </div>
+
+  <div class="card" id="auth-card">
+    <div class="card-title">🔑 输入密钥</div>
+    <div class="field">
+      <input type="password" id="token-input" placeholder="请输入上传密钥" />
+    </div>
+    <button class="btn bp" id="token-btn">验证</button>
+    <div id="auth-msg" class="msg" style="display:none"></div>
+  </div>
+
+  <div class="card" id="upload-card" style="display:none">
+    <div class="card-title">📤 上传图片</div>
+    <div class="field">
+      <label>选择分类</label>
+      <select id="cat-sel"><option value="">选择已有分类...</option></select>
+    </div>
+    <div class="field">
+      <label>或手动输入分类名</label>
+      <input type="text" id="cat-input" placeholder="输入分类名" />
+    </div>
+    <div class="field">
+      <label>选择图片</label>
+      <div class="drop" id="drop-zone">
+        <div class="icon">📁</div>
+        <p>点击选择或拖拽图片到这里</p>
+        <p class="hint">支持多选，可同时上传多张</p>
+        <input type="file" id="file-input" multiple accept="image/*" style="display:none" />
+      </div>
+    </div>
+    <div id="preview" class="preview" style="display:none"></div>
+    <div class="row" id="up-actions" style="display:none">
+      <button class="btn bp" id="up-btn">上传 (<span id="up-count">0</span>) 张</button>
+    </div>
+    <div id="up-msg" class="msg" style="display:none"></div>
+  </div>
+
+  <div class="footer">Made with 💕 by Airi Gallery</div>
+</div>
+
+<script>
+const API = "https://gallery.lidure22.xyz/api/plug/astrbot_plugin_airi_gallery";
+let token = "";
+let pendingFiles = [];
+
+const $ = id => document.getElementById(id);
+const authCard = $("auth-card"), uploadCard = $("upload-card");
+const tokenInput = $("token-input"), tokenBtn = $("token-btn"), authMsg = $("auth-msg");
+const catSel = $("cat-sel"), catInput = $("cat-input");
+const dropZone = $("drop-zone"), fileInput = $("file-input");
+const preview = $("preview"), upActions = $("up-actions"), upBtn = $("up-btn"), upCount = $("up-count"), upMsg = $("up-msg");
+
+function showMsg(el, text, ok = true) {
+  el.textContent = (ok ? "🌸 " : "💦 ") + text;
+  el.className = "msg " + (ok ? "msg-ok" : "msg-err");
+  el.style.display = "block";
+  clearTimeout(showMsg._t);
+  showMsg._t = setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+
+async function loadCats() {
+  try {
+    const r = await fetch(API + "/pub/categories?token=" + encodeURIComponent(token));
+    const d = await r.json();
+    if (!d.ok) { showMsg(authMsg, d.error || "加载失败", false); return; }
+    const cats = d.categories || [];
+    const ph = catSel.querySelector("option[value='']");
+    catSel.innerHTML = "";
+    catSel.appendChild(ph || Object.assign(document.createElement("option"), { value: "", textContent: "选择分类..." }));
+    cats.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c; o.textContent = c;
+      catSel.appendChild(o);
+    });
+    authCard.style.display = "none";
+    uploadCard.style.display = "block";
+  } catch (e) {
+    showMsg(authMsg, "连接失败: " + e.message, false);
+  }
+}
+
+tokenBtn.onclick = async () => {
+  token = tokenInput.value.trim();
+  await loadCats();
+};
+
+dropZone.onclick = () => fileInput.click();
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add("on"); };
+dropZone.ondragleave = () => dropZone.classList.remove("on");
+dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove("on"); addFiles(e.dataTransfer.files); };
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ""; };
+
+function addFiles(fl) {
+  for (const f of fl) {
+    if (!f.type.startsWith("image/")) continue;
+    if (pendingFiles.some(s => s.name === f.name && s.size === f.size)) continue;
+    pendingFiles.push(f);
+  }
+  renderPreview();
+}
+
+function renderPreview() {
+  preview.innerHTML = "";
+  if (!pendingFiles.length) { preview.style.display = "none"; upActions.style.display = "none"; return; }
+  preview.style.display = "grid";
+  upActions.style.display = "flex";
+  upCount.textContent = pendingFiles.length;
+  pendingFiles.forEach((f, i) => {
+    const d = document.createElement("div");
+    d.className = "item";
+    d.innerHTML = '<img src="' + URL.createObjectURL(f) + '" /><button class="rm">&times;</button>';
+    d.querySelector(".rm").onclick = () => { pendingFiles.splice(i, 1); renderPreview(); };
+    preview.appendChild(d);
+  });
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+upBtn.onclick = async () => {
+  const cat = catInput.value.trim() || catSel.value;
+  if (!cat) { showMsg(upMsg, "请选择或输入分类", false); return; }
+  if (!pendingFiles.length) { showMsg(upMsg, "请选择图片", false); return; }
+  upBtn.disabled = true;
+  upBtn.textContent = "上传中...";
+  try {
+    const images = [];
+    for (const f of pendingFiles) {
+      images.push({ name: f.name, data: await fileToBase64(f) });
+    }
+    const r = await fetch(API + "/pub/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, category: cat, images })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showMsg(upMsg, "成功上传 " + d.count + " 张到【" + cat + "】");
+      pendingFiles = [];
+      renderPreview();
+    } else {
+      showMsg(upMsg, d.error || "上传失败", false);
+    }
+  } catch (e) {
+    showMsg(upMsg, "上传失败: " + e.message, false);
+  } finally {
+    upBtn.disabled = false;
+    upBtn.textContent = "上传 (" + pendingFiles.length + ") 张";
+  }
+};
+</script>
+</body>
+</html>

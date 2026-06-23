@@ -271,6 +271,18 @@ class Main(Star):
             ["POST"],
             "Delete image from category",
         )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/pub/categories",
+            self._api_pub_categories,
+            ["GET"],
+            "Public categories list",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/pub/upload",
+            self._api_pub_upload,
+            ["POST"],
+            "Public upload with token",
+        )
 
     async def initialize(self):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
@@ -574,6 +586,63 @@ class Main(Star):
             return jsonify({"ok": False, "error": "文件不存在"})
         img_path.unlink()
         return jsonify({"ok": True})
+
+    def _check_upload_token(self, token: str) -> bool:
+        expected = str(self.config.get("upload_token", "")).strip()
+        if not expected:
+            return True
+        return token == expected
+
+    async def _api_pub_categories(self):
+        from quart import request, jsonify
+        token = request.args.get("token", "").strip()
+        if not self._check_upload_token(token):
+            return jsonify({"ok": False, "error": "密钥错误"}), 403
+        cats = []
+        if self.gallery_root.exists():
+            cats = sorted(
+                [p.name for p in self.gallery_root.iterdir() if p.is_dir() and p.name != "generated"],
+                key=lambda s: s.lower(),
+            )
+        return jsonify({"ok": True, "categories": cats})
+
+    async def _api_pub_upload(self):
+        from quart import request, jsonify
+        import base64 as b64mod
+        try:
+            data = await request.get_json()
+            token = data.get("token", "")
+            if not self._check_upload_token(token):
+                return jsonify({"ok": False, "error": "密钥错误"}), 403
+            category = data.get("category", "").strip()
+            images = data.get("images", [])
+            if not category:
+                return jsonify({"ok": False, "error": "请选择分类"}), 400
+            if not images:
+                return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            category = _sanitize_component(category)
+            category_dir = self._category_dir(category)
+            category_dir.mkdir(parents=True, exist_ok=True)
+            uploaded: list[str] = []
+            for img in images:
+                name = img.get("name", "")
+                data_b64 = img.get("data", "")
+                if not name or not data_b64:
+                    continue
+                ext = Path(name).suffix.lower()
+                if ext not in IMAGE_SUFFIXES:
+                    ext = ".png"
+                index = self._next_index()
+                target = category_dir / f"{index}{ext}"
+                while target.exists():
+                    index += 1
+                    target = category_dir / f"{index}{ext}"
+                target.write_bytes(b64mod.b64decode(data_b64))
+                uploaded.append(target.name)
+            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+        except Exception as exc:
+            logger.error(f"公开上传API错误: {exc}")
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
     def _resolve_view_command_mode(self) -> str:
         mode = str(self.config.get("view_command_mode", MODE_NO_PREFIX)).strip().lower()
