@@ -51,6 +51,7 @@ const mask = document.getElementById("mask");
 const mimg = document.getElementById("mimg");
 const closeBtn = document.getElementById("close");
 const pageInfo = document.getElementById("page-info");
+const pager = document.getElementById("pager");
 const prevBtn = document.getElementById("prev-btn");
 const nextBtn = document.getElementById("next-btn");
 
@@ -156,7 +157,8 @@ function renderGrid(data) {
 }
 
 function renderPagination() {
-  if (totalPages <= 1) { pageInfo.textContent = ""; prevBtn.style.display = "none"; nextBtn.style.display = "none"; return; }
+  if (totalPages <= 1) { pager.style.display = "none"; return; }
+  pager.style.display = "flex";
   pageInfo.textContent = currentPage + " / " + totalPages;
   prevBtn.style.display = currentPage > 1 ? "inline-flex" : "none";
   nextBtn.style.display = currentPage < totalPages ? "inline-flex" : "none";
