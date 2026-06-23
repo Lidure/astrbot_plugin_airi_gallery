@@ -478,9 +478,9 @@ class Main(Star):
         """在后台启动gallery代理服务器"""
         import threading
 
-        gallery_page_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME / "pages" / "gallery"
-        if not gallery_page_dir.exists():
-            gallery_page_dir = Path(__file__).resolve().parent / "pages" / "gallery"
+        gallery_page_dir = str(Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME / "pages" / "gallery")
+        if not Path(gallery_page_dir).exists():
+            gallery_page_dir = str(Path(__file__).resolve().parent / "pages" / "gallery")
 
         def run_server():
             import http.server
@@ -546,17 +546,18 @@ class Main(Star):
                             self.end_headers()
                             self.wfile.write(_json.dumps({"error": str(e)}).encode())
                     else:
+                        import os as _os
                         req_path = self.path.split("?")[0].lstrip("/")
                         if not req_path or req_path == "/":
                             req_path = "index.html"
-                        file_path = gallery_page_dir / req_path
-                        print(f"[proxy] {self.path} -> {file_path} exists={file_path.exists()}")
-                        if file_path.is_file():
+                        file_path = _os.path.join(gallery_page_dir, req_path)
+                        if _os.path.isfile(file_path):
                             self.send_response(200)
                             ct = {".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "application/javascript"}.get(file_path.suffix, "application/octet-stream")
                             self.send_header("Content-Type", ct)
                             self.end_headers()
-                            self.wfile.write(file_path.read_bytes())
+                            with open(file_path, "rb") as f:
+                                self.wfile.write(f.read())
                         else:
                             self.send_response(404)
                             self.end_headers()
