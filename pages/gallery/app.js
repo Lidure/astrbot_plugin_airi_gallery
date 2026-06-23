@@ -62,7 +62,10 @@ async function loadCats() {
   try {
     const d = await apiGet("categories");
     categories = d.categories || [];
-  } catch (e) { categories = []; }
+  } catch (e) {
+    console.error("[gallery] loadCats error:", e);
+    categories = [];
+  }
   renderTabs();
   renderOptions();
 }
@@ -257,10 +260,14 @@ upBtn.onclick = async () => {
 closeBtn.onclick = () => mask.classList.remove("on");
 mask.onclick = e => { if (e.target === mask) mask.classList.remove("on"); };
 
-await loadCats();
-if (categories.length) {
-  currentCat = categories[0];
-  renderTabs();
-  await loadImgs();
-  loadAllCnts();
+try {
+  await loadCats();
+  if (categories.length) {
+    currentCat = categories[0];
+    renderTabs();
+    await loadImgs();
+    loadAllCnts();
+  }
+} catch (e) {
+  console.error("[gallery] init error:", e);
 }
