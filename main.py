@@ -588,12 +588,12 @@ class Main(Star):
                         self.end_headers()
 
             try:
-                http.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+                http.server.HTTPServer(("0.0.0.0", 1018), H).serve_forever()
             except Exception as e:
                 logger.warning(f"Gallery服务器启动失败: {e}")
 
         threading.Thread(target=run, daemon=True).start()
-        logger.info("Airi Gallery 服务器已启动在 http://localhost:8080")
+        logger.info("Airi Gallery 服务器已启动在 http://localhost:1018")
 
     async def _api_get_aliases(self):
         from quart import jsonify

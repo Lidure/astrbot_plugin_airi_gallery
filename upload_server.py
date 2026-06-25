@@ -112,11 +112,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", 8080), Handler)
+    server = http.server.HTTPServer(("0.0.0.0", 1018), Handler)
     print("=" * 50)
     print("Airi Gallery 代理服务器")
     print(f"页面目录: {GALLERY_DIR}")
-    print(f"访问地址: http://localhost:8080")
+    print(f"访问地址: http://localhost:1018")
     print(f"Tunnel 地址: https://gallery.lidure22.xyz")
     print("=" * 50)
     server.serve_forever()
