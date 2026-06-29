@@ -570,7 +570,7 @@ select { cursor: pointer; appearance: auto; }
       </div>
       <div class="field">
         <label class="field-label">仓库所有者</label>
-        <input type="text" id="cfg-owner" placeholder="lidure" value="lidure" />
+        <input type="text" id="cfg-owner" placeholder="Lidure" value="Lidure" />
       </div>
       <div class="field">
         <label class="field-label">仓库名称</label>
@@ -714,9 +714,9 @@ const confirmYes = $('confirm-yes'), confirmNo = $('confirm-no');
 function loadConfig() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    const defaults = { platform: 'github', owner: 'lidure', repo: 'airi-gallery-images', branch: 'main' };
+    const defaults = { platform: 'github', owner: 'Lidure', repo: 'airi-gallery-images', branch: 'main' };
     return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
-  } catch { return { platform: 'github', owner: 'lidure', repo: 'airi-gallery-images', branch: 'main' }; }
+  } catch { return { platform: 'github', owner: 'Lidure', repo: 'airi-gallery-images', branch: 'main' }; }
 }
 
 function saveConfig(cfg) {
@@ -726,7 +726,7 @@ function saveConfig(cfg) {
 
 function fillConfigUI() {
   cfgPlatform.value = config.platform || 'github';
-  cfgOwner.value = config.owner || 'lidure';
+  cfgOwner.value = config.owner || 'Lidure';
   cfgRepo.value = config.repo || 'airi-gallery-images';
   cfgBranch.value = config.branch || 'main';
   cfgToken.value = config.token || '';
@@ -876,29 +876,38 @@ async function getTree() {
 async function getFileContent(path) {
   const branch = config.branch || 'main';
 
-  // GitHub: prefer raw CDN (no API rate limit, faster)
+  // GitHub: prefer raw CDN (no API rate limit, faster, no auth needed for public repos)
   if (config.platform !== 'gitee') {
     const encodedPath = path.split('/').map(encodeURIComponent).join('/');
     const rawUrl = `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${branch}/${encodedPath}`;
-    const headers = config.token ? { Authorization: `token ${config.token}` } : {};
-    const resp = await fetch(rawUrl, { headers });
-    if (resp.ok) {
-      return await resp.arrayBuffer();
+    // No Authorization header — public repos don't need it, and sending one
+    // triggers a CORS preflight that raw.githubusercontent.com doesn't support well.
+    try {
+      const resp = await fetch(rawUrl);
+      if (resp.ok) {
+        return await resp.arrayBuffer();
+      }
+    } catch (e) {
+      console.warn(`[Gallery] CDN fetch failed for ${path}:`, e.message);
     }
-    // Fallback: try Contents API
-    const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
-      params: { ref: branch }
-    });
-    if (data?.sha) state.shaCache[path] = data.sha;
-    if (data?.content) {
-      const bin = atob(data.content.replace(/\n/g, ''));
-      const arr = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      return arr.buffer;
-    }
-    if (data?.download_url) {
-      const r = await fetch(data.download_url, { headers: { Authorization: `token ${config.token}` } });
-      if (r.ok) return await r.arrayBuffer();
+    // Fallback: try Contents API (handles private repos & case-insensitive owner)
+    try {
+      const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
+        params: { ref: branch }
+      });
+      if (data?.sha) state.shaCache[path] = data.sha;
+      if (data?.content) {
+        const bin = atob(data.content.replace(/\n/g, ''));
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return arr.buffer;
+      }
+      if (data?.download_url) {
+        const r = await fetch(data.download_url);
+        if (r.ok) return await r.arrayBuffer();
+      }
+    } catch (e) {
+      console.warn(`[Gallery] API fallback failed for ${path}:`, e.message);
     }
     throw new Error('无法获取文件内容');
   }
