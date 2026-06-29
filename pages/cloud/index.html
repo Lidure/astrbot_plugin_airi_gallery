@@ -1170,33 +1170,42 @@ async function loadCategoryImages() {
     div.appendChild(badge);
     div.appendChild(del);
 
-    // Load image via CDN with fallback chain
-    const urls = getImageUrlFallbacks(file.path);
-    let urlIdx = 0;
-    const img = document.createElement('img');
-    img.loading = 'lazy';
-    img.src = urls[0];
-    img.onload = () => {
+    // Load image via Contents API with concurrency pool & retry
+    imagePool(() => withRetry(async () => {
+      let blobUrl = state.imageCache[file.path];
+      if (!blobUrl) {
+        const buf = await getFileContent(file.path);
+        const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+        const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
+        blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
+        state.imageCache[file.path] = blobUrl;
+      }
       div.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = blobUrl; img.loading = 'lazy';
       div.appendChild(img);
       div.appendChild(badge);
       div.appendChild(del);
-    };
-    img.onerror = function tryNext() {
-      urlIdx++;
-      if (urlIdx < urls.length) {
-        img.src = urls[urlIdx];
-        img.onerror = tryNext;
-      } else {
-        div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px;flex-direction:column;gap:2px"><span>加载失败</span><span style="font-size:10px;opacity:0.7">点击重试</span></div>';
-        div.appendChild(badge);
-        div.appendChild(del);
-      }
-    };
+    })).catch((err) => {
+      console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
+      div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px;flex-direction:column;gap:2px"><span>加载失败</span><span style="font-size:10px;opacity:0.7">点击重试</span></div>';
+      div.appendChild(badge);
+      div.appendChild(del);
+    });
 
-    div.onclick = () => {
-      mimg.src = img.src;
-      mask.classList.add('show');
+    div.onclick = async () => {
+      try {
+        let blobUrl = state.imageCache[file.path];
+        if (!blobUrl) {
+          const buf = await getFileContent(file.path);
+          const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+          const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
+          blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
+          state.imageCache[file.path] = blobUrl;
+        }
+        mimg.src = blobUrl;
+        mask.classList.add('show');
+      } catch { toast('无法加载图片', false); }
     };
 
     gridEl.appendChild(div);
