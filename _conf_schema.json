@@ -81,5 +81,51 @@
       "type": "string"
     },
     "default": []
+  },
+  "git_sync_enabled": {
+    "type": "bool",
+    "description": "启用 Git 远程仓库同步",
+    "hint": "开启后，图片上传/删除将自动同步到 GitHub 或 Gitee 仓库。Bot 离线时也可通过 Git 平台网页直接管理图片。",
+    "default": false
+  },
+  "git_platform": {
+    "type": "string",
+    "description": "Git 平台",
+    "hint": "选择 github 或 gitee。GitHub 需要 Personal Access Token（repo 权限）；Gitee 需要私人令牌。",
+    "default": "github",
+    "options": [
+      "github",
+      "gitee"
+    ]
+  },
+  "git_repo_owner": {
+    "type": "string",
+    "description": "仓库所有者/用户名",
+    "hint": "GitHub 或 Gitee 上的用户名或组织名，例如 Lidure。",
+    "default": ""
+  },
+  "git_repo_name": {
+    "type": "string",
+    "description": "仓库名称",
+    "hint": "用于存储图库图片的 Git 仓库名称，例如 airi-gallery-images。",
+    "default": ""
+  },
+  "git_branch": {
+    "type": "string",
+    "description": "分支名",
+    "hint": "同步使用的 Git 分支，默认 main。",
+    "default": "main"
+  },
+  "git_token": {
+    "type": "string",
+    "description": "访问令牌",
+    "hint": "GitHub Personal Access Token 或 Gitee 私人令牌（需 repo 读写权限）。在平台设置页面生成。",
+    "default": ""
+  },
+  "git_sync_interval": {
+    "type": "int",
+    "description": "自动同步间隔（分钟）",
+    "hint": "Bot 在线时每隔多少分钟从远程仓库拉取新图片。设为 0 禁用自动同步（仅在启动时同步一次）。",
+    "default": 5
   }
 }
