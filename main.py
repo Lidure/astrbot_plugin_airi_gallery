@@ -235,6 +235,7 @@ class Main(Star):
         self._sync_timer: threading.Timer | None = None
         self._sync_lock = threading.Lock()
         self._git_sync_enabled = False
+        self._git_push_cancelled = False
 
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
@@ -350,10 +351,23 @@ class Main(Star):
                 elif not self._git_sync_enabled:
                     await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
                 else:
-                    await event.send(event.plain_result("正在将本地图片推送到远程仓库，请稍候…"))
-                    ok, fail = await asyncio.to_thread(self._git_push_all_local)
+                    await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+                    ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
+                    if skip:
+                        await event.send(
+                            event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
+                        )
+                    else:
+                        await event.send(
+                            event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+                        )
+            elif kind == "cancel_push":
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                else:
+                    self._git_push_cancelled = True
                     await event.send(
-                        event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+                        event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
                     )
             elif kind == "view_number":
                 await self._handle_view_number(event, int(payload))
@@ -483,10 +497,26 @@ class Main(Star):
         if not self._git_sync_enabled:
             await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
             return
-        await event.send(event.plain_result("正在将本地图片推送到远程仓库，请稍候…"))
-        ok, fail = await asyncio.to_thread(self._git_push_all_local)
+        await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+        ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
+        if skip:
+            await event.send(
+                event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
+            )
+        else:
+            await event.send(
+                event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+            )
+
+    @filter.command("取消推送")
+    async def cmd_cancel_push(self, event: AstrMessageEvent):
+        """取消正在进行的批量推送操作。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        self._git_push_cancelled = True
         await event.send(
-            event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+            event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
         )
 
     @filter.command("看全部")
@@ -1064,6 +1094,21 @@ class Main(Star):
             logger.warning(f"[Git Sync] base64 解码失败 {path}: {exc}")
             return None
 
+    def _git_fetch_file_sha(self, path: str) -> str | None:
+        """精准获取远程仓库中单个文件的当前 SHA（轻量级，不拉取整棵树）。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+        url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+        status, data = self._git_request("GET", url, params={"ref": branch})
+        if status == 200 and data:
+            sha = data.get("sha", "")
+            if sha:
+                self._sha_cache[path] = sha
+            return sha
+        return None
+
     def _git_put_file(self, path: str, content: bytes, message: str) -> bool:
         """创建或更新远程仓库中的文件。
 
@@ -1111,24 +1156,22 @@ class Main(Star):
             return True
 
         if status in (409, 422):
-            # SHA 冲突 → 刷新 tree 后重试一次
-            logger.info(f"[Git Sync] SHA 冲突，刷新缓存后重试: {path}")
-            tree = self._git_list_tree()
-            if tree is not None:
-                for entry in tree:
-                    self._sha_cache[entry["path"]] = entry["sha"]
+            # SHA 冲突 → 精准获取该文件的最新 SHA 后重试一次
+            logger.info(f"[Git Sync] SHA 冲突，获取最新 SHA 后重试: {path}")
+            fresh_sha = self._git_fetch_file_sha(path)
             # 重试
             if self._git_platform() == "gitee":
-                body["sha"] = self._sha_cache.get(path, "")
-                if body["sha"]:
+                if fresh_sha:
+                    body["sha"] = fresh_sha
                     status2, data2 = self._git_request("PUT", url, json_body=body)
                 else:
-                    del body["sha"]
+                    body.pop("sha", None)
                     status2, data2 = self._git_request("POST", url, json_body=body)
             else:
-                body["sha"] = self._sha_cache.get(path, "")
-                if not body["sha"]:
-                    del body["sha"]
+                if fresh_sha:
+                    body["sha"] = fresh_sha
+                else:
+                    body.pop("sha", None)
                 status2, data2 = self._git_request("PUT", url, json_body=body)
             if status2 in (200, 201):
                 new_sha = (data2 or {}).get("content", {}).get("sha", "")
@@ -1275,18 +1318,25 @@ class Main(Star):
         返回 (成功数, 失败数)。
         """
         if not self._git_sync_enabled:
-            return 0, 0
+            return 0, 0, 0
 
+        self._git_push_cancelled = False
         success = 0
         failed = 0
+        skipped = 0
 
         for path in sorted(self.gallery_root.rglob("*")):
+            if self._git_push_cancelled:
+                logger.info("[Git Sync] 批量推送已被用户取消。")
+                break
             if not _is_image_file(path):
                 continue
             git_path = self._to_git_path(str(path))
             if not git_path:
                 continue
             try:
+                # 先获取远程的最新 SHA，避免批量推送时缓存过期导致 409
+                self._git_fetch_file_sha(git_path)
                 content = path.read_bytes()
                 ok = self._git_put_file(git_path, content, f"Sync {git_path}")
                 if ok:
@@ -1297,8 +1347,13 @@ class Main(Star):
                 logger.error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
                 failed += 1
 
-        logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}。")
-        return success, failed
+        # 统计被跳过的剩余文件
+        if self._git_push_cancelled:
+            all_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
+            skipped = len(all_images) - success - failed
+
+        logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
+        return success, failed, skipped
 
     def _git_startup_sync(self) -> None:
         """启动时的完整同步流程：先拉取远程，若远程为空而本地有图则自动推送。"""
@@ -1323,8 +1378,8 @@ class Main(Star):
                 logger.info(
                     f"[Git Sync] 远程仓库为空，本地有 {len(local_images)} 张图片，自动推送中…"
                 )
-                ok, fail = self._git_push_all_local()
-                logger.info(f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}。")
+                ok, fail, skip = self._git_push_all_local()
+                logger.info(f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}，跳过 {skip}。")
 
     def _start_sync_timer(self) -> None:
         """启动定时从远程拉取的后台任务。"""
@@ -1530,6 +1585,9 @@ class Main(Star):
 
         if normalized == "/推送到远程":
             return "push_to_remote", None
+
+        if normalized == "/取消推送":
+            return "cancel_push", None
 
         create_match = re.match(r"^/创建\s*(.+)$", normalized)
         upload_match = re.match(r"^/上传\s*(.+)$", normalized)
