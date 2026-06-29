@@ -1,0 +1,1283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Airi Gallery Cloud</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+:root {
+  --bg: #fef6fa;
+  --card: #ffffff;
+  --text: #4a3548;
+  --muted: #a894a6;
+  --border: #f3e0ec;
+  --input-bg: #fdf8fb;
+  --pink: #f472b6;
+  --pink-soft: #fce7f3;
+  --lavender: #c4b5fd;
+  --lavender-soft: #ede9fe;
+  --mint: #6ee7b7;
+  --mint-soft: #d1fae5;
+  --peach: #fdba74;
+  --peach-soft: #fff7ed;
+  --red: #fb7185;
+  --red-soft: #ffe4e6;
+  --shadow-sm: 0 1px 3px rgba(244,114,182,0.08);
+  --shadow: 0 4px 12px rgba(244,114,182,0.1);
+  --shadow-lg: 0 8px 24px rgba(244,114,182,0.12);
+  --radius: 20px;
+  --radius-sm: 12px;
+  --radius-xs: 8px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 28px 16px;
+  line-height: 1.5;
+}
+.container { max-width: 780px; margin: 0 auto; }
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.header-icon {
+  width: 44px; height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fce7f3, #ede9fe);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  box-shadow: var(--shadow-sm);
+  animation: bounce 2.5s ease-in-out infinite;
+}
+@keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+.header h1 {
+  font-size: 21px; font-weight: 700;
+  background: linear-gradient(135deg, #ec4899, #a78bfa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+  flex: 1;
+}
+.header-actions { display: flex; gap: 6px; }
+.icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+}
+.icon-btn:hover { border-color: var(--pink); color: var(--pink); background: var(--pink-soft); }
+.icon-btn.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+/* Status bar */
+.status-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px; font-weight: 500;
+  margin-bottom: 16px;
+  transition: all 0.3s;
+}
+.status-bar.connected { background: var(--mint-soft); color: #065f46; }
+.status-bar.disconnected { background: var(--red-soft); color: #9f1239; }
+.status-bar .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-bar.connected .dot { background: #10b981; }
+.status-bar.disconnected .dot { background: var(--red); }
+.status-bar .stats { margin-left: auto; opacity: 0.7; }
+
+/* Card */
+.card {
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.25s, transform 0.25s;
+}
+.card:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+.card-title {
+  font-size: 15px; font-weight: 600;
+  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* Settings panel */
+.settings-panel {
+  background: var(--card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+  display: none;
+}
+.settings-panel.show { display: block; }
+.settings-panel .card-title { margin-bottom: 14px; }
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 500px) { .settings-grid { grid-template-columns: 1fr; } }
+.settings-grid .full { grid-column: 1 / -1; }
+
+/* Field */
+.field { margin-bottom: 14px; }
+.field-label {
+  display: block; font-size: 12px; font-weight: 600;
+  margin-bottom: 6px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+/* Inputs */
+input[type="text"], input[type="password"], input[type="number"], select {
+  width: 100%;
+  height: 40px;
+  padding: 0 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+input:focus, select:focus {
+  border-color: var(--pink);
+  box-shadow: 0 0 0 4px rgba(244,114,182,0.12);
+}
+select { cursor: pointer; appearance: auto; }
+.input-sm {
+  width: 64px; height: 36px;
+  padding: 0 10px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px; text-align: center;
+  outline: none; transition: all 0.2s;
+  -moz-appearance: textfield;
+}
+.input-sm::-webkit-outer-spin-button, .input-sm::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.input-sm:focus { border-color: var(--pink); box-shadow: 0 0 0 4px rgba(244,114,182,0.12); }
+.select-cute {
+  height: 32px;
+  padding: 0 28px 0 12px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--pink-soft);
+  color: var(--text);
+  font-size: 12px; font-weight: 600;
+  outline: none; cursor: pointer;
+  appearance: auto;
+  transition: all 0.2s;
+}
+.select-cute:focus { border-color: var(--pink); box-shadow: 0 0 0 4px rgba(244,114,182,0.12); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; height: 38px; padding: 0 18px;
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s;
+  border: 2px solid var(--border);
+  background: var(--card); color: var(--text);
+}
+.btn:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.btn:active { transform: translateY(0); }
+.btn-pink {
+  background: linear-gradient(135deg, #f472b6, #c084fc);
+  color: #fff; border: none;
+}
+.btn-pink:hover { opacity: 0.9; }
+.btn-pink:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+.btn-mint {
+  background: linear-gradient(135deg, #6ee7b7, #34d399);
+  color: #fff; border: none;
+}
+.btn-mint:hover { opacity: 0.9; }
+.btn-sm { height: 32px; padding: 0 12px; font-size: 12px; border-radius: var(--radius-xs); }
+.btn-ghost { border: none; background: transparent; }
+.btn-ghost:hover { background: var(--pink-soft); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Upload zone */
+.drop-zone {
+  border: 2px dashed #e9d5e8;
+  border-radius: var(--radius);
+  padding: 28px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s;
+  background: linear-gradient(135deg, #fdf8fb, #f5f0ff);
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--pink);
+  background: linear-gradient(135deg, #fce7f3, #ede9fe);
+  transform: scale(1.01);
+}
+.drop-zone .icon { font-size: 30px; margin-bottom: 6px; }
+.drop-zone p { font-size: 13px; color: var(--muted); }
+.drop-zone .hint { font-size: 11px; margin-top: 4px; opacity: 0.7; }
+
+/* Preview */
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px; margin-top: 12px;
+}
+.preview-item {
+  position: relative; aspect-ratio: 1;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  border: 2px solid var(--border);
+  transition: border-color 0.2s;
+}
+.preview-item:hover { border-color: var(--pink); }
+.preview-item img { width: 100%; height: 100%; object-fit: cover; }
+.preview-item .rm {
+  position: absolute; top: 3px; right: 3px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--red); color: #fff;
+  border: none; font-size: 11px;
+  cursor: pointer; display: none;
+  align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.preview-item:hover .rm { display: flex; }
+.preview-item .rm:hover { transform: scale(1.15); }
+
+/* Upload progress */
+.progress-wrap {
+  margin-top: 12px;
+  display: none;
+}
+.progress-wrap.show { display: block; }
+.progress-bar-bg {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(135deg, #f472b6, #c084fc);
+  border-radius: 3px;
+  transition: width 0.3s;
+  width: 0%;
+}
+.progress-text {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: center;
+}
+
+/* Tabs */
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab {
+  height: 34px; padding: 0 16px;
+  border-radius: 999px;
+  font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: all 0.2s;
+  border: 2px solid var(--border);
+  background: var(--card); color: var(--text);
+  display: inline-flex; align-items: center;
+}
+.tab:hover { border-color: var(--pink); color: var(--pink); background: var(--pink-soft); }
+.tab.active {
+  background: linear-gradient(135deg, #f472b6, #c084fc);
+  color: #fff; border-color: transparent;
+  box-shadow: 0 2px 8px rgba(244,114,182,0.3);
+}
+.tab .count {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+/* Grid toolbar */
+.grid-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
+}
+.grid-toolbar label {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+
+/* Image grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+@media (max-width: 600px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+.grid-item {
+  position: relative; aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid var(--border);
+  background: var(--input-bg);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.grid-item:hover {
+  border-color: var(--pink);
+  transform: scale(1.03);
+  box-shadow: var(--shadow);
+}
+.grid-item img { width: 100%; height: 100%; object-fit: cover; }
+.grid-item .badge {
+  position: absolute; bottom: 4px; left: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(74,53,72,0.65);
+  backdrop-filter: blur(6px);
+  color: #fff; font-size: 10px; font-weight: 600;
+}
+.grid-item .del-btn {
+  position: absolute; top: 4px; right: 4px;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--red); color: #fff;
+  border: none; font-size: 12px;
+  cursor: pointer;
+  display: none; align-items: center; justify-content: center;
+  transition: transform 0.15s;
+  box-shadow: 0 2px 6px rgba(251,113,133,0.4);
+}
+.grid-item:hover .del-btn { display: flex; }
+.grid-item .del-btn:hover { transform: scale(1.15); }
+.grid-item.loading {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 18px;
+}
+
+/* Pager */
+.pager {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1.5px solid var(--border);
+}
+.pager .btn-sm { border-radius: var(--radius-xs); }
+.page-indicator {
+  font-size: 13px; font-weight: 600;
+  color: var(--text);
+  padding: 4px 14px;
+  background: var(--pink-soft);
+  border-radius: var(--radius-xs);
+  min-width: 70px;
+  text-align: center;
+}
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 28px; left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 22px;
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+  z-index: 200;
+  animation: toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  box-shadow: var(--shadow-lg);
+  border: 1.5px solid transparent;
+}
+@keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(12px) scale(0.95); } to { opacity:1; transform:translateX(-50%) translateY(0) scale(1); } }
+.toast-ok { background: var(--mint-soft); color: #065f46; border-color: var(--mint); }
+.toast-err { background: var(--red-soft); color: #9f1239; border-color: var(--red); }
+
+/* Modal */
+.modal-mask {
+  position: fixed; inset: 0;
+  background: rgba(74,53,72,0.6);
+  backdrop-filter: blur(8px);
+  display: none; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.modal-mask.show { display: flex; }
+.modal {
+  position: relative;
+  max-width: 92vw; max-height: 92vh;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  animation: modalIn 0.25s ease;
+}
+@keyframes modalIn { from { opacity:0; transform:scale(0.92); } to { opacity:1; transform:scale(1); } }
+.modal img {
+  max-width: 92vw; max-height: 92vh;
+  display: block; border-radius: var(--radius);
+}
+.modal .close-btn {
+  position: absolute; top: 12px; right: 12px;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(6px);
+  color: var(--text);
+  border: none; font-size: 20px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+.modal .close-btn:hover { background: #fff; transform: scale(1.1); }
+
+.empty {
+  text-align: center; padding: 40px 20px;
+  color: var(--muted); font-size: 13px;
+}
+.empty .icon { font-size: 36px; margin-bottom: 8px; opacity: 0.5; }
+
+/* Confirm dialog */
+.confirm-mask {
+  position: fixed; inset: 0;
+  background: rgba(74,53,72,0.5);
+  backdrop-filter: blur(4px);
+  display: none; align-items: center; justify-content: center;
+  z-index: 150;
+}
+.confirm-mask.show { display: flex; }
+.confirm-box {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 340px;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+.confirm-box p { font-size: 14px; margin-bottom: 18px; }
+.confirm-box .btns { display: flex; gap: 10px; justify-content: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="header-icon">🌸</div>
+    <h1>Airi Gallery Cloud</h1>
+    <div class="header-actions">
+      <button class="icon-btn" id="sync-btn" title="同步远程仓库">🔄</button>
+      <button class="icon-btn" id="settings-btn" title="设置">⚙️</button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar disconnected" id="status-bar">
+    <span class="dot"></span>
+    <span id="status-text">未连接</span>
+    <span class="stats" id="status-stats"></span>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="settings-panel" id="settings-panel">
+    <div class="card-title">⚙️ GitHub / Gitee 配置</div>
+    <div class="settings-grid">
+      <div class="field">
+        <label class="field-label">平台</label>
+        <select id="cfg-platform">
+          <option value="github">GitHub</option>
+          <option value="gitee">Gitee</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">分支</label>
+        <input type="text" id="cfg-branch" placeholder="main" value="main" />
+      </div>
+      <div class="field">
+        <label class="field-label">仓库所有者</label>
+        <input type="text" id="cfg-owner" placeholder="你的用户名" />
+      </div>
+      <div class="field">
+        <label class="field-label">仓库名称</label>
+        <input type="text" id="cfg-repo" placeholder="airi-gallery-images" />
+      </div>
+      <div class="field full">
+        <label class="field-label">Access Token</label>
+        <input type="password" id="cfg-token" placeholder="ghp_xxxx 或 Gitee 私人令牌" />
+      </div>
+    </div>
+    <div style="margin-top:14px; display:flex; gap:8px;">
+      <button class="btn btn-pink" id="save-cfg-btn">💾 保存并连接</button>
+      <button class="btn btn-ghost" id="test-cfg-btn">🔍 测试连接</button>
+    </div>
+  </div>
+
+  <!-- Upload section -->
+  <div class="card" id="upload-card" style="display:none">
+    <div class="card-title">📤 上传图片</div>
+    <div class="field">
+      <label class="field-label">分类</label>
+      <div class="row">
+        <select id="up-sel" style="flex:1"><option value="">选择已有分类...</option></select>
+        <input type="text" id="up-input" placeholder="或手动输入新分类" style="flex:1" />
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">图片</label>
+      <div class="drop-zone" id="drop">
+        <div class="icon">📁</div>
+        <p>点击选择或拖拽图片到这里</p>
+        <p class="hint">支持多选，可同时上传多张</p>
+        <input type="file" id="file" multiple accept="image/*" style="display:none" />
+      </div>
+    </div>
+    <div id="preview" class="preview-grid" style="display:none"></div>
+    <div id="up-actions" style="display:none; margin-top:14px">
+      <button class="btn btn-pink" id="up-btn">✨ 上传 (<span id="up-count">0</span>) 张</button>
+    </div>
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-bar-bg"><div class="progress-bar" id="progress-bar"></div></div>
+      <div class="progress-text" id="progress-text"></div>
+    </div>
+  </div>
+
+  <!-- Browse section -->
+  <div class="card" id="browse-card" style="display:none">
+    <div class="card-title">🗂️ 图库分类</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="grid-toolbar">
+      <label>每页</label>
+      <input type="number" id="per-page-input" value="21" min="1" max="100" class="input-sm" />
+      <label>张</label>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div class="pager" id="pager" style="display:none">
+      <button class="btn btn-sm" id="first-btn" style="display:none">首页</button>
+      <button class="btn btn-sm" id="prev-btn" style="display:none">上一页</button>
+      <select id="page-sel" class="select-cute"></select>
+      <button class="btn btn-sm" id="next-btn" style="display:none">下一页</button>
+      <button class="btn btn-sm" id="last-btn" style="display:none">末页</button>
+    </div>
+  </div>
+
+  <!-- Welcome (when not configured) -->
+  <div class="card" id="welcome-card">
+    <div class="empty">
+      <div class="icon">🌸</div>
+      <p style="margin-bottom:8px">欢迎使用 Airi Gallery Cloud</p>
+      <p style="font-size:12px">点击右上角 ⚙️ 配置你的 GitHub/Gitee 仓库信息，<br>即可随时随地通过网页管理图库。</p>
+    </div>
+  </div>
+</div>
+
+<!-- Image modal -->
+<div class="modal-mask" id="mask">
+  <div class="modal">
+    <button class="close-btn" id="close">×</button>
+    <img id="mimg" />
+  </div>
+</div>
+
+<!-- Confirm dialog -->
+<div class="confirm-mask" id="confirm-mask">
+  <div class="confirm-box">
+    <p id="confirm-text"></p>
+    <div class="btns">
+      <button class="btn btn-sm" id="confirm-no">取消</button>
+      <button class="btn btn-sm btn-pink" id="confirm-yes">确认</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+// Config & State
+// ──────────────────────────────────────────────
+const LS_KEY = 'airi_gallery_cloud_config';
+const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
+
+let config = loadConfig();
+let state = {
+  connected: false,
+  categories: [],        // [{name, files: [{path, sha, size}]}]
+  currentCat: '',
+  currentPage: 1,
+  totalPages: 1,
+  perPage: 21,
+  pendingFiles: [],
+  shaCache: {},           // path -> sha
+  treeFetched: false,
+  imageCache: {},         // path -> blob URL
+};
+
+// ──────────────────────────────────────────────
+// DOM references
+// ──────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const statusBar = $('status-bar'), statusText = $('status-text'), statusStats = $('status-stats');
+const settingsPanel = $('settings-panel'), settingsBtn = $('settings-btn'), syncBtn = $('sync-btn');
+const welcomeCard = $('welcome-card'), uploadCard = $('upload-card'), browseCard = $('browse-card');
+const cfgPlatform = $('cfg-platform'), cfgOwner = $('cfg-owner'), cfgRepo = $('cfg-repo');
+const cfgBranch = $('cfg-branch'), cfgToken = $('cfg-token');
+const saveCfgBtn = $('save-cfg-btn'), testCfgBtn = $('test-cfg-btn');
+const upSel = $('up-sel'), upInput = $('up-input');
+const dropZone = $('drop'), fileInput = $('file'), previewEl = $('preview');
+const upActions = $('up-actions'), upBtn = $('up-btn'), upCount = $('up-count');
+const progressWrap = $('progress-wrap'), progressBar = $('progress-bar'), progressText = $('progress-text');
+const tabsEl = $('tabs'), gridEl = $('grid');
+const pagerEl = $('pager'), prevBtn = $('prev-btn'), nextBtn = $('next-btn');
+const firstBtn = $('first-btn'), lastBtn = $('last-btn');
+const pageSel = $('page-sel'), perPageInput = $('per-page-input');
+const mask = $('mask'), mimg = $('mimg'), closeBtn = $('close');
+const confirmMask = $('confirm-mask'), confirmText = $('confirm-text');
+const confirmYes = $('confirm-yes'), confirmNo = $('confirm-no');
+
+// ──────────────────────────────────────────────
+// Config persistence (localStorage)
+// ──────────────────────────────────────────────
+function loadConfig() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveConfig(cfg) {
+  config = cfg;
+  localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+}
+
+function fillConfigUI() {
+  cfgPlatform.value = config.platform || 'github';
+  cfgOwner.value = config.owner || '';
+  cfgRepo.value = config.repo || '';
+  cfgBranch.value = config.branch || 'main';
+  cfgToken.value = config.token || '';
+}
+
+// ──────────────────────────────────────────────
+// Toast & Confirm
+// ──────────────────────────────────────────────
+function toast(text, ok = true) {
+  const old = document.querySelector('.toast');
+  if (old) old.remove();
+  const el = document.createElement('div');
+  el.className = 'toast ' + (ok ? 'toast-ok' : 'toast-err');
+  el.textContent = (ok ? '✨ ' : '💦 ') + text;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function confirm2(text) {
+  return new Promise(resolve => {
+    confirmText.textContent = text;
+    confirmMask.classList.add('show');
+    confirmYes.onclick = () => { confirmMask.classList.remove('show'); resolve(true); };
+    confirmNo.onclick = () => { confirmMask.classList.remove('show'); resolve(false); };
+  });
+}
+
+// ──────────────────────────────────────────────
+// GitHub / Gitee API
+// ──────────────────────────────────────────────
+function apiBase() {
+  return config.platform === 'gitee'
+    ? 'https://gitee.com/api/v5'
+    : 'https://api.github.com';
+}
+
+function authHeaders() {
+  if (config.platform === 'gitee') {
+    return { 'Content-Type': 'application/json' };
+  }
+  return {
+    'Authorization': `token ${config.token}`,
+    'Accept': 'application/vnd.github.v3+json',
+  };
+}
+
+function authParams() {
+  if (config.platform === 'gitee') {
+    return { access_token: config.token };
+  }
+  return {};
+}
+
+async function ghRequest(method, path, { body = null, params = {} } = {}) {
+  const url = new URL(apiBase() + path);
+  const ap = authParams();
+  for (const [k, v] of Object.entries(ap)) url.searchParams.set(k, v);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+  const opts = { method, headers: authHeaders() };
+  if (body) {
+    opts.body = JSON.stringify(body);
+    if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+  }
+
+  const resp = await fetch(url.toString(), opts);
+
+  if (resp.status === 401 || resp.status === 403) {
+    throw new Error('认证失败，请检查 Token');
+  }
+  if (resp.status === 429) {
+    throw new Error('API 请求频率超限，请稍后重试');
+  }
+  if (resp.status === 409) {
+    throw new Error('仓库为空或冲突，请先在仓库中创建一个初始 commit');
+  }
+
+  let data = null;
+  if (resp.status !== 204 && resp.status !== 205) {
+    try { data = await resp.json(); } catch { data = null; }
+  }
+
+  if (!resp.ok) {
+    throw new Error(data?.message || `HTTP ${resp.status}`);
+  }
+  return { status: resp.status, data };
+}
+
+async function getTree() {
+  const owner = config.owner, repo = config.repo, branch = config.branch || 'main';
+
+  if (config.platform === 'gitee') {
+    const { data: branchData } = await ghRequest('GET', `/repos/${owner}/${repo}/branches/${branch}`);
+    const sha = branchData?.commit?.sha;
+    if (!sha) throw new Error('无法获取分支信息');
+    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${sha}`, { params: { recursive: '1' } });
+    return (data?.tree || []).filter(e => e.type === 'blob').map(e => ({
+      path: e.path, sha: e.sha, size: e.size || 0
+    }));
+  } else {
+    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${branch}`, { params: { recursive: '1' } });
+    if (data?.truncated) console.warn('文件树被截断');
+    return (data?.tree || []).filter(e => e.type === 'blob').map(e => ({
+      path: e.path, sha: e.sha, size: e.size || 0
+    }));
+  }
+}
+
+async function getFileContent(path) {
+  const branch = config.branch || 'main';
+  const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
+    params: { ref: branch }
+  });
+  if (data?.sha) state.shaCache[path] = data.sha;
+
+  // If content is available (file < 1MB), decode base64
+  if (data?.content) {
+    const bin = atob(data.content.replace(/\n/g, ''));
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr.buffer;
+  }
+
+  // Large file: use download_url
+  if (data?.download_url) {
+    const resp = await fetch(data.download_url, {
+      headers: config.platform !== 'gitee' ? { Authorization: `token ${config.token}` } : {}
+    });
+    if (!resp.ok) throw new Error('下载大文件失败');
+    return await resp.arrayBuffer();
+  }
+
+  throw new Error('无法获取文件内容');
+}
+
+async function putFile(path, contentB64, message) {
+  const branch = config.branch || 'main';
+  const existingSha = state.shaCache[path];
+  const body = { message, content: contentB64 };
+
+  if (config.platform === 'gitee') {
+    if (existingSha) {
+      body.sha = existingSha;
+      const { data } = await ghRequest('PUT', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
+      const newSha = data?.content?.sha;
+      if (newSha) state.shaCache[path] = newSha;
+      return data;
+    } else {
+      const { data } = await ghRequest('POST', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
+      const newSha = data?.content?.sha;
+      if (newSha) state.shaCache[path] = newSha;
+      return data;
+    }
+  } else {
+    body.branch = branch;
+    if (existingSha) body.sha = existingSha;
+    const { data } = await ghRequest('PUT', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
+    const newSha = data?.content?.sha;
+    if (newSha) state.shaCache[path] = newSha;
+    return data;
+  }
+}
+
+async function deleteFile(path, message) {
+  const branch = config.branch || 'main';
+  const sha = state.shaCache[path];
+  if (!sha) {
+    console.warn(`SHA not cached for ${path}, skip delete`);
+    return;
+  }
+  const body = { message, sha };
+  if (config.platform !== 'gitee') body.branch = branch;
+  await ghRequest('DELETE', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
+  delete state.shaCache[path];
+}
+
+// ──────────────────────────────────────────────
+// Category & file parsing from tree
+// ──────────────────────────────────────────────
+function parseCategories(tree) {
+  const catMap = {};
+  for (const entry of tree) {
+    const parts = entry.path.split('/');
+    if (parts.length < 3 || parts[0] !== 'gallery') continue;
+    const cat = parts[1];
+    const fileName = parts.slice(2).join('/');
+    const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+    if (!IMAGE_SUFFIXES.has(ext)) continue;
+    if (!catMap[cat]) catMap[cat] = [];
+    catMap[cat].push(entry);
+  }
+  // Sort files within each category by name (numeric order)
+  const result = [];
+  for (const [name, files] of Object.entries(catMap)) {
+    files.sort((a, b) => {
+      const na = parseInt(a.path.split('/').pop()) || 0;
+      const nb = parseInt(b.path.split('/').pop()) || 0;
+      return na - nb;
+    });
+    result.push({ name, files });
+  }
+  result.sort((a, b) => a.name.localeCompare(b.name));
+  return result;
+}
+
+function getNextIndex(catFiles) {
+  let max = 0;
+  for (const f of catFiles) {
+    const fileName = f.path.split('/').pop();
+    const num = parseInt(fileName);
+    if (!isNaN(num) && num > max) max = num;
+  }
+  return max + 1;
+}
+
+// ──────────────────────────────────────────────
+// UI: Status & connection
+// ──────────────────────────────────────────────
+function updateStatus(connected, extra = '') {
+  state.connected = connected;
+  statusBar.className = 'status-bar ' + (connected ? 'connected' : 'disconnected');
+  statusText.textContent = connected ? `已连接 ${config.platform}/${config.owner}/${config.repo}` : '未连接';
+  statusStats.textContent = extra;
+}
+
+function showMainUI(show) {
+  welcomeCard.style.display = show ? 'none' : 'block';
+  uploadCard.style.display = show ? 'block' : 'none';
+  browseCard.style.display = show ? 'block' : 'none';
+}
+
+// ──────────────────────────────────────────────
+// Sync: fetch tree & render
+// ──────────────────────────────────────────────
+async function syncFromRemote() {
+  if (!config.token || !config.owner || !config.repo) return;
+  syncBtn.classList.add('spinning');
+  try {
+    const tree = await getTree();
+    state.treeFetched = true;
+    // Update sha cache
+    for (const entry of tree) {
+      state.shaCache[entry.path] = entry.sha;
+    }
+    state.categories = parseCategories(tree);
+    const totalImages = state.categories.reduce((s, c) => s + c.files.length, 0);
+    updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
+    renderTabs();
+    renderOptions();
+    showMainUI(true);
+    if (state.categories.length && !state.currentCat) {
+      state.currentCat = state.categories[0].name;
+      renderTabs();
+    }
+    if (state.currentCat) await loadCategoryImages();
+  } catch (e) {
+    updateStatus(false);
+    toast(e.message, false);
+    if (!state.treeFetched) showMainUI(false);
+  } finally {
+    syncBtn.classList.remove('spinning');
+  }
+}
+
+// ──────────────────────────────────────────────
+// UI: Tabs
+// ──────────────────────────────────────────────
+function renderTabs() {
+  tabsEl.innerHTML = '';
+  if (!state.categories.length) {
+    tabsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">暂无分类，上传图片时会自动创建</span>';
+    return;
+  }
+  for (const cat of state.categories) {
+    const t = document.createElement('div');
+    t.className = 'tab' + (cat.name === state.currentCat ? ' active' : '');
+    t.innerHTML = `${cat.name}<span class="count">(${cat.files.length})</span>`;
+    t.onclick = () => {
+      state.currentCat = cat.name;
+      state.currentPage = 1;
+      renderTabs();
+      loadCategoryImages();
+    };
+    tabsEl.appendChild(t);
+  }
+}
+
+function renderOptions() {
+  const ph = upSel.querySelector("option[value='']");
+  upSel.innerHTML = '';
+  const def = ph || Object.assign(document.createElement('option'), { value: '', textContent: '选择分类...' });
+  upSel.appendChild(def);
+  for (const cat of state.categories) {
+    const o = document.createElement('option');
+    o.value = cat.name; o.textContent = cat.name;
+    upSel.appendChild(o);
+  }
+}
+
+// ──────────────────────────────────────────────
+// UI: Grid (load images for current page)
+// ──────────────────────────────────────────────
+async function loadCategoryImages() {
+  const cat = state.categories.find(c => c.name === state.currentCat);
+  if (!cat) {
+    gridEl.innerHTML = '<div class="empty"><div class="icon">📂</div>选择一个分类查看图片</div>';
+    return;
+  }
+
+  const total = cat.files.length;
+  state.totalPages = Math.max(1, Math.ceil(total / state.perPage));
+  if (state.currentPage > state.totalPages) state.currentPage = state.totalPages;
+
+  const start = (state.currentPage - 1) * state.perPage;
+  const pageFiles = cat.files.slice(start, start + state.perPage);
+
+  if (!pageFiles.length) {
+    gridEl.innerHTML = '<div class="empty"><div class="icon">🍃</div>该分类暂无图片</div>';
+    renderPagination();
+    return;
+  }
+
+  gridEl.innerHTML = '';
+  for (const file of pageFiles) {
+    const div = document.createElement('div');
+    div.className = 'grid-item';
+    const fileName = file.path.split('/').pop();
+    const idx = fileName.match(/^(\d+)/);
+
+    // Placeholder
+    div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--muted)">⏳</div>';
+
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = '#' + (idx ? idx[1] : '?');
+
+    const del = document.createElement('button');
+    del.className = 'del-btn';
+    del.textContent = '×';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      const yes = await confirm2(`确认删除 ${fileName}？`);
+      if (!yes) return;
+      try {
+        await deleteFile(file.path, `Delete ${fileName}`);
+        toast(`已删除 ${fileName}`);
+        await syncFromRemote();
+      } catch (err) { toast('删除失败: ' + err.message, false); }
+    };
+
+    div.appendChild(badge);
+    div.appendChild(del);
+
+    // Load image async
+    (async () => {
+      try {
+        let blobUrl = state.imageCache[file.path];
+        if (!blobUrl) {
+          const buf = await getFileContent(file.path);
+          const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+          const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
+          blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
+          state.imageCache[file.path] = blobUrl;
+        }
+        div.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = blobUrl; img.loading = 'lazy';
+        div.appendChild(img);
+        div.appendChild(badge);
+        div.appendChild(del);
+      } catch {
+        div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px">加载失败</div>';
+        div.appendChild(badge);
+        div.appendChild(del);
+      }
+    })();
+
+    div.onclick = async () => {
+      try {
+        let blobUrl = state.imageCache[file.path];
+        if (!blobUrl) {
+          const buf = await getFileContent(file.path);
+          blobUrl = URL.createObjectURL(new Blob([buf]));
+          state.imageCache[file.path] = blobUrl;
+        }
+        mimg.src = blobUrl;
+        mask.classList.add('show');
+      } catch { toast('无法加载图片', false); }
+    };
+
+    gridEl.appendChild(div);
+  }
+
+  renderPagination();
+}
+
+// ──────────────────────────────────────────────
+// UI: Pagination
+// ──────────────────────────────────────────────
+function renderPagination() {
+  if (state.totalPages <= 1) { pagerEl.style.display = 'none'; return; }
+  pagerEl.style.display = 'flex';
+  firstBtn.style.display = state.currentPage > 1 ? 'inline-flex' : 'none';
+  prevBtn.style.display = state.currentPage > 1 ? 'inline-flex' : 'none';
+  nextBtn.style.display = state.currentPage < state.totalPages ? 'inline-flex' : 'none';
+  lastBtn.style.display = state.currentPage < state.totalPages ? 'inline-flex' : 'none';
+  pageSel.innerHTML = '';
+  for (let i = 1; i <= state.totalPages; i++) {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = i + ' / ' + state.totalPages;
+    if (i === state.currentPage) o.selected = true;
+    pageSel.appendChild(o);
+  }
+}
+
+firstBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage = 1; loadCategoryImages(); } };
+prevBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage--; loadCategoryImages(); } };
+nextBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage++; loadCategoryImages(); } };
+lastBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage = state.totalPages; loadCategoryImages(); } };
+pageSel.onchange = () => { const p = parseInt(pageSel.value); if (p !== state.currentPage) { state.currentPage = p; loadCategoryImages(); } };
+perPageInput.onchange = () => {
+  let v = parseInt(perPageInput.value);
+  if (isNaN(v) || v < 1) v = 21;
+  v = Math.max(1, Math.min(200, v));
+  perPageInput.value = v;
+  if (v !== state.perPage) {
+    state.perPage = v; state.currentPage = 1;
+    state.imageCache = {};
+    loadCategoryImages();
+  }
+};
+perPageInput.onkeydown = e => { if (e.key === 'Enter') perPageInput.onchange(); };
+
+// ──────────────────────────────────────────────
+// Upload
+// ──────────────────────────────────────────────
+dropZone.onclick = () => fileInput.click();
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
+dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove('dragover'); addFiles(e.dataTransfer.files); };
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
+
+function addFiles(fl) {
+  for (const f of fl) {
+    if (!f.type.startsWith('image/')) continue;
+    if (state.pendingFiles.some(s => s.name === f.name && s.size === f.size)) continue;
+    state.pendingFiles.push(f);
+  }
+  renderPreview();
+}
+
+function renderPreview() {
+  previewEl.innerHTML = '';
+  if (!state.pendingFiles.length) {
+    previewEl.style.display = 'none'; upActions.style.display = 'none'; return;
+  }
+  previewEl.style.display = 'grid';
+  upActions.style.display = 'block';
+  upCount.textContent = state.pendingFiles.length;
+  state.pendingFiles.forEach((f, i) => {
+    const d = document.createElement('div');
+    d.className = 'preview-item';
+    d.innerHTML = `<img src="${URL.createObjectURL(f)}" /><button class="rm">×</button>`;
+    d.querySelector('.rm').onclick = () => { state.pendingFiles.splice(i, 1); renderPreview(); };
+    previewEl.appendChild(d);
+  });
+}
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+upBtn.onclick = async () => {
+  const cat = upInput.value.trim() || upSel.value;
+  if (!cat) { toast('请选择或输入分类', false); return; }
+  if (!state.pendingFiles.length) { toast('请选择图片', false); return; }
+
+  upBtn.disabled = true;
+  progressWrap.classList.add('show');
+
+  const catData = state.categories.find(c => c.name === cat);
+  let nextIdx = catData ? getNextIndex(catData.files) : 1;
+  const total = state.pendingFiles.length;
+  let uploaded = 0, failed = 0;
+
+  for (let i = 0; i < state.pendingFiles.length; i++) {
+    const f = state.pendingFiles[i];
+    const ext = getExt(f.name);
+    const fileName = `${nextIdx}${ext}`;
+    const gitPath = `gallery/${cat}/${fileName}`;
+
+    progressText.textContent = `上传中 ${i + 1} / ${total}...`;
+    progressBar.style.width = `${((i) / total) * 100}%`;
+
+    try {
+      const b64 = await fileToBase64(f);
+      await putFile(gitPath, b64, `Upload ${cat}/${fileName}`);
+      uploaded++;
+      nextIdx++;
+    } catch (e) {
+      console.error(`Upload failed: ${gitPath}`, e);
+      failed++;
+    }
+  }
+
+  progressBar.style.width = '100%';
+  progressText.textContent = `完成：成功 ${uploaded}，失败 ${failed}`;
+
+  if (uploaded > 0) {
+    toast(`成功上传 ${uploaded} 张到【${cat}】` + (failed ? `，${failed} 张失败` : ''));
+    state.pendingFiles = [];
+    renderPreview();
+    state.imageCache = {};
+    await syncFromRemote();
+  } else {
+    toast('上传失败', false);
+  }
+
+  upBtn.disabled = false;
+  upBtn.innerHTML = `✨ 上传 (<span id="up-count">${state.pendingFiles.length}</span>) 张`;
+  setTimeout(() => { progressWrap.classList.remove('show'); progressBar.style.width = '0%'; }, 3000);
+};
+
+function getExt(filename) {
+  const dot = filename.lastIndexOf('.');
+  if (dot < 0) return '.png';
+  const ext = filename.substring(dot).toLowerCase();
+  return IMAGE_SUFFIXES.has(ext) ? ext : '.png';
+}
+
+// ──────────────────────────────────────────────
+// Settings
+// ──────────────────────────────────────────────
+settingsBtn.onclick = () => {
+  settingsPanel.classList.toggle('show');
+  if (settingsPanel.classList.contains('show')) fillConfigUI();
+};
+
+saveCfgBtn.onclick = () => {
+  const cfg = {
+    platform: cfgPlatform.value,
+    owner: cfgOwner.value.trim(),
+    repo: cfgRepo.value.trim(),
+    branch: cfgBranch.value.trim() || 'main',
+    token: cfgToken.value.trim(),
+  };
+  if (!cfg.owner || !cfg.repo || !cfg.token) {
+    toast('请填写完整配置', false); return;
+  }
+  saveConfig(cfg);
+  toast('配置已保存');
+  settingsPanel.classList.remove('show');
+  // Reset state and reconnect
+  state.shaCache = {};
+  state.imageCache = {};
+  state.categories = [];
+  state.currentCat = '';
+  state.treeFetched = false;
+  syncFromRemote();
+};
+
+testCfgBtn.onclick = async () => {
+  const cfg = {
+    platform: cfgPlatform.value,
+    owner: cfgOwner.value.trim(),
+    repo: cfgRepo.value.trim(),
+    branch: cfgBranch.value.trim() || 'main',
+    token: cfgToken.value.trim(),
+  };
+  if (!cfg.owner || !cfg.repo || !cfg.token) {
+    toast('请填写完整配置', false); return;
+  }
+  testCfgBtn.disabled = true;
+  testCfgBtn.textContent = '测试中...';
+  const oldConfig = { ...config };
+  config = cfg;
+  try {
+    const tree = await getTree();
+    const imgCount = tree.filter(e => e.path.startsWith('gallery/') && IMAGE_SUFFIXES.has(e.path.substring(e.path.lastIndexOf('.')))).length;
+    toast(`连接成功！仓库中有 ${tree.length} 个文件，其中 ${imgCount} 张图库图片`);
+  } catch (e) {
+    toast('连接失败: ' + e.message, false);
+  } finally {
+    config = oldConfig;
+    testCfgBtn.disabled = false;
+    testCfgBtn.textContent = '🔍 测试连接';
+  }
+};
+
+syncBtn.onclick = async () => {
+  if (!config.token) { toast('请先配置仓库信息', false); settingsPanel.classList.add('show'); return; }
+  state.imageCache = {};
+  await syncFromRemote();
+  if (state.connected) toast('同步完成');
+};
+
+// ──────────────────────────────────────────────
+// Modal
+// ──────────────────────────────────────────────
+closeBtn.onclick = () => mask.classList.remove('show');
+mask.onclick = e => { if (e.target === mask) mask.classList.remove('show'); };
+
+// ──────────────────────────────────────────────
+// Init
+// ──────────────────────────────────────────────
+(async function init() {
+  if (config.token && config.owner && config.repo) {
+    showMainUI(true);
+    await syncFromRemote();
+  } else {
+    showMainUI(false);
+    settingsPanel.classList.add('show');
+  }
+})();
+</script>
+</body>
+</html>
