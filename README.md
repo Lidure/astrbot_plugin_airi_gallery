@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v1.0.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.0.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -31,6 +31,10 @@
 | 🤖 **LLM 工具** | 接入 LLM Function Calling，让 AI 在对话中自动发表情包 |
 | 🏷️ **分类昵称** | 为分类设置多个别名，「看看爱莉」等同于「看看airi」 |
 | 🌐 **昵称管理页** | 内置 Web UI 页面，可视化管理分类昵称，告别手动编辑配置 |
+| ☁️ **Git 远程同步** | 图片自动同步到 GitHub / Gitee 仓库，支持定时拉取与批量推送 |
+| 🖥️ **云端管理页** | 独立 Cloudflare Pages SPA，暗色模式、紧凑分页，无需 Bot 在线即可管理图片 |
+| 📤 **公开上传** | 通过 `upload_token` 密钥控制外部上传权限，支持网页端直接传图 |
+| ⏹️ **推送控制** | `/推送` 批量同步本地图片，`/取消推送` 随时中断 |
 
 ## 📦 文件说明
 
@@ -41,6 +45,8 @@
 | `_conf_schema.json` | 插件配置说明 |
 | `requirements.txt` | 依赖声明 |
 | `pages/aliases/` | 昵称管理 Web UI 页面（HTML / CSS / JS） |
+| `pages/gallery/` | 本地画廊 Web UI 页面（HTML / CSS / JS） |
+| `pages/cloud/` | 云端管理页面（独立 SPA，部署到 Cloudflare Pages） |
 | `assets/` | 角标图片等静态资源 |
 
 ## 🎮 使用指南
@@ -133,7 +139,52 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 > 如果开启了 `use_permission`，上述管理命令只允许 `admins` 或 `whitelist` 里的用户执行。
 
-### 8. Web UI 昵称管理页面
+### 8. Git 远程仓库同步
+
+开启 Git 同步后，图片上传和删除操作会自动同步到 GitHub 或 Gitee 远程仓库。远程仓库作为主存储，本地仅作为缓存，Bot 离线时也可通过 Git 平台网页直接管理图片。
+
+**配置步骤：**
+
+1. 在 GitHub 或 Gitee 上创建一个仓库（公开或私有均可），用于存放图片
+2. 生成访问令牌：GitHub 需要 Personal Access Token（勾选 `repo` scope），Gitee 需要私人令牌
+3. 在 AstrBot 配置中填写 Git 同步相关配置项（见下方配置表）
+4. 重启 Bot，插件会自动拉取远程图片并在后续操作中保持同步
+
+**同步行为：**
+
+- 启动时自动从远程仓库拉取所有图片到本地
+- 每次上传/删除图片后，自动推送到远程仓库
+- 启动时如果本地有未推送的图片，会自动推送到远程
+- 可配置定时器，定期从远程拉取新增图片（默认每 5 分钟）
+- 使用 `/推送` 可手动批量推送本地未同步的图片
+- 使用 `/取消推送` 可中断正在进行的批量推送
+
+### 9. 云端管理页面
+
+插件提供了独立的单页应用（SPA），可部署到 Cloudflare Pages，无需 Bot 在线即可通过浏览器管理远程仓库中的图片。
+
+**部署方式：**
+
+1. 将 `pages/cloud/index.html` 上传到 Cloudflare Pages 项目
+2. 打开页面后填写配置信息：
+
+| 配置项 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| 平台 | `github` | `github` 或 `gitee` |
+| 仓库所有者 | `Lidure` | 用户名或组织名 |
+| 仓库名称 | `airi-gallery-images` | 图片存储仓库名 |
+| 分支 | `main` | 同步使用的分支 |
+| 访问令牌 | （空） | GitHub / Gitee 令牌，需读写权限 |
+
+**功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除。
+
+### 10. 公开上传
+
+配置 `upload_token` 后，外部用户可通过 Web 页面上传图片到图库。令牌作为简单的访问密钥，防止未授权上传。
+
+> ⚠️ **安全提示：** `upload_token` 留空则任何人皆可上传，建议务必设置一个密钥。
+
+### 11. Web UI 昵称管理页面
 
 插件内置了 Web UI 页面，用于可视化管理分类昵称。
 
@@ -154,8 +205,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | :--- | :--- | :--- | :--- |
 | `view_command_mode` | string | `no_prefix` | 浏览命令触发模式：`no_prefix`（看看xxx）或 `prefix`（/看看xxx） |
 | `view_multiple_mode` | string | `single` | 多图发送模式：`single`（单条消息）或 `forward`（合并转发） |
+| `view_multiple_max` | int | `10` | 看看多张的最大数量（范围 5~10），LLM 工具也受此限制 |
 | `view_all_collage_compress` | bool | `false` | 是否压缩看全部拼图 |
 | `view_all_collage_scale` | float | `0.85` | 看全部拼图压缩比例（`0.5`~`1.0`） |
+| `upload_token` | string | `""` | 公开上传密钥，留空则无需密钥（不安全） |
 
 ### LLM 工具配置
 
@@ -177,6 +230,18 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `admins` | list | `[]` | 管理员名单（QQ号、用户名或 UID） |
 | `whitelist` | list | `[]` | 白名单（临时授权执行管理命令） |
 
+### Git 同步配置
+
+| 配置项 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `git_sync_enabled` | bool | `false` | 是否启用 Git 远程仓库同步 |
+| `git_platform` | string | `github` | Git 平台：`github` 或 `gitee` |
+| `git_repo_owner` | string | `""` | 仓库所有者/用户名，例如 `Lidure` |
+| `git_repo_name` | string | `""` | 仓库名称，例如 `airi-gallery-images` |
+| `git_branch` | string | `main` | 同步使用的 Git 分支 |
+| `git_token` | string | `""` | 访问令牌（GitHub PAT 或 Gitee 私人令牌，需 repo 读写权限） |
+| `git_sync_interval` | int | `5` | 自动同步间隔（分钟），设为 0 禁用定时拉取 |
+
 ## 🧭 命令速查表
 
 | 命令 | 权限 | 说明 |
@@ -192,6 +257,8 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/上传<分类>` | 管理员 | 上传图片到指定分类 |
 | `/删除123` | 管理员 | 删除指定编号图片 |
 | `/导入图库` | 管理员 | 重排图库编号 |
+| `/推送` | 管理员 | 批量推送本地未同步图片到远程仓库 |
+| `/取消推送` | 管理员 | 取消正在进行的批量推送 |
 
 ## 📁 存储结构
 
@@ -203,6 +270,18 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.0.0
+
+- **新增** Git 远程仓库同步：支持 GitHub / Gitee，图片上传/删除自动同步
+- **新增** 批量推送（`/推送`）与取消推送（`/取消推送`）命令
+- **新增** Cloudflare Pages 云端管理页面（暗色模式、紧凑分页、并发加载）
+- **新增** 公开上传密钥（`upload_token`），控制外部上传权限
+- **新增** 自动同步定时器，可配置拉取间隔（默认 5 分钟）
+- **新增** `view_multiple_max` 配置项，自定义多图发送上限（5~10）
+- **优化** 启动时自动推送本地未同步图片到远程仓库
+- **优化** 云端页面使用并发池（4）+ 指数退避重试，提升加载稳定性
+- **移除** 隧道代理相关代码（`upload_server.py`、内嵌 HTTP 代理）
 
 ### v1.0.0
 

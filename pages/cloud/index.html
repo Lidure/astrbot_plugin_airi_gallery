@@ -873,27 +873,6 @@ async function getTree() {
   }
 }
 
-function getRawImageUrl(path) {
-  const branch = config.branch || 'main';
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  if (config.platform === 'gitee') {
-    return `https://gitee.com/${config.owner}/${config.repo}/raw/${branch}/${encodedPath}`;
-  }
-  return `https://cdn.jsdelivr.net/gh/${config.owner}/${config.repo}@${branch}/${encodedPath}`;
-}
-
-function getImageUrlFallbacks(path) {
-  const branch = config.branch || 'main';
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  if (config.platform === 'gitee') {
-    return [`https://gitee.com/${config.owner}/${config.repo}/raw/${branch}/${encodedPath}`];
-  }
-  return [
-    `https://cdn.jsdelivr.net/gh/${config.owner}/${config.repo}@${branch}/${encodedPath}`,
-    `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${branch}/${encodedPath}`,
-    `https://ghfast.top/https://raw.githubusercontent.com/${config.owner}/${config.repo}/${branch}/${encodedPath}`,
-  ];
-}
 
 async function getFileContent(path) {
   const branch = config.branch || 'main';
