@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import base64 as b64mod
 import math
 import os
 import random
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -226,6 +229,14 @@ class Main(Star):
         self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
         self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
+
+        # Git 远程同步状态
+        self._sha_cache: dict[str, str] = {}
+        self._sync_timer: threading.Timer | None = None
+        self._sync_lock = threading.Lock()
+        self._git_sync_enabled = False
+        self._git_push_cancelled = False
+
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
 
@@ -288,6 +299,20 @@ class Main(Star):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
         await self._normalize_gallery_tree()
         self._start_gallery_server()
+        # Git 远程同步初始化
+        if self.config.get("git_sync_enabled", False):
+            self._validate_git_config()
+            if self._git_sync_enabled:
+                threading.Thread(
+                    target=self._git_startup_sync, daemon=True
+                ).start()
+                self._start_sync_timer()
+
+    async def terminate(self):
+        """插件卸载时清理定时同步任务。"""
+        if self._sync_timer is not None:
+            self._sync_timer.cancel()
+            self._sync_timer = None
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
     async def handle_gallery_message(self, event: AstrMessageEvent):
@@ -319,6 +344,30 @@ class Main(Star):
                     renamed_count = await self._normalize_gallery_tree()
                     await event.send(
                         event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。")
+                    )
+            elif kind == "push_to_remote":
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                elif not self._git_sync_enabled:
+                    await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+                else:
+                    await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+                    ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
+                    if skip:
+                        await event.send(
+                            event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
+                        )
+                    else:
+                        await event.send(
+                            event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+                        )
+            elif kind == "cancel_push":
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                else:
+                    self._git_push_cancelled = True
+                    await event.send(
+                        event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
                     )
             elif kind == "view_number":
                 await self._handle_view_number(event, int(payload))
@@ -439,6 +488,37 @@ class Main(Star):
         renamed_count = await self._normalize_gallery_tree()
         await event.send(event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。"))
 
+    @filter.command("推送到远程")
+    async def cmd_push_to_remote(self, event: AstrMessageEvent):
+        """将本地所有图片批量推送到 Git 远程仓库。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._git_sync_enabled:
+            await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+            return
+        await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+        ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
+        if skip:
+            await event.send(
+                event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
+            )
+        else:
+            await event.send(
+                event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+            )
+
+    @filter.command("取消推送")
+    async def cmd_cancel_push(self, event: AstrMessageEvent):
+        """取消正在进行的批量推送操作。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        self._git_push_cancelled = True
+        await event.send(
+            event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
+        )
+
     @filter.command("看全部")
     async def cmd_view_all(self, event: AstrMessageEvent):
         """注册 `/看全部` 命令并展示分类总览（需要带参数）。"""
@@ -473,9 +553,6 @@ class Main(Star):
         else:
             lines = [f"{alias} → {cat}" for alias, cat in sorted(self.category_aliases.items(), key=lambda x: x[1].lower())]
             yield event.plain_result("分类昵称映射：\n" + "\n".join(lines))
-
-    async def terminate(self):
-        """插件卸载或停用时调用。"""
 
     def _start_gallery_server(self):
         """在后台启动gallery页面+API代理服务器"""
@@ -680,6 +757,11 @@ class Main(Star):
                     target = category_dir / f"{index}{ext}"
                 target.write_bytes(b64mod.b64decode(data_b64))
                 uploaded.append(target.name)
+                # Git 远程推送
+                if self._git_sync_enabled:
+                    asyncio.get_event_loop().run_in_executor(
+                        None, self._git_push_file, str(target)
+                    )
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
         except Exception as exc:
             logger.error(f"上传API错误: {exc}")
@@ -710,7 +792,13 @@ class Main(Star):
         img_path = self._category_dir(category) / name
         if not img_path.exists():
             return jsonify({"ok": False, "error": "文件不存在"})
+        img_path_str = str(img_path)
         img_path.unlink()
+        # Git 远程删除
+        if self._git_sync_enabled:
+            asyncio.get_event_loop().run_in_executor(
+                None, self._git_delete_remote_file, img_path_str
+            )
         return jsonify({"ok": True})
 
     def _check_upload_token(self, token: str) -> bool:
@@ -765,6 +853,11 @@ class Main(Star):
                     target = category_dir / f"{index}{ext}"
                 target.write_bytes(b64mod.b64decode(data_b64))
                 uploaded.append(target.name)
+                # Git 远程推送
+                if self._git_sync_enabled:
+                    asyncio.get_event_loop().run_in_executor(
+                        None, self._git_push_file, str(target)
+                    )
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
         except Exception as exc:
             logger.error(f"公开上传API错误: {exc}")
@@ -792,6 +885,522 @@ class Main(Star):
         except (TypeError, ValueError):
             return 0.85
         return max(0.5, min(1.0, scale))
+
+    # ──────────────────────────────────────────────
+    # Git 远程仓库同步
+    # ──────────────────────────────────────────────
+
+    def _validate_git_config(self) -> None:
+        """检查 Git 同步所需的配置是否完整，结果写入 self._git_sync_enabled。"""
+        if not self.config.get("git_sync_enabled", False):
+            self._git_sync_enabled = False
+            return
+        platform = str(self.config.get("git_platform", "github")).strip().lower()
+        owner = str(self.config.get("git_repo_owner", "")).strip()
+        repo = str(self.config.get("git_repo_name", "")).strip()
+        token = str(self.config.get("git_token", "")).strip()
+        if platform not in ("github", "gitee"):
+            logger.warning("[Git Sync] git_platform 必须是 github 或 gitee，已禁用同步。")
+            self._git_sync_enabled = False
+            return
+        if not owner or not repo or not token:
+            logger.warning("[Git Sync] git_repo_owner / git_repo_name / git_token 未填写，已禁用同步。")
+            self._git_sync_enabled = False
+            return
+        self._git_sync_enabled = True
+        logger.info(f"[Git Sync] 已启用，平台={platform} 仓库={owner}/{repo}")
+
+    def _git_platform(self) -> str:
+        return str(self.config.get("git_platform", "github")).strip().lower()
+
+    def _git_owner(self) -> str:
+        return str(self.config.get("git_repo_owner", "")).strip()
+
+    def _git_repo(self) -> str:
+        return str(self.config.get("git_repo_name", "")).strip()
+
+    def _git_branch(self) -> str:
+        return str(self.config.get("git_branch", "main")).strip() or "main"
+
+    def _git_token(self) -> str:
+        return str(self.config.get("git_token", "")).strip()
+
+    def _git_api_base(self) -> str:
+        if self._git_platform() == "gitee":
+            return "https://gitee.com/api/v5"
+        return "https://api.github.com"
+
+    def _git_headers(self) -> dict:
+        """返回 Git API 请求所需的 HTTP 头。"""
+        if self._git_platform() == "gitee":
+            return {"Content-Type": "application/json"}
+        return {
+            "Authorization": f"token {self._git_token()}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+    def _git_auth_params(self) -> dict:
+        """返回需要附加到 URL 查询参数中的认证字段（仅 Gitee 使用）。"""
+        if self._git_platform() == "gitee":
+            return {"access_token": self._git_token()}
+        return {}
+
+    def _git_request(
+        self,
+        method: str,
+        url: str,
+        json_body: dict | None = None,
+        params: dict | None = None,
+        timeout: int = 30,
+    ) -> tuple[int, dict | None]:
+        """统一的 Git API 请求方法。
+
+        返回 (status_code, response_json_or_None)。
+        """
+        import requests as req_lib
+
+        merged_params = dict(self._git_auth_params())
+        if params:
+            merged_params.update(params)
+
+        headers = self._git_headers()
+        try:
+            resp = req_lib.request(
+                method,
+                url,
+                json=json_body,
+                params=merged_params,
+                headers=headers,
+                timeout=timeout,
+            )
+        except req_lib.Timeout:
+            logger.warning(f"[Git Sync] 请求超时: {method} {url}")
+            return 0, None
+        except req_lib.ConnectionError:
+            logger.warning(f"[Git Sync] 连接失败: {method} {url}")
+            return 0, None
+        except Exception as exc:
+            logger.error(f"[Git Sync] 请求异常: {exc}")
+            return 0, None
+
+        status = resp.status_code
+        if status in (401, 403):
+            logger.error(f"[Git Sync] 认证失败 (HTTP {status})，请检查 git_token。URL: {url}")
+            self._git_sync_enabled = False
+            return status, None
+        if status == 429:
+            reset = resp.headers.get("X-RateLimit-Reset", "")
+            logger.warning(f"[Git Sync] 触发 API 限流 (429)，重置时间: {reset}")
+            return status, None
+        if status == 409 or status == 422:
+            # SHA 冲突或验证失败
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+            logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
+            return status, body
+
+        try:
+            body = resp.json() if resp.content else None
+        except Exception:
+            body = None
+        return status, body
+
+    def _git_list_tree(self) -> list[dict] | None:
+        """递归列出远程仓库的所有文件。
+
+        返回 [{"path": "gallery/cat/001.png", "sha": "abc...", "size": 12345}, ...]
+        失败返回 None。
+        """
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+
+        if self._git_platform() == "gitee":
+            # Gitee tree 需要 commit SHA，先获取分支的 HEAD
+            branch_url = f"{base}/repos/{owner}/{repo}/branches/{branch}"
+            status, branch_data = self._git_request("GET", branch_url)
+            if status != 200 or not branch_data:
+                logger.warning(f"[Git Sync] 获取 Gitee 分支信息失败 (HTTP {status})")
+                return None
+            sha = branch_data.get("commit", {}).get("sha", "")
+            if not sha:
+                return None
+            tree_url = f"{base}/repos/{owner}/{repo}/git/trees/{sha}"
+        else:
+            tree_url = f"{base}/repos/{owner}/{repo}/git/trees/{branch}"
+
+        status, data = self._git_request("GET", tree_url, params={"recursive": "1"})
+        if status != 200 or not data:
+            if status == 404:
+                logger.info("[Git Sync] 远程仓库为空或不存在，视为全新开始。")
+                return []
+            logger.warning(f"[Git Sync] 获取文件树失败 (HTTP {status})")
+            return None
+
+        tree = data.get("tree", [])
+        if data.get("truncated"):
+            logger.warning("[Git Sync] 文件树被截断（>100k 文件），同步可能不完整。")
+
+        result = []
+        for entry in tree:
+            if entry.get("type") == "blob":
+                result.append({
+                    "path": entry["path"],
+                    "sha": entry.get("sha", ""),
+                    "size": entry.get("size", 0),
+                })
+        return result
+
+    def _git_get_file(self, path: str) -> bytes | None:
+        """下载远程仓库中单个文件的内容，同时更新 SHA 缓存。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+
+        url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+        status, data = self._git_request("GET", url, params={"ref": branch})
+        if status != 200 or not data:
+            logger.warning(f"[Git Sync] 下载文件失败 {path} (HTTP {status})")
+            return None
+
+        # 更新 SHA 缓存
+        sha = data.get("sha", "")
+        if sha:
+            self._sha_cache[path] = sha
+
+        # 检查文件大小：Contents API 对 >1MB 文件不返回 content 字段
+        size = data.get("size", 0)
+        content_b64 = data.get("content", "")
+        if not content_b64 and size > 0:
+            # 使用 download_url 直接获取原始文件
+            dl_url = data.get("download_url", "")
+            if dl_url:
+                import requests as req_lib
+                try:
+                    resp = req_lib.get(dl_url, timeout=60)
+                    if resp.status_code == 200:
+                        return resp.content
+                except Exception as exc:
+                    logger.warning(f"[Git Sync] download_url 获取失败 {path}: {exc}")
+            return None
+
+        try:
+            return b64mod.b64decode(content_b64.replace("\n", ""))
+        except Exception as exc:
+            logger.warning(f"[Git Sync] base64 解码失败 {path}: {exc}")
+            return None
+
+    def _git_fetch_file_sha(self, path: str) -> str | None:
+        """精准获取远程仓库中单个文件的当前 SHA（轻量级，不拉取整棵树）。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+        url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+        status, data = self._git_request("GET", url, params={"ref": branch})
+        if status == 200 and data:
+            sha = data.get("sha", "")
+            if sha:
+                self._sha_cache[path] = sha
+            return sha
+        return None
+
+    def _git_put_file(self, path: str, content: bytes, message: str) -> bool:
+        """创建或更新远程仓库中的文件。
+
+        如果 self._sha_cache 中已有该路径的 SHA，视为更新；否则视为创建。
+        成功返回 True，失败返回 False。
+        """
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+        content_b64 = b64mod.b64encode(content).decode("ascii")
+
+        url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+
+        if self._git_platform() == "gitee":
+            # Gitee: POST 创建，PUT 更新
+            body: dict = {
+                "message": message,
+                "content": content_b64,
+            }
+            old_sha = self._sha_cache.get(path)
+            if old_sha:
+                body["sha"] = old_sha
+                method = "PUT"
+            else:
+                method = "POST"
+            status, data = self._git_request(method, url, json_body=body)
+        else:
+            # GitHub: 统一 PUT
+            body = {
+                "message": message,
+                "content": content_b64,
+                "branch": branch,
+            }
+            old_sha = self._sha_cache.get(path)
+            if old_sha:
+                body["sha"] = old_sha
+            status, data = self._git_request("PUT", url, json_body=body)
+
+        if status in (200, 201):
+            # 更新 SHA 缓存
+            new_sha = (data or {}).get("content", {}).get("sha", "")
+            if new_sha:
+                self._sha_cache[path] = new_sha
+            return True
+
+        if status in (409, 422):
+            # SHA 冲突 → 精准获取该文件的最新 SHA 后重试一次
+            logger.info(f"[Git Sync] SHA 冲突，获取最新 SHA 后重试: {path}")
+            fresh_sha = self._git_fetch_file_sha(path)
+            # 重试
+            if self._git_platform() == "gitee":
+                if fresh_sha:
+                    body["sha"] = fresh_sha
+                    status2, data2 = self._git_request("PUT", url, json_body=body)
+                else:
+                    body.pop("sha", None)
+                    status2, data2 = self._git_request("POST", url, json_body=body)
+            else:
+                if fresh_sha:
+                    body["sha"] = fresh_sha
+                else:
+                    body.pop("sha", None)
+                status2, data2 = self._git_request("PUT", url, json_body=body)
+            if status2 in (200, 201):
+                new_sha = (data2 or {}).get("content", {}).get("sha", "")
+                if new_sha:
+                    self._sha_cache[path] = new_sha
+                return True
+            logger.error(f"[Git Sync] 重试后仍失败 {path} (HTTP {status2})")
+            return False
+
+        logger.error(f"[Git Sync] 上传文件失败 {path} (HTTP {status})")
+        return False
+
+    def _git_delete_file(self, path: str, message: str) -> bool:
+        """删除远程仓库中的文件。需要 SHA 缓存中有该文件的 SHA。"""
+        sha = self._sha_cache.get(path)
+        if not sha:
+            logger.info(f"[Git Sync] 跳过删除 {path}：SHA 缓存中不存在，可能远程也没有。")
+            return True
+
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+        url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+
+        if self._git_platform() == "gitee":
+            body = {"message": message, "sha": sha}
+        else:
+            body = {"message": message, "sha": sha, "branch": branch}
+
+        status, _ = self._git_request("DELETE", url, json_body=body)
+        if status in (200, 204):
+            self._sha_cache.pop(path, None)
+            return True
+        logger.error(f"[Git Sync] 删除文件失败 {path} (HTTP {status})")
+        return False
+
+    def _to_git_path(self, local_abs_path: str) -> str | None:
+        """将本地绝对路径转换为仓库中的相对路径。
+
+        例如: .../gallery/ena/001.png → gallery/ena/001.png
+        """
+        try:
+            rel = Path(local_abs_path).relative_to(self.gallery_root.parent)
+            return rel.as_posix()
+        except ValueError:
+            return None
+
+    def _git_sync_from_remote(self) -> None:
+        """从远程仓库拉取所有图片到本地缓存。线程安全。"""
+        if not self._git_sync_enabled:
+            return
+        if not self._sync_lock.acquire(blocking=False):
+            logger.debug("[Git Sync] 已有同步任务进行中，跳过本次。")
+            return
+        try:
+            tree = self._git_list_tree()
+            if tree is None:
+                return
+
+            # 只关注 gallery/ 下的图片文件
+            remote_images: dict[str, dict] = {}
+            for entry in tree:
+                p = entry["path"]
+                if not p.startswith("gallery/"):
+                    continue
+                suffix = Path(p).suffix.lower()
+                if suffix not in IMAGE_SUFFIXES:
+                    continue
+                remote_images[p] = entry
+                # 更新 SHA 缓存
+                self._sha_cache[p] = entry["sha"]
+
+            synced = 0
+            for git_path, info in remote_images.items():
+                # 转换为本地路径
+                local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
+                remote_size = info.get("size", 0)
+
+                if local_path.exists():
+                    local_size = local_path.stat().st_size
+                    if local_size == remote_size:
+                        continue  # 大小一致，跳过
+                else:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+                content = self._git_get_file(git_path)
+                if content is not None:
+                    local_path.write_bytes(content)
+                    synced += 1
+
+            # 检测远程删除：SHA 缓存中有、但远程 tree 中没有的 gallery/ 文件
+            stale_paths = [
+                cached_path for cached_path in list(self._sha_cache.keys())
+                if cached_path.startswith("gallery/")
+                and cached_path not in remote_images
+            ]
+            for cached_path in stale_paths:
+                local_path = self.gallery_root.parent / cached_path.replace("/", os.sep)
+                if local_path.exists():
+                    local_path.unlink()
+                    logger.info(f"[Git Sync] 远程已删除，本地同步移除: {cached_path}")
+                self._sha_cache.pop(cached_path, None)
+
+            if synced:
+                logger.info(f"[Git Sync] 从远程同步了 {synced} 个文件。")
+        except Exception as exc:
+            logger.error(f"[Git Sync] 同步异常: {exc}")
+        finally:
+            self._sync_lock.release()
+
+    def _git_push_file(self, local_abs_path: str) -> None:
+        """将本地文件推送到远程仓库。"""
+        if not self._git_sync_enabled:
+            return
+        git_path = self._to_git_path(local_abs_path)
+        if not git_path:
+            return
+        try:
+            content = Path(local_abs_path).read_bytes()
+            ok = self._git_put_file(git_path, content, f"Upload {git_path}")
+            if ok:
+                logger.info(f"[Git Sync] 已推送到远程: {git_path}")
+        except Exception as exc:
+            logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
+
+    def _git_delete_remote_file(self, local_abs_path: str) -> None:
+        """将本地文件的对应远程文件删除。"""
+        if not self._git_sync_enabled:
+            return
+        git_path = self._to_git_path(local_abs_path)
+        if not git_path:
+            return
+        try:
+            ok = self._git_delete_file(git_path, f"Delete {git_path}")
+            if ok:
+                logger.info(f"[Git Sync] 已从远程删除: {git_path}")
+        except Exception as exc:
+            logger.error(f"[Git Sync] 远程删除失败 {git_path}: {exc}")
+
+    def _git_push_all_local(self) -> tuple[int, int]:
+        """将本地 gallery 中所有图片批量推送到远程仓库。
+
+        返回 (成功数, 失败数)。
+        """
+        if not self._git_sync_enabled:
+            return 0, 0, 0
+
+        self._git_push_cancelled = False
+        success = 0
+        failed = 0
+        skipped = 0
+
+        for path in sorted(self.gallery_root.rglob("*")):
+            if self._git_push_cancelled:
+                logger.info("[Git Sync] 批量推送已被用户取消。")
+                break
+            if not _is_image_file(path):
+                continue
+            git_path = self._to_git_path(str(path))
+            if not git_path:
+                continue
+            try:
+                # 先获取远程的最新 SHA，避免批量推送时缓存过期导致 409
+                self._git_fetch_file_sha(git_path)
+                content = path.read_bytes()
+                ok = self._git_put_file(git_path, content, f"Sync {git_path}")
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+            except Exception as exc:
+                logger.error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
+                failed += 1
+
+        # 统计被跳过的剩余文件
+        if self._git_push_cancelled:
+            all_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
+            skipped = len(all_images) - success - failed
+
+        logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
+        return success, failed, skipped
+
+    def _git_startup_sync(self) -> None:
+        """启动时的完整同步流程：先拉取远程，若远程为空而本地有图则自动推送。"""
+        # 先拉取远程
+        self._git_sync_from_remote()
+
+        # 检查远程是否有 gallery 图片
+        tree = self._git_list_tree()
+        if tree is None:
+            return
+
+        remote_gallery_count = sum(
+            1 for e in tree
+            if e["path"].startswith("gallery/")
+            and Path(e["path"]).suffix.lower() in IMAGE_SUFFIXES
+        )
+
+        if remote_gallery_count == 0:
+            # 远程为空，检查本地是否有图片
+            local_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
+            if local_images:
+                logger.info(
+                    f"[Git Sync] 远程仓库为空，本地有 {len(local_images)} 张图片，自动推送中…"
+                )
+                ok, fail, skip = self._git_push_all_local()
+                logger.info(f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}，跳过 {skip}。")
+
+    def _start_sync_timer(self) -> None:
+        """启动定时从远程拉取的后台任务。"""
+        interval = int(self.config.get("git_sync_interval", 5))
+        if interval <= 0:
+            logger.info("[Git Sync] 自动同步已禁用（间隔为 0）。")
+            return
+        self._sync_timer = threading.Timer(interval * 60, self._sync_timer_cb)
+        self._sync_timer.daemon = True
+        self._sync_timer.start()
+        logger.info(f"[Git Sync] 自动同步已启动，间隔 {interval} 分钟。")
+
+    def _sync_timer_cb(self) -> None:
+        try:
+            self._git_sync_from_remote()
+        except Exception as exc:
+            logger.error(f"[Git Sync] 定时同步失败: {exc}")
+        finally:
+            # 无论成功失败都重新调度下一次
+            if self._git_sync_enabled:
+                self._start_sync_timer()
 
     def _get_view_command_mode_text(self) -> str:
         return self.view_command_mode
@@ -973,6 +1582,12 @@ class Main(Star):
 
         if normalized == "/导入图库":
             return "import", None
+
+        if normalized == "/推送到远程":
+            return "push_to_remote", None
+
+        if normalized == "/取消推送":
+            return "cancel_push", None
 
         create_match = re.match(r"^/创建\s*(.+)$", normalized)
         upload_match = re.match(r"^/上传\s*(.+)$", normalized)
@@ -1284,6 +1899,11 @@ class Main(Star):
                 target_path = category_dir / f"{index}{suffix}"
             target_path.write_bytes(image_bytes)
             uploaded.append(target_path.name)
+            # Git 远程推送（异步，不阻塞上传响应）
+            if self._git_sync_enabled:
+                asyncio.get_event_loop().run_in_executor(
+                    None, self._git_push_file, str(target_path)
+                )
 
         if len(uploaded) == 1:
             await event.send(event.plain_result(f"已上传到【{category}】：{uploaded[0]}"))
@@ -1300,7 +1920,13 @@ class Main(Star):
                 missing_numbers.append(str(index))
                 continue
             deleted_names.append(image_path.name)
+            image_path_str = str(image_path)
             image_path.unlink()
+            # Git 远程删除（异步）
+            if self._git_sync_enabled:
+                asyncio.get_event_loop().run_in_executor(
+                    None, self._git_delete_remote_file, image_path_str
+                )
 
         if deleted_names and missing_numbers:
             message = (
