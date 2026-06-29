@@ -29,6 +29,59 @@
   --radius: 20px;
   --radius-sm: 12px;
   --radius-xs: 8px;
+  --btn-bg: #ffffff;
+  --btn-hover: #fce7f3;
+  --overlay-bg: rgba(0,0,0,0.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1118;
+    --card: #261c24;
+    --text: #e8dce6;
+    --muted: #9a8a98;
+    --border: #3d2d3a;
+    --input-bg: #2e222c;
+    --pink: #f472b6;
+    --pink-soft: #3d2235;
+    --lavender: #c4b5fd;
+    --lavender-soft: #2d2640;
+    --mint: #6ee7b7;
+    --mint-soft: #1a332a;
+    --peach: #fdba74;
+    --peach-soft: #3d2e1a;
+    --red: #fb7185;
+    --red-soft: #3d1f25;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+    --shadow: 0 4px 12px rgba(0,0,0,0.25);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.3);
+    --btn-bg: #2e222c;
+    --btn-hover: #3d2d3a;
+    --overlay-bg: rgba(0,0,0,0.7);
+  }
+}
+[data-theme="dark"] {
+  --bg: #1a1118;
+  --card: #261c24;
+  --text: #e8dce6;
+  --muted: #9a8a98;
+  --border: #3d2d3a;
+  --input-bg: #2e222c;
+  --pink: #f472b6;
+  --pink-soft: #3d2235;
+  --lavender: #c4b5fd;
+  --lavender-soft: #2d2640;
+  --mint: #6ee7b7;
+  --mint-soft: #1a332a;
+  --peach: #fdba74;
+  --peach-soft: #3d2e1a;
+  --red: #fb7185;
+  --red-soft: #3d1f25;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+  --shadow: 0 4px 12px rgba(0,0,0,0.25);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.3);
+  --btn-bg: #2e222c;
+  --btn-hover: #3d2d3a;
+  --overlay-bg: rgba(0,0,0,0.7);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -79,6 +132,7 @@ body {
 }
 .icon-btn:hover { border-color: var(--pink); color: var(--pink); background: var(--pink-soft); }
 .icon-btn.spinning { animation: spin 1s linear infinite; }
+.theme-btn { font-size: 17px; line-height: 1; }
 @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 
 /* Status bar */
@@ -90,8 +144,8 @@ body {
   margin-bottom: 16px;
   transition: all 0.3s;
 }
-.status-bar.connected { background: var(--mint-soft); color: #065f46; }
-.status-bar.disconnected { background: var(--red-soft); color: #9f1239; }
+.status-bar.connected { background: var(--mint-soft); color: var(--mint); }
+.status-bar.disconnected { background: var(--red-soft); color: var(--red); }
 .status-bar .dot {
   width: 8px; height: 8px; border-radius: 50%;
   flex-shrink: 0;
@@ -198,9 +252,9 @@ select { cursor: pointer; appearance: auto; }
   font-size: 13px; font-weight: 600;
   cursor: pointer; transition: all 0.2s;
   border: 2px solid var(--border);
-  background: var(--card); color: var(--text);
+  background: var(--btn-bg); color: var(--text);
 }
-.btn:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+.btn:hover { transform: translateY(-1px); box-shadow: var(--shadow); background: var(--btn-hover); }
 .btn:active { transform: translateY(0); }
 .btn-pink {
   background: linear-gradient(135deg, #f472b6, #c084fc);
@@ -220,17 +274,17 @@ select { cursor: pointer; appearance: auto; }
 
 /* Upload zone */
 .drop-zone {
-  border: 2px dashed #e9d5e8;
+  border: 2px dashed var(--border);
   border-radius: var(--radius);
   padding: 28px;
   text-align: center;
   cursor: pointer;
   transition: all 0.25s;
-  background: linear-gradient(135deg, #fdf8fb, #f5f0ff);
+  background: var(--input-bg);
 }
 .drop-zone:hover, .drop-zone.dragover {
   border-color: var(--pink);
-  background: linear-gradient(135deg, #fce7f3, #ede9fe);
+  background: var(--pink-soft);
   transform: scale(1.01);
 }
 .drop-zone .icon { font-size: 30px; margin-bottom: 6px; }
@@ -374,20 +428,31 @@ select { cursor: pointer; appearance: auto; }
 /* Pager */
 .pager {
   display: flex; align-items: center; justify-content: center;
-  gap: 8px; margin-top: 16px;
-  padding-top: 16px;
+  gap: 6px; margin-top: 16px;
+  padding-top: 14px;
   border-top: 1.5px solid var(--border);
 }
-.pager .btn-sm { border-radius: var(--radius-xs); }
-.page-indicator {
-  font-size: 13px; font-weight: 600;
-  color: var(--text);
-  padding: 4px 14px;
-  background: var(--pink-soft);
+.pager-btn {
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--radius-xs);
-  min-width: 70px;
-  text-align: center;
+  border: 1.5px solid var(--border);
+  background: var(--btn-bg); color: var(--muted);
+  font-size: 14px; cursor: pointer;
+  transition: all 0.15s;
 }
+.pager-btn:hover { border-color: var(--pink); color: var(--pink); background: var(--btn-hover); }
+.pager-btn:active { transform: scale(0.95); }
+.pager-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+.page-indicator {
+  font-size: 12px; font-weight: 600;
+  color: var(--muted);
+  padding: 0 10px;
+  min-width: 60px;
+  text-align: center;
+  user-select: none;
+}
+.page-indicator .cur { color: var(--pink); font-size: 14px; }
 
 /* Toast */
 .toast {
@@ -408,7 +473,7 @@ select { cursor: pointer; appearance: auto; }
 /* Modal */
 .modal-mask {
   position: fixed; inset: 0;
-  background: rgba(74,53,72,0.6);
+  background: var(--overlay-bg);
   backdrop-filter: blur(8px);
   display: none; align-items: center; justify-content: center;
   z-index: 100;
@@ -475,6 +540,7 @@ select { cursor: pointer; appearance: auto; }
     <div class="header-icon">🌸</div>
     <h1>Airi Gallery Cloud</h1>
     <div class="header-actions">
+      <button class="icon-btn theme-btn" id="theme-btn" title="切换主题">🌙</button>
       <button class="icon-btn" id="sync-btn" title="同步远程仓库">🔄</button>
       <button class="icon-btn" id="settings-btn" title="设置">⚙️</button>
     </div>
@@ -561,11 +627,11 @@ select { cursor: pointer; appearance: auto; }
     </div>
     <div id="grid" class="grid"></div>
     <div class="pager" id="pager" style="display:none">
-      <button class="btn btn-sm" id="first-btn" style="display:none">首页</button>
-      <button class="btn btn-sm" id="prev-btn" style="display:none">上一页</button>
-      <select id="page-sel" class="select-cute"></select>
-      <button class="btn btn-sm" id="next-btn" style="display:none">下一页</button>
-      <button class="btn btn-sm" id="last-btn" style="display:none">末页</button>
+      <button class="pager-btn" id="first-btn" title="首页">⟨⟨</button>
+      <button class="pager-btn" id="prev-btn" title="上一页">⟨</button>
+      <span class="page-indicator" id="page-indicator"></span>
+      <button class="pager-btn" id="next-btn" title="下一页">⟩</button>
+      <button class="pager-btn" id="last-btn" title="末页">⟩⟩</button>
     </div>
   </div>
 
@@ -636,7 +702,8 @@ const progressWrap = $('progress-wrap'), progressBar = $('progress-bar'), progre
 const tabsEl = $('tabs'), gridEl = $('grid');
 const pagerEl = $('pager'), prevBtn = $('prev-btn'), nextBtn = $('next-btn');
 const firstBtn = $('first-btn'), lastBtn = $('last-btn');
-const pageSel = $('page-sel'), perPageInput = $('per-page-input');
+const pageIndicator = $('page-indicator'), perPageInput = $('per-page-input');
+const themeBtn = $('theme-btn');
 const mask = $('mask'), mimg = $('mimg'), closeBtn = $('close');
 const confirmMask = $('confirm-mask'), confirmText = $('confirm-text');
 const confirmYes = $('confirm-yes'), confirmNo = $('confirm-no');
@@ -808,28 +875,49 @@ async function getTree() {
 
 async function getFileContent(path) {
   const branch = config.branch || 'main';
+
+  // GitHub: prefer raw CDN (no API rate limit, faster)
+  if (config.platform !== 'gitee') {
+    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+    const rawUrl = `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${branch}/${encodedPath}`;
+    const headers = config.token ? { Authorization: `token ${config.token}` } : {};
+    const resp = await fetch(rawUrl, { headers });
+    if (resp.ok) {
+      return await resp.arrayBuffer();
+    }
+    // Fallback: try Contents API
+    const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
+      params: { ref: branch }
+    });
+    if (data?.sha) state.shaCache[path] = data.sha;
+    if (data?.content) {
+      const bin = atob(data.content.replace(/\n/g, ''));
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr.buffer;
+    }
+    if (data?.download_url) {
+      const r = await fetch(data.download_url, { headers: { Authorization: `token ${config.token}` } });
+      if (r.ok) return await r.arrayBuffer();
+    }
+    throw new Error('无法获取文件内容');
+  }
+
+  // Gitee: use API (no raw CDN equivalent)
   const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
     params: { ref: branch }
   });
   if (data?.sha) state.shaCache[path] = data.sha;
-
-  // If content is available (file < 1MB), decode base64
   if (data?.content) {
     const bin = atob(data.content.replace(/\n/g, ''));
     const arr = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
     return arr.buffer;
   }
-
-  // Large file: use download_url
   if (data?.download_url) {
-    const resp = await fetch(data.download_url, {
-      headers: config.platform !== 'gitee' ? { Authorization: `token ${config.token}` } : {}
-    });
-    if (!resp.ok) throw new Error('下载大文件失败');
-    return await resp.arrayBuffer();
+    const resp = await fetch(data.download_url);
+    if (resp.ok) return await resp.arrayBuffer();
   }
-
   throw new Error('无法获取文件内容');
 }
 
@@ -1109,24 +1197,17 @@ async function loadCategoryImages() {
 function renderPagination() {
   if (state.totalPages <= 1) { pagerEl.style.display = 'none'; return; }
   pagerEl.style.display = 'flex';
-  firstBtn.style.display = state.currentPage > 1 ? 'inline-flex' : 'none';
-  prevBtn.style.display = state.currentPage > 1 ? 'inline-flex' : 'none';
-  nextBtn.style.display = state.currentPage < state.totalPages ? 'inline-flex' : 'none';
-  lastBtn.style.display = state.currentPage < state.totalPages ? 'inline-flex' : 'none';
-  pageSel.innerHTML = '';
-  for (let i = 1; i <= state.totalPages; i++) {
-    const o = document.createElement('option');
-    o.value = i; o.textContent = i + ' / ' + state.totalPages;
-    if (i === state.currentPage) o.selected = true;
-    pageSel.appendChild(o);
-  }
+  firstBtn.disabled = state.currentPage <= 1;
+  prevBtn.disabled = state.currentPage <= 1;
+  nextBtn.disabled = state.currentPage >= state.totalPages;
+  lastBtn.disabled = state.currentPage >= state.totalPages;
+  pageIndicator.innerHTML = '<span class="cur">' + state.currentPage + '</span> / ' + state.totalPages;
 }
 
 firstBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage = 1; loadCategoryImages(); } };
 prevBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage--; loadCategoryImages(); } };
 nextBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage++; loadCategoryImages(); } };
 lastBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage = state.totalPages; loadCategoryImages(); } };
-pageSel.onchange = () => { const p = parseInt(pageSel.value); if (p !== state.currentPage) { state.currentPage = p; loadCategoryImages(); } };
 perPageInput.onchange = () => {
   let v = parseInt(perPageInput.value);
   if (isNaN(v) || v < 1) v = 21;
@@ -1313,6 +1394,28 @@ syncBtn.onclick = async () => {
 // ──────────────────────────────────────────────
 closeBtn.onclick = () => mask.classList.remove('show');
 mask.onclick = e => { if (e.target === mask) mask.classList.remove('show'); };
+
+// ──────────────────────────────────────────────
+// Theme toggle
+// ──────────────────────────────────────────────
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  themeBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+function getEffectiveTheme() {
+  const saved = localStorage.getItem('gallery-theme');
+  if (saved) return saved;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+applyTheme(getEffectiveTheme());
+themeBtn.onclick = () => {
+  const next = getEffectiveTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('gallery-theme', next);
+  applyTheme(next);
+};
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (!localStorage.getItem('gallery-theme')) applyTheme(getEffectiveTheme());
+});
 
 // ──────────────────────────────────────────────
 // Init
