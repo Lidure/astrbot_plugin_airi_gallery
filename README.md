@@ -162,7 +162,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 ### 9. 云端管理页面
 
 插件提供了独立的单页应用（SPA），可部署到 Cloudflare Pages，无需 Bot 在线即可通过浏览器管理远程仓库中的图片。
-
+![alt text](assets/image2.png)
 **部署方式：**
 
 1. 将 `pages/cloud/index.html` 上传到 Cloudflare Pages 项目
