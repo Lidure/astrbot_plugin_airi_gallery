@@ -873,6 +873,16 @@ async function getTree() {
   }
 }
 
+function getRawImageUrl(path) {
+  const branch = config.branch || 'main';
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  if (config.platform === 'gitee') {
+    return `https://gitee.com/${config.owner}/${config.repo}/raw/${branch}/${encodedPath}`;
+  }
+  // jsDelivr CDN — fast in mainland China, free, caches GitHub content
+  return `https://cdn.jsdelivr.net/gh/${config.owner}/${config.repo}@${branch}/${encodedPath}`;
+}
+
 async function getFileContent(path) {
   const branch = config.branch || 'main';
 
@@ -1148,50 +1158,26 @@ async function loadCategoryImages() {
     div.appendChild(badge);
     div.appendChild(del);
 
-    // Load image async with concurrency pool & retry
-    imagePool(() => withRetry(async () => {
-      let blobUrl = state.imageCache[file.path];
-      if (!blobUrl) {
-        const buf = await getFileContent(file.path);
-        const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
-        const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
-        blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
-        state.imageCache[file.path] = blobUrl;
-      }
+    // Load image via CDN URL directly (browser handles parallel, cache, lazy load)
+    const imgUrl = getRawImageUrl(file.path);
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.src = imgUrl;
+    img.onload = () => {
       div.innerHTML = '';
-      const img = document.createElement('img');
-      img.src = blobUrl; img.loading = 'lazy';
       div.appendChild(img);
       div.appendChild(badge);
       div.appendChild(del);
-    })).catch((err) => {
-      console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
+    };
+    img.onerror = () => {
       div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px;flex-direction:column;gap:2px"><span>加载失败</span><span style="font-size:10px;opacity:0.7">点击重试</span></div>';
       div.appendChild(badge);
       div.appendChild(del);
-    });
+    };
 
-    div.onclick = async () => {
-      try {
-        let blobUrl = state.imageCache[file.path];
-        if (!blobUrl) {
-          div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--muted)">⏳</div>';
-          const buf = await getFileContent(file.path);
-          const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
-          const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
-          blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
-          state.imageCache[file.path] = blobUrl;
-          // Also update the grid thumbnail
-          div.innerHTML = '';
-          const img = document.createElement('img');
-          img.src = blobUrl; img.loading = 'lazy';
-          div.appendChild(img);
-          div.appendChild(badge);
-          div.appendChild(del);
-        }
-        mimg.src = blobUrl;
-        mask.classList.add('show');
-      } catch { toast('无法加载图片', false); }
+    div.onclick = () => {
+      mimg.src = imgUrl;
+      mask.classList.add('show');
     };
 
     gridEl.appendChild(div);
