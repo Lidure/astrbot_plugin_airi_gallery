@@ -832,23 +832,29 @@ async function ghRequest(method, path, { body = null, params = {} } = {}) {
 
   const resp = await fetch(url.toString(), opts);
 
-  if (resp.status === 401 || resp.status === 403) {
-    throw new Error('认证失败，请检查 Token');
-  }
-  if (resp.status === 429) {
-    throw new Error('API 请求频率超限，请稍后重试');
-  }
-  if (resp.status === 409) {
-    throw new Error('仓库为空或冲突，请先在仓库中创建一个初始 commit');
-  }
-
   let data = null;
   if (resp.status !== 204 && resp.status !== 205) {
     try { data = await resp.json(); } catch { data = null; }
   }
 
+  const throwRequestError = message => {
+    const err = new Error(message);
+    err.status = resp.status;
+    err.data = data;
+    throw err;
+  };
+
+  if (resp.status === 401 || resp.status === 403) {
+    throwRequestError('认证失败，请检查 Token');
+  }
+  if (resp.status === 429) {
+    throwRequestError('API 请求频率超限，请稍后重试');
+  }
   if (!resp.ok) {
-    throw new Error(data?.message || `HTTP ${resp.status}`);
+    const fallback = resp.status === 409
+      ? '仓库为空或冲突，请先在仓库中创建一个初始 commit'
+      : `HTTP ${resp.status}`;
+    throwRequestError(data?.message || fallback);
   }
   return { status: resp.status, data };
 }
@@ -991,9 +997,10 @@ function parseCategories(tree) {
   const result = [];
   for (const [name, files] of Object.entries(catMap)) {
     files.sort((a, b) => {
-      const na = parseInt(a.path.split('/').pop()) || 0;
-      const nb = parseInt(b.path.split('/').pop()) || 0;
-      return na - nb;
+      const na = getImageIndex(a.path);
+      const nb = getImageIndex(b.path);
+      if (na !== nb) return na - nb;
+      return a.path.localeCompare(b.path);
     });
     result.push({ name, files });
   }
@@ -1001,12 +1008,19 @@ function parseCategories(tree) {
   return result;
 }
 
-function getNextIndex(catFiles) {
+function getImageIndex(path) {
+  const fileName = path.split('/').pop() || '';
+  const stem = fileName.includes('.') ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
+  return /^\d+$/.test(stem) ? parseInt(stem, 10) : 0;
+}
+
+function getNextIndex() {
   let max = 0;
-  for (const f of catFiles) {
-    const fileName = f.path.split('/').pop();
-    const num = parseInt(fileName);
-    if (!isNaN(num) && num > max) max = num;
+  for (const cat of state.categories) {
+    for (const f of cat.files) {
+      const num = getImageIndex(f.path);
+      if (num > max) max = num;
+    }
   }
   return max + 1;
 }
@@ -1229,15 +1243,27 @@ perPageInput.onkeydown = e => { if (e.key === 'Enter') perPageInput.onchange(); 
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
 dropZone.ondragleave = () => dropZone.classList.remove('dragover');
-dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove('dragover'); addFiles(e.dataTransfer.files); };
-fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
+dropZone.ondrop = async e => { e.preventDefault(); dropZone.classList.remove('dragover'); await addFiles(e.dataTransfer.files); };
+fileInput.onchange = async () => { await addFiles(fileInput.files); fileInput.value = ''; };
 
-function addFiles(fl) {
+async function hashFile(file) {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function addFiles(fl) {
+  let skipped = 0;
   for (const f of fl) {
     if (!f.type.startsWith('image/')) continue;
-    if (state.pendingFiles.some(s => s.name === f.name && s.size === f.size)) continue;
-    state.pendingFiles.push(f);
+    const signature = await hashFile(f);
+    if (state.pendingFiles.some(s => s.signature === signature)) {
+      skipped++;
+      continue;
+    }
+    state.pendingFiles.push({ file: f, signature });
   }
+  if (skipped > 0) toast(`已跳过 ${skipped} 张重复图片`);
   renderPreview();
 }
 
@@ -1249,10 +1275,10 @@ function renderPreview() {
   previewEl.style.display = 'grid';
   upActions.style.display = 'block';
   upCount.textContent = state.pendingFiles.length;
-  state.pendingFiles.forEach((f, i) => {
+  state.pendingFiles.forEach((item, i) => {
     const d = document.createElement('div');
     d.className = 'preview-item';
-    d.innerHTML = `<img src="${URL.createObjectURL(f)}" /><button class="rm">×</button>`;
+    d.innerHTML = `<img src="${URL.createObjectURL(item.file)}" /><button class="rm">×</button>`;
     d.querySelector('.rm').onclick = () => { state.pendingFiles.splice(i, 1); renderPreview(); };
     previewEl.appendChild(d);
   });
@@ -1267,6 +1293,24 @@ function fileToBase64(file) {
   });
 }
 
+async function uploadFileWithRetry(cat, file, ext, contentB64, startIdx) {
+  let index = startIdx;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const fileName = `${index}${ext}`;
+    const gitPath = `gallery/${cat}/${fileName}`;
+    try {
+      await putFile(gitPath, contentB64, `Upload ${cat}/${fileName}`);
+      return { index, fileName, gitPath };
+    } catch (e) {
+      const canRetry = (e.status === 409 || e.status === 422) && attempt < 2;
+      if (!canRetry) throw e;
+      await syncFromRemote();
+      index = getNextIndex();
+    }
+  }
+  throw new Error('上传冲突重试失败');
+}
+
 upBtn.onclick = async () => {
   const cat = upInput.value.trim() || upSel.value;
   if (!cat) { toast('请选择或输入分类', false); return; }
@@ -1275,27 +1319,24 @@ upBtn.onclick = async () => {
   upBtn.disabled = true;
   progressWrap.classList.add('show');
 
-  const catData = state.categories.find(c => c.name === cat);
-  let nextIdx = catData ? getNextIndex(catData.files) : 1;
+  let nextIdx = getNextIndex();
   const total = state.pendingFiles.length;
   let uploaded = 0, failed = 0;
 
   for (let i = 0; i < state.pendingFiles.length; i++) {
-    const f = state.pendingFiles[i];
+    const f = state.pendingFiles[i].file;
     const ext = getExt(f.name);
-    const fileName = `${nextIdx}${ext}`;
-    const gitPath = `gallery/${cat}/${fileName}`;
 
     progressText.textContent = `上传中 ${i + 1} / ${total}...`;
     progressBar.style.width = `${((i) / total) * 100}%`;
 
     try {
       const b64 = await fileToBase64(f);
-      await putFile(gitPath, b64, `Upload ${cat}/${fileName}`);
+      const result = await uploadFileWithRetry(cat, f, ext, b64, nextIdx);
       uploaded++;
-      nextIdx++;
+      nextIdx = result.index + 1;
     } catch (e) {
-      console.error(`Upload failed: ${gitPath}`, e);
+      console.error(`Upload failed: ${f.name}`, e);
       failed++;
     }
   }

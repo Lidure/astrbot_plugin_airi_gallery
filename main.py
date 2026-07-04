@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64 as b64mod
+import hashlib
 import math
 import os
 import random
@@ -49,6 +50,13 @@ def _sanitize_component(value: str) -> str:
 
 def _is_image_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+
+
+def _image_sort_key(path: Path, base: Path | None = None) -> tuple[int, int, str]:
+    rel = path.relative_to(base).as_posix().lower() if base else path.as_posix().lower()
+    if path.stem.isdigit():
+        return (0, int(path.stem), rel)
+    return (1, 0, rel)
 
 
 def _load_collage_font(size: int, font_path: str | None = None):
@@ -232,8 +240,10 @@ class Main(Star):
 
         # Git 远程同步状态
         self._sha_cache: dict[str, str] = {}
+        self._category_hash_cache: dict[str, set[str]] = {}
         self._sync_timer: threading.Timer | None = None
         self._sync_lock = threading.Lock()
+        self._gallery_write_lock = threading.Lock()
         self._git_sync_enabled = False
         self._git_push_cancelled = False
 
@@ -386,6 +396,14 @@ class Main(Star):
                     await self._handle_create_category(event, str(payload))
             elif kind == "upload":
                 await self._handle_upload(event, str(payload))
+            elif kind == "dedupe_gallery":
+                removed, details = await self._dedupe_gallery(str(payload) if payload else None)
+                if payload:
+                    await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))
+                else:
+                    await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
+                if details:
+                    await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
             elif kind == "delete":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -486,6 +504,25 @@ class Main(Star):
             return
         renamed_count = await self._normalize_gallery_tree()
         await event.send(event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。"))
+
+    @filter.command("去重图库")
+    async def cmd_dedupe_gallery(self, event: AstrMessageEvent):
+        """注册 `/去重图库` 命令，用于清理本地图库重复图片。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        text = self._normalize_command_text(event, "去重图库")
+        action = self._parse_action(text)
+        category = None
+        if action and action[0] == "dedupe_gallery":
+            category = action[1] if action[1] else None
+        removed, details = await self._dedupe_gallery(category)
+        if category:
+            await event.send(event.plain_result(f"已清理《{category}》重复图片 {removed} 张。"))
+        else:
+            await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
+        if details:
+            await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
 
     @filter.command("推送到远程")
     async def cmd_push_to_remote(self, event: AstrMessageEvent):
@@ -592,7 +629,7 @@ class Main(Star):
             return jsonify({"images": [], "total": 0, "page": page, "per_page": per_page})
         all_files = sorted(
             [p for p in category_dir.iterdir() if _is_image_file(p)],
-            key=lambda x: int(x.stem) if x.stem.isdigit() else 0,
+            key=lambda x: _image_sort_key(x, category_dir),
         )
         total = len(all_files)
         start = (page - 1) * per_page
@@ -623,6 +660,7 @@ class Main(Star):
             category_dir = self._category_dir(category)
             category_dir.mkdir(parents=True, exist_ok=True)
             uploaded: list[str] = []
+            skipped_duplicate = 0
             for img in images:
                 name = img.get("name", "")
                 data_b64 = img.get("data", "")
@@ -631,19 +669,21 @@ class Main(Star):
                 ext = Path(name).suffix.lower()
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
-                index = self._next_index()
-                target = category_dir / f"{index}{ext}"
-                while target.exists():
-                    index += 1
-                    target = category_dir / f"{index}{ext}"
-                target.write_bytes(b64mod.b64decode(data_b64))
+                image_bytes = b64mod.b64decode(data_b64)
+                target = self._store_unique_image(category_dir, category, ext, image_bytes)
+                if target is None:
+                    skipped_duplicate += 1
+                    continue
                 uploaded.append(target.name)
                 # Git 远程推送
                 if self._git_sync_enabled:
                     asyncio.get_event_loop().run_in_executor(
                         None, self._git_push_file, str(target)
                     )
-            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+            resp = {"ok": True, "count": len(uploaded), "files": uploaded}
+            if skipped_duplicate:
+                resp["skipped"] = skipped_duplicate
+            return jsonify(resp)
         except Exception as exc:
             logger.error(f"上传API错误: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 500
@@ -675,6 +715,7 @@ class Main(Star):
             return jsonify({"ok": False, "error": "文件不存在"})
         img_path_str = str(img_path)
         img_path.unlink()
+        self._invalidate_category_hash_cache(category)
         # Git 远程删除
         if self._git_sync_enabled:
             asyncio.get_event_loop().run_in_executor(
@@ -719,6 +760,7 @@ class Main(Star):
             category_dir = self._category_dir(category)
             category_dir.mkdir(parents=True, exist_ok=True)
             uploaded: list[str] = []
+            skipped_duplicate = 0
             for img in images:
                 name = img.get("name", "")
                 data_b64 = img.get("data", "")
@@ -727,19 +769,21 @@ class Main(Star):
                 ext = Path(name).suffix.lower()
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
-                index = self._next_index()
-                target = category_dir / f"{index}{ext}"
-                while target.exists():
-                    index += 1
-                    target = category_dir / f"{index}{ext}"
-                target.write_bytes(b64mod.b64decode(data_b64))
+                image_bytes = b64mod.b64decode(data_b64)
+                target = self._store_unique_image(category_dir, category, ext, image_bytes)
+                if target is None:
+                    skipped_duplicate += 1
+                    continue
                 uploaded.append(target.name)
                 # Git 远程推送
                 if self._git_sync_enabled:
                     asyncio.get_event_loop().run_in_executor(
                         None, self._git_push_file, str(target)
                     )
-            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded})
+            resp = {"ok": True, "count": len(uploaded), "files": uploaded}
+            if skipped_duplicate:
+                resp["skipped"] = skipped_duplicate
+            return jsonify(resp)
         except Exception as exc:
             logger.error(f"公开上传API错误: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1066,11 +1110,13 @@ class Main(Star):
         return False
 
     def _git_delete_file(self, path: str, message: str) -> bool:
-        """删除远程仓库中的文件。需要 SHA 缓存中有该文件的 SHA。"""
+        """删除远程仓库中的文件，SHA 缓存为空时会主动查询远程。"""
         sha = self._sha_cache.get(path)
         if not sha:
-            logger.info(f"[Git Sync] 跳过删除 {path}：SHA 缓存中不存在，可能远程也没有。")
-            return True
+            sha = self._git_fetch_file_sha(path)
+            if not sha:
+                logger.info(f"[Git Sync] 跳过删除 {path}：远程文件不存在或无法获取 SHA。")
+                return True
 
         base = self._git_api_base()
         owner = self._git_owner()
@@ -1086,6 +1132,10 @@ class Main(Star):
         status, _ = self._git_request("DELETE", url, json_body=body)
         if status in (200, 204):
             self._sha_cache.pop(path, None)
+            return True
+        if status == 404:
+            self._sha_cache.pop(path, None)
+            logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
             return True
         logger.error(f"[Git Sync] 删除文件失败 {path} (HTTP {status})")
         return False
@@ -1123,25 +1173,37 @@ class Main(Star):
                 if suffix not in IMAGE_SUFFIXES:
                     continue
                 remote_images[p] = entry
-                # 更新 SHA 缓存
-                self._sha_cache[p] = entry["sha"]
 
+            category_hash_cache: dict[str, set[str]] = {}
             synced = 0
             for git_path, info in remote_images.items():
                 # 转换为本地路径
                 local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
-                remote_size = info.get("size", 0)
+                remote_sha = info.get("sha", "")
+                previous_sha = self._sha_cache.get(git_path)
+                parts = Path(git_path).parts
+                category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
+                category_hashes = category_hash_cache.get(category)
+                if category_hashes is None:
+                    category_hashes = self._category_hashes(category)
+                    category_hash_cache[category] = category_hashes
 
                 if local_path.exists():
-                    local_size = local_path.stat().st_size
-                    if local_size == remote_size:
-                        continue  # 大小一致，跳过
+                    if previous_sha and previous_sha == remote_sha:
+                        self._sha_cache[git_path] = remote_sha
+                        continue
                 else:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
 
                 content = self._git_get_file(git_path)
                 if content is not None:
+                    digest = self._bytes_hash(content)
+                    if digest in category_hashes:
+                        logger.info(f"[Git Sync] 检测到同分类重复图片，已跳过: {git_path}")
+                        continue
+                    self._sha_cache[git_path] = remote_sha
                     local_path.write_bytes(content)
+                    category_hashes.add(digest)
                     synced += 1
 
             # 检测远程删除：SHA 缓存中有、但远程 tree 中没有的 gallery/ 文件
@@ -1155,6 +1217,9 @@ class Main(Star):
                 if local_path.exists():
                     local_path.unlink()
                     logger.info(f"[Git Sync] 远程已删除，本地同步移除: {cached_path}")
+                    parts = Path(cached_path).parts
+                    if len(parts) >= 3:
+                        self._invalidate_category_hash_cache(parts[1])
                 self._sha_cache.pop(cached_path, None)
 
             if synced:
@@ -1341,6 +1406,7 @@ class Main(Star):
                 "- /创建<分类>：创建一个新的分类文件夹",
                 "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类（快捷：/sz<分类>）",
                 "- /删除123：删除编号为 123 的图片或表情包",
+                "- /去重图库：扫描并删除本地图库中的重复图片，保留每个分类中首次出现的文件",
                 "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
                 "- /昵称列表：以图片形式查看当前分类昵称映射",
@@ -1464,6 +1530,19 @@ class Main(Star):
         if normalized == "/导入图库":
             return "import", None
 
+        if normalized.startswith("/去重图库"):
+            tail = normalized[len("/去重图库"):].strip()
+            if tail:
+                return "dedupe_gallery", _sanitize_component(self._resolve_alias(tail))
+            return "dedupe_gallery", None
+
+        dedupe_match = re.match(r"^/去重\s+(.+)$", normalized)
+        if dedupe_match:
+            target = dedupe_match.group(1).strip()
+            if target:
+                return "dedupe_gallery", _sanitize_component(self._resolve_alias(target))
+            return "dedupe_gallery", None
+
         if normalized == "/推送到远程":
             return "push_to_remote", None
 
@@ -1558,7 +1637,7 @@ class Main(Star):
             return []
         return sorted(
             [path for path in self.gallery_root.rglob("*") if _is_image_file(path)],
-            key=lambda item: item.relative_to(self.gallery_root).as_posix().lower(),
+            key=lambda item: _image_sort_key(item, self.gallery_root),
         )
 
     def _next_index(self) -> int:
@@ -1584,8 +1663,107 @@ class Main(Star):
             return []
         return sorted(
             [path for path in category_dir.rglob("*") if _is_image_file(path)],
-            key=lambda item: item.relative_to(category_dir).as_posix().lower(),
+            key=lambda item: _image_sort_key(item, category_dir),
         )
+
+    @staticmethod
+    def _bytes_hash(content: bytes) -> str:
+        return hashlib.sha256(content).hexdigest()
+
+    def _file_hash(self, path: Path) -> str | None:
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception as exc:
+            logger.warning(f"计算文件哈希失败 {path}: {exc}")
+            return None
+
+    def _category_hashes(self, category: str) -> set[str]:
+        """返回指定分类内已存在图片的内容哈希集合。"""
+        category = _sanitize_component(category)
+        cached = self._category_hash_cache.get(category)
+        if cached is not None:
+            return cached
+
+        category_dir = self._category_dir(category)
+        hashes: set[str] = set()
+        if category_dir.exists():
+            for path in category_dir.rglob("*"):
+                if not _is_image_file(path):
+                    continue
+                digest = self._file_hash(path)
+                if digest:
+                    hashes.add(digest)
+
+        self._category_hash_cache[category] = hashes
+        return hashes
+
+    def _invalidate_category_hash_cache(self, category: str) -> None:
+        self._category_hash_cache.pop(_sanitize_component(category), None)
+
+    def _store_unique_image(
+        self,
+        category_dir: Path,
+        category: str,
+        ext: str,
+        image_bytes: bytes,
+    ) -> Path | None:
+        """Atomically store an image with the next global index, unless it is a duplicate."""
+        digest = self._bytes_hash(image_bytes)
+        with self._gallery_write_lock:
+            category_hashes = self._category_hashes(category)
+            if digest in category_hashes:
+                return None
+
+            index = self._next_index()
+            target_path = category_dir / f"{index}{ext}"
+            while target_path.exists():
+                index += 1
+                target_path = category_dir / f"{index}{ext}"
+
+            target_path.write_bytes(image_bytes)
+            category_hashes.add(digest)
+            return target_path
+
+    async def _dedupe_gallery(self, category: str | None = None) -> tuple[int, list[str]]:
+        """删除重复内容，保留每个分类中首次出现的图片。"""
+        if category:
+            categories = [_sanitize_component(category)]
+        else:
+            categories = [
+                path.name
+                for path in self.gallery_root.iterdir()
+                if path.is_dir() and path.name != "generated"
+            ] if self.gallery_root.exists() else []
+
+        removed = 0
+        deleted_examples: list[str] = []
+        for cat in categories:
+            seen_hashes: set[str] = set()
+            for image_path in self._iter_category_images(cat):
+                digest = self._file_hash(image_path)
+                if not digest:
+                    continue
+                if digest in seen_hashes:
+                    rel = image_path.relative_to(self.gallery_root).as_posix()
+                    git_path = self._to_git_path(str(image_path))
+                    image_path.unlink()
+                    self._invalidate_category_hash_cache(cat)
+                    if git_path:
+                        self._sha_cache.pop(git_path, None)
+                    if self._git_sync_enabled:
+                        asyncio.get_event_loop().run_in_executor(
+                            None, self._git_delete_remote_file, str(image_path)
+                        )
+                    removed += 1
+                    if len(deleted_examples) < 5:
+                        deleted_examples.append(rel)
+                    continue
+                seen_hashes.add(digest)
+        return removed, deleted_examples
 
     def _iter_recent_images(self, count: int = 10) -> list[Path]:
         """按文件修改时间倒序返回最近上传的 N 张图片（排除 generated 目录）。"""
@@ -1768,17 +1946,17 @@ class Main(Star):
             await event.send(event.plain_result("请先回复一张或多张图片/表情包，再发送 /上传<分类>。"))
             return
 
+        category_name = category_dir.name
         uploaded: list[str] = []
+        skipped_duplicate = 0
         for source_path, image_bytes in all_images:
-            index = self._next_index()
             suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
             if suffix == ".gif":
                 suffix = ".jpg"
-            target_path = category_dir / f"{index}{suffix}"
-            while target_path.exists():
-                index += 1
-                target_path = category_dir / f"{index}{suffix}"
-            target_path.write_bytes(image_bytes)
+            target_path = self._store_unique_image(category_dir, category_name, suffix, image_bytes)
+            if target_path is None:
+                skipped_duplicate += 1
+                continue
             uploaded.append(target_path.name)
             # Git 远程推送（异步，不阻塞上传响应）
             if self._git_sync_enabled:
@@ -1788,8 +1966,13 @@ class Main(Star):
 
         if len(uploaded) == 1:
             await event.send(event.plain_result(f"已上传到【{category}】：{uploaded[0]}"))
+        elif uploaded:
+            msg = f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"
+            if skipped_duplicate:
+                msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
+            await event.send(event.plain_result(msg))
         else:
-            await event.send(event.plain_result(f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"))
+            await event.send(event.plain_result("没有新上传的图片，重复的图片已被跳过。"))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
@@ -1803,6 +1986,7 @@ class Main(Star):
             deleted_names.append(image_path.name)
             image_path_str = str(image_path)
             image_path.unlink()
+            self._invalidate_category_hash_cache(image_path.parent.name)
             # Git 远程删除（异步）
             if self._git_sync_enabled:
                 asyncio.get_event_loop().run_in_executor(
@@ -1824,6 +2008,7 @@ class Main(Star):
     async def _normalize_gallery_tree(self) -> int:
         """把图库里的文件统一整理成数字命名，并保证分类目录稳定。"""
         self.gallery_root.mkdir(parents=True, exist_ok=True)
+        self._category_hash_cache.clear()
 
         image_paths = sorted(
             self._iter_image_files(),
@@ -2198,6 +2383,7 @@ class Main(Star):
             ("/创建<分类>", "创建一个新的分类文件夹"),
             ("/上传<分类>", "回复图片后上传到指定分类（快捷 /sz）"),
             ("/删除123", "删除指定编号的图片或表情包"),
+            ("/去重图库", "扫描并删除本地图库中的重复图片"),
             ("/看最近上传", "以合并转发查看最近上传的图片，可追加 N（快捷 /看最近）"),
             ("/导入图库", "重新扫描并整理图库编号"),
         ]
