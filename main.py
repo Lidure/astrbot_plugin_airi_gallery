@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64 as b64mod
 import hashlib
+import json
 import math
 import os
 import random
@@ -241,11 +242,16 @@ class Main(Star):
         # Git 远程同步状态
         self._sha_cache: dict[str, str] = {}
         self._category_hash_cache: dict[str, set[str]] = {}
+        self._hash_index_path = self.plugin_data_dir / "hash_index.json"
+        self._hash_index: dict[str, dict] = {}
+        self._hash_index_dirty = False
+        self._hash_index_lock = threading.RLock()
         self._sync_timer: threading.Timer | None = None
         self._sync_lock = threading.Lock()
-        self._gallery_write_lock = threading.Lock()
+        self._gallery_write_lock = threading.RLock()
         self._git_sync_enabled = False
         self._git_push_cancelled = False
+        self._load_hash_index()
 
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
@@ -716,6 +722,7 @@ class Main(Star):
         img_path_str = str(img_path)
         img_path.unlink()
         self._invalidate_category_hash_cache(category)
+        self._forget_file_hash(img_path)
         # Git 远程删除
         if self._git_sync_enabled:
             asyncio.get_event_loop().run_in_executor(
@@ -1180,30 +1187,39 @@ class Main(Star):
                 # 转换为本地路径
                 local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
                 remote_sha = info.get("sha", "")
+                remote_size = int(info.get("size", 0) or 0)
                 previous_sha = self._sha_cache.get(git_path)
                 parts = Path(git_path).parts
                 category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
-                category_hashes = category_hash_cache.get(category)
-                if category_hashes is None:
-                    category_hashes = self._category_hashes(category)
-                    category_hash_cache[category] = category_hashes
 
                 if local_path.exists():
                     if previous_sha and previous_sha == remote_sha:
                         self._sha_cache[git_path] = remote_sha
                         continue
+                    try:
+                        if remote_size and local_path.stat().st_size == remote_size:
+                            self._sha_cache[git_path] = remote_sha
+                            continue
+                    except OSError:
+                        pass
                 else:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
 
                 content = self._git_get_file(git_path)
                 if content is not None:
+                    category_hashes = category_hash_cache.get(category)
+                    if category_hashes is None:
+                        category_hashes = self._category_hashes(category)
+                        category_hash_cache[category] = category_hashes
                     digest = self._bytes_hash(content)
                     if digest in category_hashes:
+                        self._sha_cache[git_path] = remote_sha
                         logger.info(f"[Git Sync] 检测到同分类重复图片，已跳过: {git_path}")
                         continue
                     self._sha_cache[git_path] = remote_sha
                     local_path.write_bytes(content)
                     category_hashes.add(digest)
+                    self._remember_file_hash(local_path, digest, category=category)
                     synced += 1
 
             # 检测远程删除：SHA 缓存中有、但远程 tree 中没有的 gallery/ 文件
@@ -1220,6 +1236,7 @@ class Main(Star):
                     parts = Path(cached_path).parts
                     if len(parts) >= 3:
                         self._invalidate_category_hash_cache(parts[1])
+                    self._forget_file_hash(local_path)
                 self._sha_cache.pop(cached_path, None)
 
             if synced:
@@ -1681,6 +1698,117 @@ class Main(Star):
             logger.warning(f"计算文件哈希失败 {path}: {exc}")
             return None
 
+    def _load_hash_index(self) -> None:
+        """加载本地图片哈希索引；索引缺失时会在后续访问中懒加载重建。"""
+        try:
+            if not self._hash_index_path.exists():
+                return
+            data = json.loads(self._hash_index_path.read_text(encoding="utf-8"))
+            files = data.get("files", {}) if isinstance(data, dict) else {}
+            if isinstance(files, dict):
+                self._hash_index = {
+                    str(path): entry
+                    for path, entry in files.items()
+                    if isinstance(entry, dict) and entry.get("hash")
+                }
+            self._hash_index_dirty = False
+            logger.info(f"[Gallery] 已加载图片哈希索引：{len(self._hash_index)} 条。")
+        except Exception as exc:
+            self._hash_index = {}
+            self._hash_index_dirty = False
+            logger.warning(f"[Gallery] 加载图片哈希索引失败，将按需重建：{exc}")
+
+    def _save_hash_index(self, force: bool = False) -> None:
+        with self._hash_index_lock:
+            if not force and not self._hash_index_dirty:
+                return
+            data = {"version": 1, "files": self._hash_index}
+            tmp_path = self._hash_index_path.with_suffix(".json.tmp")
+            try:
+                tmp_path.write_text(
+                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                tmp_path.replace(self._hash_index_path)
+                self._hash_index_dirty = False
+            except Exception as exc:
+                logger.warning(f"[Gallery] 保存图片哈希索引失败：{exc}")
+
+    def _hash_index_key(self, path: Path) -> str | None:
+        return self._to_git_path(str(path))
+
+    @staticmethod
+    def _hash_index_stat(path: Path) -> dict[str, int]:
+        stat = path.stat()
+        return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+
+    def _remember_file_hash(
+        self,
+        path: Path,
+        digest: str,
+        category: str | None = None,
+        save: bool = True,
+    ) -> None:
+        key = self._hash_index_key(path)
+        if not key:
+            return
+        try:
+            stat_data = self._hash_index_stat(path)
+        except FileNotFoundError:
+            return
+        parts = Path(key).parts
+        category = category or (parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY)
+        entry = {
+            "hash": digest,
+            "size": stat_data["size"],
+            "mtime_ns": stat_data["mtime_ns"],
+            "category": _sanitize_component(category),
+        }
+        with self._hash_index_lock:
+            if self._hash_index.get(key) != entry:
+                self._hash_index[key] = entry
+                self._hash_index_dirty = True
+        if save:
+            self._save_hash_index()
+
+    def _forget_file_hash(self, path_or_key: Path | str, save: bool = True) -> None:
+        if isinstance(path_or_key, Path):
+            key = self._hash_index_key(path_or_key)
+        else:
+            key = path_or_key
+        if not key:
+            return
+        with self._hash_index_lock:
+            if key in self._hash_index:
+                self._hash_index.pop(key, None)
+                self._hash_index_dirty = True
+        if save:
+            self._save_hash_index()
+
+    def _file_hash_cached(self, path: Path, category: str | None = None, save: bool = True) -> str | None:
+        key = self._hash_index_key(path)
+        if not key:
+            return self._file_hash(path)
+        try:
+            stat_data = self._hash_index_stat(path)
+        except FileNotFoundError:
+            self._forget_file_hash(key, save=save)
+            return None
+        with self._hash_index_lock:
+            entry = self._hash_index.get(key)
+            if (
+                isinstance(entry, dict)
+                and entry.get("size") == stat_data["size"]
+                and entry.get("mtime_ns") == stat_data["mtime_ns"]
+                and entry.get("hash")
+            ):
+                return str(entry["hash"])
+
+        digest = self._file_hash(path)
+        if digest:
+            self._remember_file_hash(path, digest, category=category, save=save)
+        return digest
+
     def _category_hashes(self, category: str) -> set[str]:
         """返回指定分类内已存在图片的内容哈希集合。"""
         category = _sanitize_component(category)
@@ -1694,9 +1822,10 @@ class Main(Star):
             for path in category_dir.rglob("*"):
                 if not _is_image_file(path):
                     continue
-                digest = self._file_hash(path)
+                digest = self._file_hash_cached(path, category=category, save=False)
                 if digest:
                     hashes.add(digest)
+        self._save_hash_index()
 
         self._category_hash_cache[category] = hashes
         return hashes
@@ -1726,6 +1855,7 @@ class Main(Star):
 
             target_path.write_bytes(image_bytes)
             category_hashes.add(digest)
+            self._remember_file_hash(target_path, digest, category=category)
             return target_path
 
     async def _dedupe_gallery(self, category: str | None = None) -> tuple[int, list[str]]:
@@ -1744,7 +1874,7 @@ class Main(Star):
         for cat in categories:
             seen_hashes: set[str] = set()
             for image_path in self._iter_category_images(cat):
-                digest = self._file_hash(image_path)
+                digest = self._file_hash_cached(image_path, category=cat, save=False)
                 if not digest:
                     continue
                 if digest in seen_hashes:
@@ -1752,6 +1882,7 @@ class Main(Star):
                     git_path = self._to_git_path(str(image_path))
                     image_path.unlink()
                     self._invalidate_category_hash_cache(cat)
+                    self._forget_file_hash(image_path, save=False)
                     if git_path:
                         self._sha_cache.pop(git_path, None)
                     if self._git_sync_enabled:
@@ -1763,6 +1894,7 @@ class Main(Star):
                         deleted_examples.append(rel)
                     continue
                 seen_hashes.add(digest)
+            self._save_hash_index()
         return removed, deleted_examples
 
     def _iter_recent_images(self, count: int = 10) -> list[Path]:
@@ -1987,6 +2119,7 @@ class Main(Star):
             image_path_str = str(image_path)
             image_path.unlink()
             self._invalidate_category_hash_cache(image_path.parent.name)
+            self._forget_file_hash(image_path)
             # Git 远程删除（异步）
             if self._git_sync_enabled:
                 asyncio.get_event_loop().run_in_executor(
@@ -2018,6 +2151,11 @@ class Main(Star):
             ),
         )
         if not image_paths:
+            if self._hash_index:
+                with self._hash_index_lock:
+                    self._hash_index.clear()
+                    self._hash_index_dirty = True
+                self._save_hash_index()
             return 0
 
         used_indices: set[int] = set()
@@ -2053,6 +2191,12 @@ class Main(Star):
                 renamed_count += 1
 
             used_indices.add(target_index)
+
+        if renamed_count:
+            with self._hash_index_lock:
+                self._hash_index.clear()
+                self._hash_index_dirty = True
+            self._save_hash_index()
 
         return renamed_count
 
