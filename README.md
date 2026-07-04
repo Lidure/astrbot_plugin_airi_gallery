@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.1.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.2.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -37,6 +37,7 @@
 | 🧬 **内容去重** | 上传、云同步和手动清理都会按图片内容哈希去重，减少重复图片 |
 | 🔢 **全局编号** | 本地插件和云端页面都按全局最大编号续号，跨分类排序更一致 |
 | ⚡ **哈希索引缓存** | 本地保存图片哈希索引，重启后无需重新读取几千张图片计算哈希 |
+| 🔄 **立即同步** | `/立即同步` 手动从远程拉取新增图片，不必等待定时同步 |
 | ⏹️ **推送控制** | `/推送` 批量同步本地图片，`/取消推送` 随时中断 |
 
 ## 📦 文件说明
@@ -163,6 +164,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - 可配置定时器，定期从远程拉取新增图片（默认每 5 分钟）
 - 使用 `/推送` 可手动批量推送本地未同步的图片
 - 使用 `/取消推送` 可中断正在进行的批量推送
+- 使用 `/立即同步` 或 `/同步远程` 可手动立即从远程拉取新增图片到本地，不必等待定时器
 - 远程拉取时会按同分类图片内容哈希去重，避免 Cloud 页面重复上传后在本地生成多份相同图片
 - 删除远程文件时即使重启导致本地 SHA 缓存为空，也会主动查询远程 SHA 后再删除
 - 本地/API/聊天上传会用写入锁分配全局编号，避免并发上传拿到相同编号
@@ -269,6 +271,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/去重图库` | 管理员 | 清理全部分类中的重复图片 |
 | `/去重图库 <分类>` / `/去重 <分类>` | 管理员 | 清理指定分类中的重复图片 |
 | `/导入图库` | 管理员 | 重排图库编号 |
+| `/立即同步` / `/同步远程` | 管理员 | 立即从远程仓库拉取新增图片到本地 |
 | `/推送` | 管理员 | 批量推送本地未同步图片到远程仓库 |
 | `/取消推送` | 管理员 | 取消正在进行的批量推送 |
 
@@ -283,6 +286,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.2.0
+
+- **新增** `/立即同步` 与 `/同步远程` 命令，可手动立即从远程仓库拉取新增图片到本地
+- **优化** 手动同步会复用现有同步锁，已有同步任务运行时会自动跳过，避免并发拉取
+- **优化** 手动同步完成后返回新增、移除和跳过重复的统计结果
 
 ### v2.1.0
 

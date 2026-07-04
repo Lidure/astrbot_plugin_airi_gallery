@@ -376,6 +376,24 @@ class Main(Star):
                         await event.send(
                             event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
                         )
+            elif kind == "sync_from_remote":
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
+                elif not self._git_sync_enabled:
+                    await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+                else:
+                    await event.send(event.plain_result("正在从远程仓库立即同步图片到本地。"))
+                    result = await asyncio.to_thread(self._git_sync_from_remote)
+                    if result.get("busy"):
+                        await event.send(event.plain_result("已有同步任务正在进行，本次已跳过。"))
+                    else:
+                        await event.send(
+                            event.plain_result(
+                                f"同步完成：新增 {result.get('synced', 0)} 张，"
+                                f"移除 {result.get('removed', 0)} 张，"
+                                f"跳过重复 {result.get('duplicates', 0)} 张。"
+                            )
+                        )
             elif kind == "cancel_push":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -549,6 +567,33 @@ class Main(Star):
             await event.send(
                 event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
             )
+
+    @filter.command("立即同步")
+    async def cmd_sync_from_remote(self, event: AstrMessageEvent):
+        """立即从 Git 远程仓库拉取图片到本地。"""
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._git_sync_enabled:
+            await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+            return
+        await event.send(event.plain_result("正在从远程仓库立即同步图片到本地。"))
+        result = await asyncio.to_thread(self._git_sync_from_remote)
+        if result.get("busy"):
+            await event.send(event.plain_result("已有同步任务正在进行，本次已跳过。"))
+            return
+        await event.send(
+            event.plain_result(
+                f"同步完成：新增 {result.get('synced', 0)} 张，"
+                f"移除 {result.get('removed', 0)} 张，"
+                f"跳过重复 {result.get('duplicates', 0)} 张。"
+            )
+        )
+
+    @filter.command("同步远程")
+    async def cmd_sync_from_remote_alias(self, event: AstrMessageEvent):
+        """`/立即同步` 的别名。"""
+        await self.cmd_sync_from_remote(event)
 
     @filter.command("取消推送")
     async def cmd_cancel_push(self, event: AstrMessageEvent):
@@ -1158,17 +1203,24 @@ class Main(Star):
         except ValueError:
             return None
 
-    def _git_sync_from_remote(self) -> None:
+    def _git_sync_from_remote(self) -> dict[str, int | bool]:
         """从远程仓库拉取所有图片到本地缓存。线程安全。"""
+        result: dict[str, int | bool] = {
+            "synced": 0,
+            "removed": 0,
+            "duplicates": 0,
+            "busy": False,
+        }
         if not self._git_sync_enabled:
-            return
+            return result
         if not self._sync_lock.acquire(blocking=False):
             logger.debug("[Git Sync] 已有同步任务进行中，跳过本次。")
-            return
+            result["busy"] = True
+            return result
         try:
             tree = self._git_list_tree()
             if tree is None:
-                return
+                return result
 
             # 只关注 gallery/ 下的图片文件
             remote_images: dict[str, dict] = {}
@@ -1214,6 +1266,7 @@ class Main(Star):
                     digest = self._bytes_hash(content)
                     if digest in category_hashes:
                         self._sha_cache[git_path] = remote_sha
+                        result["duplicates"] = int(result["duplicates"]) + 1
                         logger.info(f"[Git Sync] 检测到同分类重复图片，已跳过: {git_path}")
                         continue
                     self._sha_cache[git_path] = remote_sha
@@ -1221,6 +1274,7 @@ class Main(Star):
                     category_hashes.add(digest)
                     self._remember_file_hash(local_path, digest, category=category)
                     synced += 1
+                    result["synced"] = synced
 
             # 检测远程删除：SHA 缓存中有、但远程 tree 中没有的 gallery/ 文件
             stale_paths = [
@@ -1237,6 +1291,7 @@ class Main(Star):
                     if len(parts) >= 3:
                         self._invalidate_category_hash_cache(parts[1])
                     self._forget_file_hash(local_path)
+                    result["removed"] = int(result["removed"]) + 1
                 self._sha_cache.pop(cached_path, None)
 
             if synced:
@@ -1245,6 +1300,7 @@ class Main(Star):
             logger.error(f"[Git Sync] 同步异常: {exc}")
         finally:
             self._sync_lock.release()
+        return result
 
     def _git_push_file(self, local_abs_path: str) -> None:
         """将本地文件推送到远程仓库。"""
@@ -1426,6 +1482,8 @@ class Main(Star):
                 "- /去重图库：扫描并删除本地图库中的重复图片，保留每个分类中首次出现的文件",
                 "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
+                "- /立即同步：立即从远程仓库拉取新增图片到本地（别名：/同步远程）",
+                "- /推送到远程：批量推送本地图片到远程仓库",
                 "- /昵称列表：以图片形式查看当前分类昵称映射",
                 "",
                 "说明：",
@@ -1562,6 +1620,9 @@ class Main(Star):
 
         if normalized == "/推送到远程":
             return "push_to_remote", None
+
+        if normalized in {"/立即同步", "/同步远程"}:
+            return "sync_from_remote", None
 
         if normalized == "/取消推送":
             return "cancel_push", None
@@ -2530,6 +2591,8 @@ class Main(Star):
             ("/去重图库", "扫描并删除本地图库中的重复图片"),
             ("/看最近上传", "以合并转发查看最近上传的图片，可追加 N（快捷 /看最近）"),
             ("/导入图库", "重新扫描并整理图库编号"),
+            ("/立即同步", "立即从远程仓库拉取新增图片到本地"),
+            ("/推送到远程", "批量推送本地图片到远程仓库"),
         ]
 
         card_width = 920
