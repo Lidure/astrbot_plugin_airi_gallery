@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.2.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.3.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -74,6 +74,7 @@
 | `看看<分类> N` | 随机返回 `N` 张，`N` 最大为 `10` |
 | `看全部<分类>` | 输出该分类下全部图片的总览图，并标注序号 |
 | `看看123` | 返回编号为 `123` 的图片或表情包 |
+| `看100-110` | 按编号范围连续返回 `100` 到 `110` 的图片或表情包，最多 50 张 |
 
 > 以上浏览命令均可在配置中切换是否使用 `/` 前缀。
 
@@ -262,6 +263,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `看看<分类> N` / `/看看<分类> N` | 全员 | 随机发送 `N` 张（最多 10） |
 | `看全部<分类>` / `/看全部<分类>` | 全员 | 生成分类总览图 |
 | `看看123` / `/看看123` | 全员 | 按编号查看图片 |
+| `看100-110` / `/看100-110` | 全员 | 按编号范围连续查看图片，最多 50 张 |
 | `/分类列表` / `/查看画廊` | 全员 | 查看分类卡片列表 |
 | `/昵称列表` | 全员 | 以图片形式查看当前昵称映射 |
 | `/airi_gallery` / `/画廊帮助` | 全员 | 查看帮助海报 |
@@ -286,6 +288,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.3.0
+
+- **新增** `看100-110` / `/看100-110` 编号范围查看，可连续查看指定编号区间内的图片或表情包
+- **优化** 范围查看复用多图发送模式，支持合并转发并限制单次最多 50 张，避免误发超大范围
 
 ### v2.2.0
 

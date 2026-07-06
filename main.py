@@ -25,6 +25,7 @@ PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 DEFAULT_CATEGORY = "default"
 MODE_NO_PREFIX = "no_prefix"
 MODE_PREFIX = "prefix"
+VIEW_RANGE_MAX = 50
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -404,6 +405,9 @@ class Main(Star):
                     )
             elif kind == "view_number":
                 await self._handle_view_number(event, int(payload))
+            elif kind == "view_range":
+                start, end = payload
+                await self._handle_view_range(event, int(start), int(end))
             elif kind == "view_all_category":
                 await self._handle_view_all_category(event, str(payload))
             elif kind == "view_category":
@@ -1475,6 +1479,7 @@ class Main(Star):
                 f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
+                f"- {prefix}看100-110：按编号范围查看 100 到 110 的图片或表情包，最多 {VIEW_RANGE_MAX} 张",
                 "- /分类列表：以图片卡片形式查看当前已创建的分类",
                 "- /创建<分类>：创建一个新的分类文件夹",
                 "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类（快捷：/sz<分类>）",
@@ -1677,6 +1682,12 @@ class Main(Star):
             target = view_match.group(1).strip()
             if not target:
                 return None
+            range_match = re.match(r"^(\d+)\s*[-~～—–]\s*(\d+)$", target)
+            if range_match:
+                start = int(range_match.group(1))
+                end = int(range_match.group(2))
+                return "view_range", (start, end)
+
             # 仅支持"分类 + 空格 + 数字"的写法，例如：看看cat 3
             # 这样可避免把"看看602"误判成分类 6、数量 02。
             many_match = re.match(r"^(.+?)\s+(\d+)$", target)
@@ -1999,6 +2010,39 @@ class Main(Star):
             await event.send(event.plain_result(f"未找到编号为 {index} 的图片或表情包。"))
             return
         await event.send(event.image_result(str(image_path)))
+
+    async def _handle_view_range(self, event: AstrMessageEvent, start: int, end: int):
+        if start > end:
+            start, end = end, start
+
+        total = end - start + 1
+        if total > VIEW_RANGE_MAX:
+            await event.send(event.plain_result(f"最多一次按范围查看 {VIEW_RANGE_MAX} 张图片哦。"))
+            return
+
+        indexed_paths: dict[int, Path] = {}
+        for path in self._iter_image_files():
+            if not path.stem.isdigit():
+                continue
+            index = int(path.stem)
+            if start <= index <= end and index not in indexed_paths:
+                indexed_paths[index] = path
+
+        paths = [indexed_paths[index] for index in range(start, end + 1) if index in indexed_paths]
+        if not paths:
+            await event.send(event.plain_result(f"未找到编号范围 {start}-{end} 内的图片或表情包。"))
+            return
+
+        if self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, paths)
+        else:
+            await self._send_as_single(event, paths)
+
+        missing = [index for index in range(start, end + 1) if index not in indexed_paths]
+        if missing:
+            preview = "、".join(str(index) for index in missing[:20])
+            suffix = f" 等 {len(missing)} 个" if len(missing) > 20 else ""
+            await event.send(event.plain_result(f"已发送 {len(paths)} 张；未找到编号：{preview}{suffix}。"))
 
     async def _handle_view_category(self, event: AstrMessageEvent, category: str):
         images = self._iter_category_images(category)
@@ -2583,6 +2627,7 @@ class Main(Star):
             (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，N 最大 {self.view_multiple_max}，分类和数字之间要有空格"),
             (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
             (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
+            (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看图片，最多 {VIEW_RANGE_MAX} 张"),
             ("/分类列表", "输出漂亮的分类总览图片"),
             ("/昵称列表", "以图片形式查看当前分类昵称映射"),
             ("/创建<分类>", "创建一个新的分类文件夹"),

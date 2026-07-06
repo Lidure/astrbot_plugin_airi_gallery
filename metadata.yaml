@@ -2,6 +2,6 @@ name: astrbot_plugin_airi_gallery
 display_name: Airi画廊🌸
 short_desc: 数字排序画廊插件，支持 Git 远程同步、立即同步、内容去重与哈希索引缓存。
 desc: 数字排序画廊插件，支持按分类随机看图、按编号查看、回复上传、删除、本地导入、内容去重，以及 GitHub/Gitee 远程仓库自动同步、立即同步和 Cloudflare Pages 云端管理。
-version: v2.2.0
+version: v2.3.0
 author: Lidure
 repo: https://github.com/Lidure/astrbot_plugin_airi_gallery
