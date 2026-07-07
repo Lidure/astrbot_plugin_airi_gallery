@@ -26,6 +26,7 @@ DEFAULT_CATEGORY = "default"
 MODE_NO_PREFIX = "no_prefix"
 MODE_PREFIX = "prefix"
 VIEW_RANGE_MAX = 50
+UPLOAD_BATCH_MAX = 100
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -367,15 +368,15 @@ class Main(Star):
                 elif not self._git_sync_enabled:
                     await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
                 else:
-                    await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+                    await event.send(event.plain_result("正在快速检查并推送本地新增/变更图片，可随时发送 /取消推送 终止。"))
                     ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
-                    if skip:
+                    if self._git_push_cancelled:
                         await event.send(
                             event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
                         )
                     else:
                         await event.send(
-                            event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+                            event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张，跳过已存在 {skip} 张。")
                         )
             elif kind == "sync_from_remote":
                 if not self._is_allowed(event):
@@ -561,15 +562,15 @@ class Main(Star):
         if not self._git_sync_enabled:
             await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
             return
-        await event.send(event.plain_result("正在将本地图片推送到远程仓库，可随时发送 /取消推送 终止。"))
+        await event.send(event.plain_result("正在快速检查并推送本地新增/变更图片，可随时发送 /取消推送 终止。"))
         ok, fail, skip = await asyncio.to_thread(self._git_push_all_local)
-        if skip:
+        if self._git_push_cancelled:
             await event.send(
                 event.plain_result(f"推送已取消：成功 {ok} 张，失败 {fail} 张，跳过 {skip} 张。")
             )
         else:
             await event.send(
-                event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张。")
+                event.plain_result(f"推送完成：成功 {ok} 张，失败 {fail} 张，跳过已存在 {skip} 张。")
             )
 
     @filter.command("立即同步")
@@ -1335,10 +1336,16 @@ class Main(Star):
         except Exception as exc:
             logger.error(f"[Git Sync] 远程删除失败 {git_path}: {exc}")
 
-    def _git_push_all_local(self) -> tuple[int, int]:
-        """将本地 gallery 中所有图片批量推送到远程仓库。
+    @staticmethod
+    def _git_blob_sha(content: bytes) -> str:
+        """计算 Git blob SHA，用于和远程 tree 中的 blob sha 快速对比。"""
+        header = f"blob {len(content)}\0".encode("utf-8")
+        return hashlib.sha1(header + content).hexdigest()
 
-        返回 (成功数, 失败数)。
+    def _git_push_all_local(self) -> tuple[int, int, int]:
+        """将本地 gallery 中新增或变更的图片批量推送到远程仓库。
+
+        返回 (成功数, 失败数, 跳过数)。
         """
         if not self._git_sync_enabled:
             return 0, 0, 0
@@ -1347,20 +1354,56 @@ class Main(Star):
         success = 0
         failed = 0
         skipped = 0
+        processed = 0
 
-        for path in sorted(self.gallery_root.rglob("*")):
+        local_images = [
+            path
+            for path in sorted(self.gallery_root.rglob("*"))
+            if _is_image_file(path) and self._to_git_path(str(path))
+        ]
+
+        remote_tree = self._git_list_tree()
+        if remote_tree is None:
+            logger.warning("[Git Sync] 获取远程文件树失败，无法执行快速差异推送。")
+            return 0, len(local_images), 0
+
+        remote_files = {
+            entry["path"]: entry
+            for entry in remote_tree
+            if entry.get("path", "").startswith("gallery/")
+        }
+
+        for path in local_images:
             if self._git_push_cancelled:
                 logger.info("[Git Sync] 批量推送已被用户取消。")
                 break
-            if not _is_image_file(path):
-                continue
+
+            processed += 1
             git_path = self._to_git_path(str(path))
             if not git_path:
                 continue
             try:
-                # 先获取远程的最新 SHA，避免批量推送时缓存过期导致 409
-                self._git_fetch_file_sha(git_path)
                 content = path.read_bytes()
+                local_sha = self._git_blob_sha(content)
+                remote = remote_files.get(git_path)
+                remote_sha = str(remote.get("sha", "")) if remote else ""
+                remote_size = -1
+                if remote and remote.get("size") is not None:
+                    try:
+                        remote_size = int(remote.get("size"))
+                    except (TypeError, ValueError):
+                        remote_size = -1
+
+                if remote_sha == local_sha and (remote_size < 0 or remote_size == len(content)):
+                    self._sha_cache[git_path] = remote_sha
+                    skipped += 1
+                    continue
+
+                if remote_sha:
+                    self._sha_cache[git_path] = remote_sha
+                else:
+                    self._sha_cache.pop(git_path, None)
+
                 ok = self._git_put_file(git_path, content, f"Sync {git_path}")
                 if ok:
                     success += 1
@@ -1372,8 +1415,7 @@ class Main(Star):
 
         # 统计被跳过的剩余文件
         if self._git_push_cancelled:
-            all_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
-            skipped = len(all_images) - success - failed
+            skipped += max(0, len(local_images) - processed)
 
         logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
         return success, failed, skipped
@@ -1482,13 +1524,13 @@ class Main(Star):
                 f"- {prefix}看100-110：按编号范围查看 100 到 110 的图片或表情包，最多 {VIEW_RANGE_MAX} 张",
                 "- /分类列表：以图片卡片形式查看当前已创建的分类",
                 "- /创建<分类>：创建一个新的分类文件夹",
-                "- /上传<分类>：回复一张图片或表情包后执行，把图片保存到对应分类（快捷：/sz<分类>）",
+                f"- /上传<分类>：回复图片、多图或合并转发聊天记录后上传到对应分类，单次最多 {UPLOAD_BATCH_MAX} 张（快捷：/sz<分类>）",
                 "- /删除123：删除编号为 123 的图片或表情包",
                 "- /去重图库：扫描并删除本地图库中的重复图片，保留每个分类中首次出现的文件",
                 "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
                 "- /立即同步：立即从远程仓库拉取新增图片到本地（别名：/同步远程）",
-                "- /推送到远程：批量推送本地图片到远程仓库",
+                "- /推送到远程：快速推送本地新增或变更图片到远程仓库，已存在则跳过",
                 "- /昵称列表：以图片形式查看当前分类昵称映射",
                 "",
                 "说明：",
@@ -2002,6 +2044,34 @@ class Main(Star):
                     results.append((image_path, image_path.read_bytes()))
             except Exception as exc:
                 logger.warning(f"读取引用图片失败: {exc}")
+
+        try:
+            from astrbot.core.utils.quoted_message import extract_quoted_message_images
+        except Exception:
+            extract_quoted_message_images = None
+
+        if extract_quoted_message_images:
+            try:
+                image_refs = await extract_quoted_message_images(event)
+            except Exception as exc:
+                logger.warning(f"解析合并转发图片失败: {exc}")
+                image_refs = []
+
+            seen_refs: set[str] = set()
+            for image_ref in image_refs:
+                if not isinstance(image_ref, str):
+                    continue
+                image_ref = image_ref.strip()
+                if not image_ref or image_ref in seen_refs:
+                    continue
+                seen_refs.add(image_ref)
+                try:
+                    image_component = Image(file=image_ref)
+                    image_path = Path(await image_component.convert_to_file_path())
+                    if image_path.exists():
+                        results.append((image_path, image_path.read_bytes()))
+                except Exception as exc:
+                    logger.warning(f"读取合并转发图片失败: {image_ref[:128]}: {exc}")
         return results
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):
@@ -2180,8 +2250,12 @@ class Main(Star):
 
         all_images = await self._get_reply_images(event)
         if not all_images:
-            await event.send(event.plain_result("请先回复一张或多张图片/表情包，再发送 /上传<分类>。"))
+            await event.send(event.plain_result("请先回复图片、多图或合并转发聊天记录，再发送 /上传<分类>。"))
             return
+
+        limited_by_batch_size = len(all_images) > UPLOAD_BATCH_MAX
+        if limited_by_batch_size:
+            all_images = all_images[:UPLOAD_BATCH_MAX]
 
         category_name = category_dir.name
         uploaded: list[str] = []
@@ -2207,9 +2281,14 @@ class Main(Star):
             msg = f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"
             if skipped_duplicate:
                 msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
+            if limited_by_batch_size:
+                msg += f"（单次最多处理 {UPLOAD_BATCH_MAX} 张，其余已跳过）"
             await event.send(event.plain_result(msg))
         else:
-            await event.send(event.plain_result("没有新上传的图片，重复的图片已被跳过。"))
+            msg = "没有新上传的图片，重复的图片已被跳过。"
+            if limited_by_batch_size:
+                msg += f"单次最多处理 {UPLOAD_BATCH_MAX} 张。"
+            await event.send(event.plain_result(msg))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
@@ -2631,13 +2710,13 @@ class Main(Star):
             ("/分类列表", "输出漂亮的分类总览图片"),
             ("/昵称列表", "以图片形式查看当前分类昵称映射"),
             ("/创建<分类>", "创建一个新的分类文件夹"),
-            ("/上传<分类>", "回复图片后上传到指定分类（快捷 /sz）"),
+            ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张（快捷 /sz）"),
             ("/删除123", "删除指定编号的图片或表情包"),
             ("/去重图库", "扫描并删除本地图库中的重复图片"),
             ("/看最近上传", "以合并转发查看最近上传的图片，可追加 N（快捷 /看最近）"),
             ("/导入图库", "重新扫描并整理图库编号"),
             ("/立即同步", "立即从远程仓库拉取新增图片到本地"),
-            ("/推送到远程", "批量推送本地图片到远程仓库"),
+            ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
         ]
 
         card_width = 920
