@@ -455,15 +455,15 @@ class Main(Star):
         """插件帮助。"""
         help_path = await self._build_help_image()
         if help_path:
-            yield event.image_result(str(help_path))
+            await event.send(event.image_result(str(help_path)))
             cloud_text = self._build_cloud_gallery_help_text()
             if cloud_text:
-                yield event.plain_result(cloud_text)
+                await event.send(event.plain_result(cloud_text))
             return
-        yield event.plain_result(self._build_help_text())
+        await event.send(event.plain_result(self._build_help_text()))
         cloud_text = self._build_cloud_gallery_help_text()
         if cloud_text:
-            yield event.plain_result(cloud_text)
+            await event.send(event.plain_result(cloud_text))
 
     @filter.command("看看")
     @filter.command("看")
@@ -638,15 +638,15 @@ class Main(Star):
         """注册 `/画廊帮助` 命令，等同于 `/airi_gallery`。"""
         help_path = await self._build_help_image()
         if help_path:
-            yield event.image_result(str(help_path))
+            await event.send(event.image_result(str(help_path)))
             cloud_text = self._build_cloud_gallery_help_text()
             if cloud_text:
-                yield event.plain_result(cloud_text)
+                await event.send(event.plain_result(cloud_text))
             return
-        yield event.plain_result(self._build_help_text())
+        await event.send(event.plain_result(self._build_help_text()))
         cloud_text = self._build_cloud_gallery_help_text()
         if cloud_text:
-            yield event.plain_result(cloud_text)
+            await event.send(event.plain_result(cloud_text))
 
     @filter.command("昵称列表")
     async def cmd_alias_list(self, event: AstrMessageEvent):
@@ -888,6 +888,8 @@ class Main(Star):
         if not url:
             return ""
         if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            url = f"https://{url}"
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
             return ""
         return url
 
@@ -897,10 +899,12 @@ class Main(Star):
             return None
         return "\n".join(
             [
-                "云端图库入口也准备好啦：",
+                "云端图库小入口也准备好啦：",
                 url,
                 "",
-                "可以在浏览器里批量上传、整理和删除图片；Bot 不在线时也能先把表情包放进云端仓库。上传队列会做去重和编号续号，适合一次收拾一大包图。"
+                "点开就能在浏览器里查看图库、翻找表情包，也可以批量上传、整理和删除图片；Bot 不在线时，也能先把新表情包放进云端仓库。",
+                "",
+                "图库会做去重和编号续号，很适合一次收拾一大包图。Airi 很需要大家一起投喂/提供表情包，让图库慢慢变得更好用。上传需要密钥，如果想帮忙补图，可以私聊bot获取。"
             ]
         )
 

@@ -40,7 +40,7 @@
   "cloud_gallery_url": {
     "type": "string",
     "description": "云端图库链接",
-    "hint": "填写已部署的 Cloudflare Pages 云端图库页面 URL。填写后，发送 /airi_gallery 或 /画廊帮助 时会顺便发出这个入口，方便大家从浏览器批量上传和管理图片。",
+    "hint": "填写已部署的 Cloudflare Pages 云端图库页面 URL，可省略 https://。填写后，发送 /airi_gallery 或 /画廊帮助 时会顺便发出这个入口，方便大家从浏览器查看表情包、批量上传和管理图片。",
     "default": ""
   },
   "category_aliases": {
