@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.5.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.6.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -191,6 +191,8 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 **功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 SHA-256 去重、按全局最大编号续号。多个浏览器同时上传发生编号冲突时，页面会刷新远程树并重试分配新编号。
 
+如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`。之后发送 `/airi_gallery` 或 `/画廊帮助` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器批量上传、整理图片，也适合 Bot 不在线时先把表情包放进云端仓库。
+
 ### 10. 公开上传
 
 配置 `upload_token` 后，外部用户可通过 Web 页面上传图片到图库。令牌作为简单的访问密钥，防止未授权上传。
@@ -222,6 +224,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `view_all_collage_compress` | bool | `false` | 是否压缩看全部拼图 |
 | `view_all_collage_scale` | float | `0.85` | 看全部拼图压缩比例（`0.5`~`1.0`） |
 | `upload_token` | string | `""` | 公开上传密钥，留空则无需密钥（不安全） |
+| `cloud_gallery_url` | string | `""` | 云端图库页面链接，填写后帮助命令会顺便发送这个浏览器入口 |
 
 ### LLM 工具配置
 
@@ -288,6 +291,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.6.0
+
+- **优化** 画廊帮助海报改为分组布局，将查看类、内容管理和维护同步命令分别归类展示
+- **优化** `看/看看/看最近` 相关浏览命令集中到同一大区块，提升帮助图可读性
 
 ### v2.5.0
 

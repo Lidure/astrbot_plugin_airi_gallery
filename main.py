@@ -354,6 +354,9 @@ class Main(Star):
                     await event.send(event.image_result(str(help_path)))
                 else:
                     await event.send(event.plain_result(self._build_help_text()))
+                cloud_text = self._build_cloud_gallery_help_text()
+                if cloud_text:
+                    await event.send(event.plain_result(cloud_text))
             elif kind == "import":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -453,8 +456,14 @@ class Main(Star):
         help_path = await self._build_help_image()
         if help_path:
             yield event.image_result(str(help_path))
+            cloud_text = self._build_cloud_gallery_help_text()
+            if cloud_text:
+                yield event.plain_result(cloud_text)
             return
         yield event.plain_result(self._build_help_text())
+        cloud_text = self._build_cloud_gallery_help_text()
+        if cloud_text:
+            yield event.plain_result(cloud_text)
 
     @filter.command("看看")
     @filter.command("看")
@@ -630,8 +639,14 @@ class Main(Star):
         help_path = await self._build_help_image()
         if help_path:
             yield event.image_result(str(help_path))
+            cloud_text = self._build_cloud_gallery_help_text()
+            if cloud_text:
+                yield event.plain_result(cloud_text)
             return
         yield event.plain_result(self._build_help_text())
+        cloud_text = self._build_cloud_gallery_help_text()
+        if cloud_text:
+            yield event.plain_result(cloud_text)
 
     @filter.command("昵称列表")
     async def cmd_alias_list(self, event: AstrMessageEvent):
@@ -867,6 +882,27 @@ class Main(Star):
         except (TypeError, ValueError):
             return 0.85
         return max(0.5, min(1.0, scale))
+
+    def _cloud_gallery_url(self) -> str:
+        url = str(self.config.get("cloud_gallery_url", "")).strip()
+        if not url:
+            return ""
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            return ""
+        return url
+
+    def _build_cloud_gallery_help_text(self) -> str | None:
+        url = self._cloud_gallery_url()
+        if not url:
+            return None
+        return "\n".join(
+            [
+                "云端图库入口也准备好啦：",
+                url,
+                "",
+                "可以在浏览器里批量上传、整理和删除图片；Bot 不在线时也能先把表情包放进云端仓库。上传队列会做去重和编号续号，适合一次收拾一大包图。"
+            ]
+        )
 
     # ──────────────────────────────────────────────
     # Git 远程仓库同步
@@ -2700,34 +2736,70 @@ class Main(Star):
             logger.error("缺少 Pillow 依赖，无法生成帮助图片")
             return None
 
-        help_cards = [
-            ("/airi_gallery", "查看帮助说明"),
-            (f"{self._view_command_prefix()}看看<分类>", "从某个分类里随机返回一张图片或表情包"),
-            (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，N 最大 {self.view_multiple_max}，分类和数字之间要有空格"),
-            (f"{self._view_command_prefix()}看全部<分类>", "生成该分类的总览图，并标注每张图片的编号"),
-            (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
-            (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看图片，最多 {VIEW_RANGE_MAX} 张"),
-            ("/分类列表", "输出漂亮的分类总览图片"),
-            ("/昵称列表", "以图片形式查看当前分类昵称映射"),
-            ("/创建<分类>", "创建一个新的分类文件夹"),
-            ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张（快捷 /sz）"),
-            ("/删除123", "删除指定编号的图片或表情包"),
-            ("/去重图库", "扫描并删除本地图库中的重复图片"),
-            ("/看最近上传", "以合并转发查看最近上传的图片，可追加 N（快捷 /看最近）"),
-            ("/导入图库", "重新扫描并整理图库编号"),
-            ("/立即同步", "立即从远程仓库拉取新增图片到本地"),
-            ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
+        help_sections = [
+            (
+                "日常查看",
+                "浏览、编号检索和最近上传都在这里",
+                [
+                    (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
+                    (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
+                    (f"{self._view_command_prefix()}看全部<分类>", "生成该分类总览图，并标注每张图片编号"),
+                    (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
+                    (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),
+                    ("/看最近上传 N", "查看最近上传的图片；可省略 N，快捷 /看最近"),
+                    ("/分类列表", "以图片卡片形式查看所有分类"),
+                    ("/昵称列表", "查看当前分类昵称映射"),
+                ],
+            ),
+            (
+                "内容管理",
+                "会改变本地图库内容，操作前看准分类和编号",
+                [
+                    ("/创建<分类>", "创建新的分类文件夹"),
+                    ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张；快捷 /sz"),
+                    ("/删除123", "删除指定编号的图片或表情包"),
+                ],
+            ),
+            (
+                "维护与同步",
+                "批量整理或访问远程仓库，建议管理员使用",
+                [
+                    ("/去重图库", "扫描并删除重复图片，可追加分类名只清理单个分类"),
+                    ("/导入图库", "重新扫描 gallery 并整理数字编号"),
+                    ("/立即同步", "立即从远程仓库拉取新增图片；别名 /同步远程"),
+                    ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
+                    ("/取消推送", "取消正在进行的批量推送"),
+                ],
+            ),
         ]
 
-        card_width = 920
-        card_height = 92
-        cols = 1
-        gap = 16
-        padding = 42
-        header_h = 240
-        rows = math.ceil(len(help_cards) / cols)
-        width = padding * 2 + cols * card_width + (cols - 1) * gap
-        height = header_h + rows * card_height + max(0, rows - 1) * gap + 42
+        padding = 46
+        width = 1080
+        header_h = 236
+        section_gap = 22
+        section_inner_gap = 12
+        card_gap_x = 14
+        card_gap_y = 12
+        section_title_h = 64
+        card_h = 82
+        section_width = width - padding * 2
+        section_specs = []
+        total_sections_h = 0
+        for section_index, (_, _, cards) in enumerate(help_sections):
+            cols = 2 if len(cards) > 3 else 1
+            rows = math.ceil(len(cards) / cols)
+            section_h = (
+                section_title_h
+                + rows * card_h
+                + max(0, rows - 1) * card_gap_y
+                + section_inner_gap
+                + 24
+            )
+            section_specs.append((cols, rows, section_h))
+            total_sections_h += section_h
+            if section_index:
+                total_sections_h += section_gap
+        height = header_h + total_sections_h + 42
 
         canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
         drawer = ImageDraw.Draw(canvas)
@@ -2736,8 +2808,10 @@ class Main(Star):
 
         title_font = _load_collage_font(60, self.collage_font_path) or ImageFont.load_default()
         subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        name_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
-        desc_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
+        section_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
+        section_desc_font = _load_collage_font(18, self.collage_font_path) or ImageFont.load_default()
+        name_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
+        desc_font = _load_collage_font(17, self.collage_font_path) or ImageFont.load_default()
         outline_colors = [
             (224, 183, 205, 238),
             (197, 214, 241, 238),
@@ -2784,32 +2858,63 @@ class Main(Star):
         except Exception:
             pass
 
-        for index, (command, desc) in enumerate(help_cards):
-            row = index // cols
-            col = index % cols
-            x = padding + col * (card_width + gap)
-            y = header_h + row * (card_height + gap)
+        y_cursor = header_h
+        section_colors = [
+            ((255, 255, 255, 150), (224, 183, 205, 245)),
+            ((255, 255, 255, 150), (197, 214, 241, 245)),
+            ((255, 255, 255, 150), (206, 228, 201, 245)),
+        ]
 
-            card = PILImage.new("RGBA", (card_width, card_height), (0, 0, 0, 0))
-            card_drawer = ImageDraw.Draw(card)
-            card_drawer.rounded_rectangle(
-                (0, 0, card_width - 1, card_height - 1),
-                radius=26,
-                fill=(255, 255, 255, 186),
-                outline=outline_colors[index % len(outline_colors)],
+        for section_index, ((title, section_desc, cards), (cols, _, section_h)) in enumerate(zip(help_sections, section_specs)):
+            fill_color, outline_color = section_colors[section_index % len(section_colors)]
+            section = PILImage.new("RGBA", (section_width, section_h), (0, 0, 0, 0))
+            section_drawer = ImageDraw.Draw(section)
+            section_drawer.rounded_rectangle(
+                (0, 0, section_width - 1, section_h - 1),
+                radius=24,
+                fill=fill_color,
+                outline=outline_color,
                 width=2,
             )
+            section_drawer.text((24, 18), title, fill=(48, 55, 88), font=section_font)
+            section_drawer.text((170, 25), section_desc, fill=(102, 110, 143), font=section_desc_font)
 
-            card_drawer.text((26, 16), command, fill=(35, 40, 61), font=name_font)
+            card_width = (
+                section_width - 48 - (cols - 1) * card_gap_x
+            ) // cols
+            for card_index, (command, desc) in enumerate(cards):
+                row = card_index // cols
+                col = card_index % cols
+                x = 24 + col * (card_width + card_gap_x)
+                y = section_title_h + row * (card_h + card_gap_y)
 
-            desc_lines = _wrap_text(card_drawer, desc, desc_font, card_width - 52)
-            desc_lines = desc_lines[:2]
-            line_height = _text_size(card_drawer, "测", desc_font)[1]
-            desc_y = 52
-            for line_index, desc_line in enumerate(desc_lines):
-                card_drawer.text((26, desc_y + line_index * (line_height + 7)), desc_line, fill=(95, 105, 132), font=desc_font)
+                card = PILImage.new("RGBA", (card_width, card_h), (0, 0, 0, 0))
+                card_drawer = ImageDraw.Draw(card)
+                card_drawer.rounded_rectangle(
+                    (0, 0, card_width - 1, card_h - 1),
+                    radius=16,
+                    fill=(255, 255, 255, 196),
+                    outline=outline_colors[(section_index + card_index) % len(outline_colors)],
+                    width=1,
+                )
+                card_drawer.text((18, 12), command, fill=(35, 40, 61), font=name_font)
 
-            canvas.alpha_composite(card, (x, y))
+                desc_lines = _wrap_text(card_drawer, desc, desc_font, card_width - 36)
+                desc_lines = desc_lines[:2]
+                line_height = _text_size(card_drawer, "测", desc_font)[1]
+                desc_y = 45
+                for line_index, desc_line in enumerate(desc_lines):
+                    card_drawer.text(
+                        (18, desc_y + line_index * (line_height + 4)),
+                        desc_line,
+                        fill=(95, 105, 132),
+                        font=desc_font,
+                    )
+
+                section.alpha_composite(card, (x, y))
+
+            canvas.alpha_composite(section, (padding, y_cursor))
+            y_cursor += section_h + section_gap
 
         output_dir = self.plugin_data_dir / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
