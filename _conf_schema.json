@@ -128,6 +128,12 @@
     "hint": "GitHub Personal Access Token 或 Gitee 私人令牌（需 repo 读写权限）。在平台设置页面生成。",
     "default": ""
   },
+  "git_push_batch_size": {
+    "type": "int",
+    "description": "GitHub 批量推送每次提交数量",
+    "hint": "仅 GitHub 生效。/推送到远程 会把本地新增或变更图片按批次合并为少量 commit，默认 50，建议 10~100。Gitee 暂使用逐文件推送。",
+    "default": 50
+  },
   "git_sync_interval": {
     "type": "int",
     "description": "自动同步间隔（分钟）",

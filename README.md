@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.6.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.7.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -48,9 +48,9 @@
 | `metadata.yaml` | 插件元数据 |
 | `_conf_schema.json` | 插件配置说明 |
 | `requirements.txt` | 依赖声明 |
-| `pages/aliases/` | 昵称管理 Web UI 页面（HTML / CSS / JS） |
 | `pages/gallery/` | 本地画廊 Web UI 页面（HTML / CSS / JS） |
-| `pages/cloud/` | 云端管理页面（独立 SPA，部署到 Cloudflare Pages） |
+| `pages/zz_aliases/` | 昵称管理 Web UI 页面（HTML / CSS / JS，后置命名以便 `gallery` 成为插件页默认入口） |
+| `pages/zz_cloud/` | 云端管理页面（独立 SPA，部署到 Cloudflare Pages，后置命名以便 `gallery` 成为插件页默认入口） |
 | `assets/` | 角标图片等静态资源 |
 
 ## 🎮 使用指南
@@ -117,10 +117,10 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 | :--- | :--- | :---: | :--- |
-| `category` | string | 否 | 分类名，留空则从所有分类中随机选取 |
+| `category` | string | 否 | 分类名、分类昵称或用户原话里的分类关键词，留空则插件会尝试从用户消息中匹配 |
 | `count` | integer | 否 | 发送数量，默认 1，最大 5 |
 
-LLM 会在合适的对话场景中自动判断是否需要发表情包，并调用此工具。
+LLM 会在合适的对话场景中自动判断是否需要发表情包，并调用此工具。比如用户说「发一张 airi 的表情包」，工具会优先匹配 `airi` 分类；如果设置了昵称，也会和聊天命令一样参与匹配。
 
 ### 6. 查看分类列表
 
@@ -164,6 +164,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - 启动时如果本地有未推送的图片，会自动推送到远程
 - 可配置定时器，定期从远程拉取新增图片（默认每 5 分钟）
 - 使用 `/推送` 可手动快速推送本地新增或变更图片，远程已存在且内容一致的图片会直接跳过
+- GitHub 平台下 `/推送` 会按 `git_push_batch_size` 合并为少量 commit，避免大量图片时一张图一个 commit 导致推送缓慢；Gitee 暂保留逐文件推送
 - 使用 `/取消推送` 可中断正在进行的批量推送
 - 使用 `/立即同步` 或 `/同步远程` 可手动立即从远程拉取新增图片到本地，不必等待定时器
 - 远程拉取时会按同分类图片内容哈希去重，避免 Cloud 页面重复上传后在本地生成多份相同图片
@@ -178,7 +179,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 ![alt text](assets/image2.png)
 **部署方式：**
 
-1. 将 `pages/cloud/index.html` 上传到 Cloudflare Pages 项目
+1. 将 `pages/zz_cloud/index.html` 上传到 Cloudflare Pages 项目
 2. 打开页面后填写配置信息：
 
 | 配置项 | 默认值 | 说明 |
@@ -203,7 +204,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 插件内置了 Web UI 页面，用于可视化管理分类昵称。
 
-**访问方式：** AstrBot WebUI → 插件管理 → 点击 Airi画廊 插件卡片 → 进入「aliases」页面
+**访问方式：** AstrBot WebUI → 插件管理 → 点击 Airi画廊 插件卡片会默认进入「gallery」本地画廊；如需管理昵称，可在插件页面组件中进入「zz_aliases」页面。
 
 **功能：**
 - 表格展示所有当前昵称
@@ -256,6 +257,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `git_repo_name` | string | `""` | 仓库名称，例如 `airi-gallery-images` |
 | `git_branch` | string | `main` | 同步使用的 Git 分支 |
 | `git_token` | string | `""` | 访问令牌（GitHub PAT 或 Gitee 私人令牌，需 repo 读写权限） |
+| `git_push_batch_size` | int | `50` | GitHub `/推送` 每个 commit 合并的图片数量，建议 10~100；Gitee 暂不生效 |
 | `git_sync_interval` | int | `5` | 自动同步间隔（分钟），设为 0 禁用定时拉取 |
 
 ## 🧭 命令速查表
@@ -291,6 +293,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.7.0
+
+- **优化** GitHub `/推送` 会把本地新增或变更图片按批次合并为少量 commit，避免大量图片时一张图一个 commit
+- **新增** `git_push_batch_size` 配置项，可调整 GitHub 批量推送每个 commit 包含的图片数量
+- **兼容** 批量提交失败时自动回退逐文件推送，Gitee 继续使用原有逐文件推送路径
 
 ### v2.6.0
 

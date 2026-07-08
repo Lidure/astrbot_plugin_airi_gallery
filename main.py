@@ -180,13 +180,23 @@ class GalleryTool(FunctionTool):
     def __init__(self, plugin: "Main"):
         super().__init__(
             name="gallery_send",
-            description="从 Airi 画廊图库中随机发送表情包或图片。适用于聊天中需要发表情包/图片的场景。",
+            description=(
+                "从 Airi 画廊图库中随机发送表情包或图片。"
+                "当用户说“发一张/来一张/发表情包/发图片/发某某的表情包”时应调用。"
+                "如果用户提到分类名或昵称，例如“发一张 airi 的表情包”，"
+                "应把 category 填为该关键词；没有明确分类时留空随机发送。"
+                f"{plugin._llm_gallery_hint()}"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "category": {
                         "type": "string",
-                        "description": "要发送的图片分类名。留空则从所有分类中随机选取。",
+                        "description": (
+                            "要发送的图片分类名、分类昵称，或用户原话中的分类关键词。"
+                            "例如用户说“发一张 airi 的表情包”，category 应填 airi。"
+                            "留空则插件会尝试从用户消息中匹配分类；仍无匹配时从所有分类随机选取。"
+                        ),
                     },
                     "count": {
                         "type": "integer",
@@ -202,22 +212,34 @@ class GalleryTool(FunctionTool):
         event = context.context.event
         category = kwargs.get("category", "")
         count = kwargs.get("count", 1)
-        count = max(1, min(self._plugin.view_multiple_max, int(count)))
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = 1
+        count = max(1, min(self._plugin.view_multiple_max, count))
 
         plugin = self._plugin
+        query = str(category or "").strip()
+        if not query:
+            query = str(getattr(event, "message_str", "") or "").strip()
+        category = plugin._resolve_gallery_category_query(query)
+
         if category:
-            category = plugin._resolve_alias(category)
             images = plugin._iter_category_images(category)
         else:
             images = plugin._iter_image_files()
 
         if not images:
+            if category:
+                return f"图库分类 {category} 中没有可用的图片。"
             return "图库中没有可用的图片。"
 
         picks = images if len(images) <= count else random.sample(images, count)
         for path in picks:
             await event.send(event.image_result(str(path)))
 
+        if category:
+            return f"已从 {category} 分类发送 {len(picks)} 张图片。"
         return f"已发送 {len(picks)} 张图片。"
 
 
@@ -1206,6 +1228,191 @@ class Main(Star):
         logger.error(f"[Git Sync] 上传文件失败 {path} (HTTP {status})")
         return False
 
+    def _git_get_head_commit_and_tree(self) -> tuple[str, str] | None:
+        """获取 GitHub 当前分支 HEAD commit SHA 和 tree SHA。"""
+        if self._git_platform() != "github":
+            return None
+
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+
+        ref_url = f"{base}/repos/{owner}/{repo}/git/ref/heads/{branch}"
+        status, ref_data = self._git_request("GET", ref_url)
+        if status != 200 or not ref_data:
+            logger.warning(f"[Git Sync] 获取 GitHub 分支引用失败 (HTTP {status})")
+            return None
+
+        commit_sha = ((ref_data.get("object") or {}).get("sha") or "").strip()
+        if not commit_sha:
+            logger.warning("[Git Sync] GitHub 分支引用缺少 commit SHA。")
+            return None
+
+        commit_url = f"{base}/repos/{owner}/{repo}/git/commits/{commit_sha}"
+        status, commit_data = self._git_request("GET", commit_url)
+        if status != 200 or not commit_data:
+            logger.warning(f"[Git Sync] 获取 GitHub HEAD commit 失败 (HTTP {status})")
+            return None
+
+        tree_sha = ((commit_data.get("tree") or {}).get("sha") or "").strip()
+        if not tree_sha:
+            logger.warning("[Git Sync] GitHub HEAD commit 缺少 tree SHA。")
+            return None
+        return commit_sha, tree_sha
+
+    def _git_create_github_blob(self, content: bytes) -> str | None:
+        """创建 GitHub blob，返回 blob SHA。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/blobs"
+        body = {
+            "content": b64mod.b64encode(content).decode("ascii"),
+            "encoding": "base64",
+        }
+        status, data = self._git_request("POST", url, json_body=body, timeout=60)
+        if status != 201 or not data:
+            logger.warning(f"[Git Sync] 创建 GitHub blob 失败 (HTTP {status})")
+            return None
+        sha = str(data.get("sha", "")).strip()
+        return sha or None
+
+    def _git_create_github_tree(self, base_tree_sha: str, entries: list[dict]) -> str | None:
+        """基于当前 tree 创建包含一批文件变更的新 tree。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/trees"
+        body = {"base_tree": base_tree_sha, "tree": entries}
+        status, data = self._git_request("POST", url, json_body=body)
+        if status != 201 or not data:
+            logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {status})")
+            return None
+        sha = str(data.get("sha", "")).strip()
+        return sha or None
+
+    def _git_create_github_commit(self, message: str, tree_sha: str, parent_sha: str) -> str | None:
+        """创建 GitHub commit，返回 commit SHA。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/commits"
+        body = {"message": message, "tree": tree_sha, "parents": [parent_sha]}
+        status, data = self._git_request("POST", url, json_body=body)
+        if status != 201 or not data:
+            logger.warning(f"[Git Sync] 创建 GitHub commit 失败 (HTTP {status})")
+            return None
+        sha = str(data.get("sha", "")).strip()
+        return sha or None
+
+    def _git_update_github_ref(self, commit_sha: str) -> bool:
+        """将 GitHub 分支引用快进到新 commit。"""
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        branch = self._git_branch()
+        url = f"{base}/repos/{owner}/{repo}/git/refs/heads/{branch}"
+        status, _ = self._git_request("PATCH", url, json_body={"sha": commit_sha, "force": False})
+        return status == 200
+
+    def _git_commit_github_batch(
+        self,
+        items: list[tuple[str, bytes, str]],
+        message: str,
+    ) -> bool:
+        """把一批文件作为一个 GitHub commit 提交。
+
+        items: [(git_path, content, blob_sha), ...]
+        """
+        head = self._git_get_head_commit_and_tree()
+        if not head:
+            return False
+        parent_sha, base_tree_sha = head
+
+        tree_entries = [
+            {
+                "path": git_path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": blob_sha,
+            }
+            for git_path, _, blob_sha in items
+        ]
+        tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
+        if not tree_sha:
+            return False
+
+        commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
+        if not commit_sha:
+            return False
+
+        if self._git_update_github_ref(commit_sha):
+            for git_path, _, blob_sha in items:
+                self._sha_cache[git_path] = blob_sha
+            return True
+
+        logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
+        head = self._git_get_head_commit_and_tree()
+        if not head:
+            return False
+        parent_sha, base_tree_sha = head
+        tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
+        if not tree_sha:
+            return False
+        commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
+        if not commit_sha:
+            return False
+        if not self._git_update_github_ref(commit_sha):
+            return False
+
+        for git_path, _, blob_sha in items:
+            self._sha_cache[git_path] = blob_sha
+        return True
+
+    def _git_push_batch_github(self, items: list[tuple[str, bytes]]) -> bool:
+        """GitHub 批量推送：多个文件共用一个 commit。"""
+        if not items:
+            return True
+
+        blob_items: list[tuple[str, bytes, str]] = []
+        for git_path, content in items:
+            if self._git_push_cancelled:
+                return False
+            blob_sha = self._git_create_github_blob(content)
+            if not blob_sha:
+                logger.warning(f"[Git Sync] 批量 blob 创建失败，准备回退逐文件推送: {git_path}")
+                return False
+            blob_items.append((git_path, content, blob_sha))
+
+        message = f"Sync {len(blob_items)} gallery images"
+        return self._git_commit_github_batch(blob_items, message)
+
+    def _git_push_pending_items(self, items: list[tuple[str, bytes]]) -> tuple[int, int, int]:
+        """推送一批待处理文件，返回 (成功数, 失败数, 跳过数)。"""
+        if not items:
+            return 0, 0, 0
+
+        if self._git_platform() == "github":
+            if self._git_push_batch_github(items):
+                logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
+                return len(items), 0, 0
+            logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
+
+        success = 0
+        failed = 0
+        skipped = 0
+        for offset, (git_path, content) in enumerate(items):
+            if self._git_push_cancelled:
+                skipped += len(items) - offset
+                break
+            ok = self._git_put_file(git_path, content, f"Sync {git_path}")
+            if ok:
+                success += 1
+            else:
+                failed += 1
+        return success, failed, skipped
+
     def _git_delete_file(self, path: str, message: str) -> bool:
         """删除远程仓库中的文件，SHA 缓存为空时会主动查询远程。"""
         sha = self._sha_cache.get(path)
@@ -1395,6 +1602,15 @@ class Main(Star):
         failed = 0
         skipped = 0
         processed = 0
+        pending: list[tuple[str, bytes]] = []
+        if self._git_platform() == "github":
+            try:
+                batch_size = int(self.config.get("git_push_batch_size", 50) or 50)
+            except (TypeError, ValueError):
+                batch_size = 50
+            batch_size = max(1, min(100, batch_size))
+        else:
+            batch_size = 1
 
         local_images = [
             path
@@ -1412,6 +1628,8 @@ class Main(Star):
             for entry in remote_tree
             if entry.get("path", "").startswith("gallery/")
         }
+        if self._git_platform() != "github":
+            logger.info("[Git Sync] 当前平台暂不支持批量 commit，使用逐文件推送。")
 
         for path in local_images:
             if self._git_push_cancelled:
@@ -1444,11 +1662,13 @@ class Main(Star):
                 else:
                     self._sha_cache.pop(git_path, None)
 
-                ok = self._git_put_file(git_path, content, f"Sync {git_path}")
-                if ok:
-                    success += 1
-                else:
-                    failed += 1
+                pending.append((git_path, content))
+                if len(pending) >= batch_size:
+                    ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
+                    success += ok_count
+                    failed += fail_count
+                    skipped += skip_count
+                    pending = []
             except Exception as exc:
                 logger.error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
                 failed += 1
@@ -1456,6 +1676,14 @@ class Main(Star):
         # 统计被跳过的剩余文件
         if self._git_push_cancelled:
             skipped += max(0, len(local_images) - processed)
+            logger.info(f"[Git Sync] 批量推送已取消：成功 {success}，失败 {failed}，跳过 {skipped}。")
+            return success, failed, skipped
+
+        if pending:
+            ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
+            success += ok_count
+            failed += fail_count
+            skipped += skip_count
 
         logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
         return success, failed, skipped
@@ -1515,6 +1743,86 @@ class Main(Star):
 
     def _resolve_alias(self, name: str) -> str:
         return self.category_aliases.get(name, name)
+
+    def _list_category_names(self) -> list[str]:
+        if not self.gallery_root.exists():
+            return []
+        return sorted(
+            [
+                path.name
+                for path in self.gallery_root.iterdir()
+                if path.is_dir() and path.name != "generated"
+            ],
+            key=lambda name: name.lower(),
+        )
+
+    def _llm_gallery_hint(self) -> str:
+        categories = self._list_category_names()
+        hints: list[str] = []
+        if categories:
+            hints.append("当前可用分类包括：" + "、".join(categories[:30]))
+        if self.category_aliases:
+            alias_items = [f"{alias}={cat}" for alias, cat in sorted(self.category_aliases.items())[:30]]
+            hints.append("分类昵称包括：" + "、".join(alias_items))
+        if not hints:
+            return ""
+        return " " + "；".join(hints) + "。"
+
+    @staticmethod
+    def _normalize_match_text(text: str) -> str:
+        return re.sub(r"[\s_\-./\\:：，,。！？!?【】\[\]（）()<>《》\"'“”‘’]+", "", text).lower()
+
+    def _resolve_gallery_category_query(self, query: str) -> str:
+        query = str(query or "").strip()
+        if not query:
+            return ""
+
+        categories = self._list_category_names()
+        if not categories:
+            return _sanitize_component(self._resolve_alias(query))
+
+        alias_to_category = {
+            str(alias): str(category)
+            for alias, category in self.category_aliases.items()
+            if str(alias).strip() and str(category).strip()
+        }
+
+        if query in alias_to_category:
+            resolved = alias_to_category[query]
+            if resolved in categories:
+                return resolved
+        if query in categories:
+            return query
+
+        query_lower = query.lower()
+        category_by_lower = {category.lower(): category for category in categories}
+        alias_by_lower = {alias.lower(): category for alias, category in alias_to_category.items()}
+
+        if query_lower in alias_by_lower and alias_by_lower[query_lower] in categories:
+            return alias_by_lower[query_lower]
+        if query_lower in category_by_lower:
+            return category_by_lower[query_lower]
+
+        normalized_query = self._normalize_match_text(query)
+        candidates: list[tuple[int, int, str]] = []
+
+        for category in categories:
+            normalized = self._normalize_match_text(category)
+            if normalized and normalized in normalized_query:
+                candidates.append((len(normalized), 1, category))
+
+        for alias, category in alias_to_category.items():
+            if category not in categories:
+                continue
+            normalized = self._normalize_match_text(alias)
+            if normalized and normalized in normalized_query:
+                candidates.append((len(normalized), 2, category))
+
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][2]
+
+        return ""
 
     @staticmethod
     def _strip_at_prefix(text: str) -> str:
