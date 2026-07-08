@@ -441,6 +441,10 @@ class Main(Star):
             elif kind == "view_multiple":
                 cat, cnt = payload
                 await self._handle_view_multiple(event, str(cat), int(cnt))
+            elif kind == "random_draw":
+                await self._handle_random_draw(event, int(payload))
+            elif kind == "random_draw_invalid":
+                await event.send(event.plain_result(f"格式：/抽表情 或 /抽表情 5，最多 {self.view_multiple_max} 张。"))
             elif kind == "list_categories":
                 await self._handle_list_categories(event)
             elif kind == "create_category":
@@ -555,6 +559,18 @@ class Main(Star):
         action = self._parse_action(text)
         if action and action[0] == "view_recent":
             await self._handle_view_recent(event, int(action[1]))
+
+    @filter.command("抽表情")
+    async def cmd_random_draw(self, event: AstrMessageEvent):
+        """从全图库随机抽取 1 张或 N 张图片/表情包。"""
+        text = self._normalize_command_text(event, "抽表情")
+        action = self._parse_action(text)
+        if not action:
+            return
+        if action[0] == "random_draw":
+            await self._handle_random_draw(event, int(action[1]))
+        elif action[0] == "random_draw_invalid":
+            await event.send(event.plain_result(f"格式：/抽表情 或 /抽表情 5，最多 {self.view_multiple_max} 张。"))
 
     @filter.command("导入图库")
     async def cmd_import(self, event: AstrMessageEvent):
@@ -1867,6 +1883,7 @@ class Main(Star):
                 "- /airi_gallery：查看插件帮助（图片海报）",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
                 f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
+                f"- /抽表情：从全图库随机抽取 1 张图片或表情包，可追加数字 N，最多 {self.view_multiple_max} 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 f"- {prefix}看100-110：按编号范围查看 100 到 110 的图片或表情包，最多 {VIEW_RANGE_MAX} 张",
@@ -2021,6 +2038,15 @@ class Main(Star):
 
         if normalized == "/取消推送":
             return "cancel_push", None
+
+        draw_match = re.match(r"^/抽表情(?:\s+(.+))?$", normalized)
+        if draw_match:
+            tail = (draw_match.group(1) or "").strip()
+            if not tail:
+                return "random_draw", 1
+            if tail.isdigit():
+                return "random_draw", int(tail)
+            return "random_draw_invalid", None
 
         create_match = re.match(r"^/创建\s*(.+)$", normalized)
         upload_match = re.match(r"^/上传\s*(.+)$", normalized)
@@ -2495,6 +2521,26 @@ class Main(Star):
             await self._send_as_forward(event, sats)
         else:
             await self._send_as_single(event, sats)
+
+    async def _handle_random_draw(self, event: AstrMessageEvent, count: int):
+        """从全图库随机抽取 N 张图片或表情包。"""
+        if count > self.view_multiple_max:
+            await event.send(event.plain_result(f"最多一次抽取 {self.view_multiple_max} 张图片哦。"))
+            return
+
+        count = max(1, min(self.view_multiple_max, int(count)))
+        images = self._iter_image_files()
+        if not images:
+            await event.send(event.plain_result("图库中还没有任何图片。"))
+            return
+
+        picks = images if len(images) <= count else random.sample(images, count)
+        if len(picks) == 1:
+            await event.send(event.image_result(str(picks[0])))
+        elif self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, picks)
+        else:
+            await self._send_as_single(event, picks)
 
     async def _handle_view_recent(self, event: AstrMessageEvent, count: int):
         """发送最近上传的 N 张图片。"""
@@ -3055,6 +3101,7 @@ class Main(Star):
                 [
                     (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
                     (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
+                    ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
                     (f"{self._view_command_prefix()}看全部<分类>", "生成该分类总览图，并标注每张图片编号"),
                     (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
                     (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),

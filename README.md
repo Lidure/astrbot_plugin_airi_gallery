@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.7.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.8.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -72,11 +72,12 @@
 | :--- | :--- |
 | `看看<分类>` | 从对应分类里随机返回一张图片或表情包 |
 | `看看<分类> N` | 随机返回 `N` 张，`N` 最大为 `10` |
+| `/抽表情` / `/抽表情 N` | 从全图库随机抽取图片或表情包，默认 1 张，`N` 最大为 `10` |
 | `看全部<分类>` | 输出该分类下全部图片的总览图，并标注序号 |
 | `看看123` | 返回编号为 `123` 的图片或表情包 |
 | `看100-110` | 按编号范围连续返回 `100` 到 `110` 的图片或表情包，最多 50 张 |
 
-> 以上浏览命令均可在配置中切换是否使用 `/` 前缀。
+> `看看` / `看全部` / 编号查看可在配置中切换是否使用 `/` 前缀；`/抽表情` 固定使用 `/` 前缀，避免普通聊天误触发。
 
 ### 3. 多图发送模式
 
@@ -266,6 +267,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | :--- | :---: | :--- |
 | `看看<分类>` / `/看看<分类>` | 全员 | 随机发送一张图片或表情包 |
 | `看看<分类> N` / `/看看<分类> N` | 全员 | 随机发送 `N` 张（最多 10） |
+| `/抽表情` / `/抽表情 N` | 全员 | 从全图库随机抽取 1 张或 N 张图片/表情包 |
 | `看全部<分类>` / `/看全部<分类>` | 全员 | 生成分类总览图 |
 | `看看123` / `/看看123` | 全员 | 按编号查看图片 |
 | `看100-110` / `/看100-110` | 全员 | 按编号范围连续查看图片，最多 50 张 |
@@ -293,6 +295,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.8.0
+
+- **新增** `/抽表情` 命令，从全图库随机抽取 1 张图片或表情包
+- **新增** `/抽表情 N` 支持一次随机抽取多张，数量上限复用 `view_multiple_max`，发送方式复用多图发送模式
 
 ### v2.7.0
 
