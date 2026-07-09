@@ -2560,7 +2560,7 @@ class Main(Star):
 
     async def _send_as_forward(self, event: AstrMessageEvent, paths: list[Path]):
         try:
-            from astrbot.api.message_components import Node
+            from astrbot.api.message_components import Node, Nodes
         except ImportError:
             await self._send_as_single(event, paths)
             return
@@ -2575,7 +2575,7 @@ class Main(Star):
                 )
                 for path in paths
             ]
-            await event.send(event.chain_result(nodes))
+            await event.send(event.chain_result([Nodes(nodes)]))
         except Exception as exc:
             logger.warning(f"合并转发多图失败，回退到单条消息模式：{exc}")
             await self._send_as_single(event, paths)
