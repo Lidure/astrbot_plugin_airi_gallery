@@ -2566,16 +2566,16 @@ class Main(Star):
             return
 
         try:
-            content = []
-            for path in paths:
-                content.append(Image.fromFileSystem(str(path)))
             bot_id = getattr(event.message_obj, "self_id", None) or "0"
-            node = Node(
-                uin=str(bot_id),
-                name="Airi 画廊",
-                content=content,
-            )
-            await event.send(event.chain_result([node]))
+            nodes = [
+                Node(
+                    uin=str(bot_id),
+                    name="Airi 画廊",
+                    content=[Image.fromFileSystem(str(path))],
+                )
+                for path in paths
+            ]
+            await event.send(event.chain_result(nodes))
         except Exception as exc:
             logger.warning(f"合并转发多图失败，回退到单条消息模式：{exc}")
             await self._send_as_single(event, paths)

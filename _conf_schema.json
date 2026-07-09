@@ -12,7 +12,7 @@
   "view_multiple_mode": {
     "type": "string",
     "description": "看看多张时的发送模式",
-    "hint": "single: 单条消息包含多张图片（默认）；forward: 以合并转发消息发送，避免刷屏。仅在支持合并转发的平台（如 OneBot）上生效，其他平台自动回退为 single。",
+    "hint": "single: 单条消息包含多张图片（默认）；forward: 以合并转发消息发送，且每张图片独立为一条转发节点，方便收藏表情。仅在支持合并转发的平台（如 OneBot）上生效，其他平台自动回退为 single。",
     "default": "single",
     "options": [
       "single",

@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.8.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.8.1-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -86,7 +86,7 @@
 | 模式 | 说明 |
 | :--- | :--- |
 | `single`（默认） | 将 N 张图片打包在一条消息中发送 |
-| `forward` | 以合并转发消息发送，避免刷屏（仅 OneBot 等支持合并转发的平台生效） |
+| `forward` | 以合并转发消息发送，且每张图独立为一条转发节点，方便收藏表情（仅 OneBot 等支持合并转发的平台生效） |
 
 ### 4. 分类昵称（别名）
 
@@ -295,6 +295,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.8.1
+
+- **优化** 合并转发多图发送改为每张图片独立一个转发节点，避免多张表情挤在同一条聊天记录里不方便保存
 
 ### v2.8.0
 
