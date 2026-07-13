@@ -1050,10 +1050,7 @@ async function syncFromRemote() {
   try {
     const tree = await getTree();
     state.treeFetched = true;
-    // Update sha cache
-    for (const entry of tree) {
-      state.shaCache[entry.path] = entry.sha;
-    }
+    state.shaCache = Object.fromEntries(tree.map(entry => [entry.path, entry.sha]));
     state.categories = parseCategories(tree);
     const totalImages = state.categories.reduce((s, c) => s + c.files.length, 0);
     updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
@@ -1246,24 +1243,38 @@ dropZone.ondragleave = () => dropZone.classList.remove('dragover');
 dropZone.ondrop = async e => { e.preventDefault(); dropZone.classList.remove('dragover'); await addFiles(e.dataTransfer.files); };
 fileInput.onchange = async () => { await addFiles(fileInput.files); fileInput.value = ''; };
 
+function digestToHex(digest) {
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function hashFile(file) {
   const buf = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', buf);
-  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  const header = new TextEncoder().encode(`blob ${buf.byteLength}\0`);
+  const blobBytes = new Uint8Array(header.length + buf.byteLength);
+  blobBytes.set(header);
+  blobBytes.set(new Uint8Array(buf), header.length);
+  const [contentDigest, blobDigest] = await Promise.all([
+    crypto.subtle.digest('SHA-256', buf),
+    crypto.subtle.digest('SHA-1', blobBytes),
+  ]);
+  return {
+    signature: digestToHex(contentDigest),
+    blobSha: digestToHex(blobDigest),
+  };
 }
 
 async function addFiles(fl) {
   let skipped = 0;
   for (const f of fl) {
     if (!f.type.startsWith('image/')) continue;
-    const signature = await hashFile(f);
+    const { signature, blobSha } = await hashFile(f);
     if (state.pendingFiles.some(s => s.signature === signature)) {
       skipped++;
       continue;
     }
-    state.pendingFiles.push({ file: f, signature });
+    state.pendingFiles.push({ file: f, signature, blobSha });
   }
-  if (skipped > 0) toast(`已跳过 ${skipped} 张重复图片`);
+  if (skipped > 0) toast(`已跳过待上传队列中的 ${skipped} 张重复图片`);
   renderPreview();
 }
 
@@ -1293,18 +1304,29 @@ function fileToBase64(file) {
   });
 }
 
-async function uploadFileWithRetry(cat, file, ext, contentB64, startIdx) {
+function categoryBlobShas(category) {
+  const found = state.categories.find(item => item.name === category);
+  return new Set((found?.files || []).map(file => file.sha).filter(Boolean));
+}
+
+async function uploadFileWithRetry(cat, file, ext, contentB64, blobSha, startIdx) {
   let index = startIdx;
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (categoryBlobShas(cat).has(blobSha)) {
+      return { duplicate: true };
+    }
     const fileName = `${index}${ext}`;
     const gitPath = `gallery/${cat}/${fileName}`;
     try {
       await putFile(gitPath, contentB64, `Upload ${cat}/${fileName}`);
-      return { index, fileName, gitPath };
+      return { duplicate: false, index, fileName, gitPath };
     } catch (e) {
       const canRetry = (e.status === 409 || e.status === 422) && attempt < 2;
       if (!canRetry) throw e;
       await syncFromRemote();
+      if (categoryBlobShas(cat).has(blobSha)) {
+        return { duplicate: true };
+      }
       index = getNextIndex();
     }
   }
@@ -1318,45 +1340,83 @@ upBtn.onclick = async () => {
 
   upBtn.disabled = true;
   progressWrap.classList.add('show');
+  progressText.textContent = '正在同步并检查重复图片...';
+  progressBar.style.width = '0%';
 
-  let nextIdx = getNextIndex();
-  const total = state.pendingFiles.length;
-  let uploaded = 0, failed = 0;
+  try {
+    const tree = await getTree();
+    state.shaCache = Object.fromEntries(tree.map(entry => [entry.path, entry.sha]));
+    state.categories = parseCategories(tree);
 
-  for (let i = 0; i < state.pendingFiles.length; i++) {
-    const f = state.pendingFiles[i].file;
-    const ext = getExt(f.name);
-
-    progressText.textContent = `上传中 ${i + 1} / ${total}...`;
-    progressBar.style.width = `${((i) / total) * 100}%`;
-
-    try {
-      const b64 = await fileToBase64(f);
-      const result = await uploadFileWithRetry(cat, f, ext, b64, nextIdx);
-      uploaded++;
-      nextIdx = result.index + 1;
-    } catch (e) {
-      console.error(`Upload failed: ${f.name}`, e);
-      failed++;
+    const remoteShas = categoryBlobShas(cat);
+    const uploadQueue = [];
+    let skippedDuplicate = 0;
+    for (const item of state.pendingFiles) {
+      if (remoteShas.has(item.blobSha)) {
+        skippedDuplicate++;
+      } else {
+        remoteShas.add(item.blobSha);
+        uploadQueue.push(item);
+      }
     }
-  }
 
-  progressBar.style.width = '100%';
-  progressText.textContent = `完成：成功 ${uploaded}，失败 ${failed}`;
+    let nextIdx = getNextIndex();
+    const total = uploadQueue.length;
+    let uploaded = 0;
+    const failedItems = [];
 
-  if (uploaded > 0) {
-    toast(`成功上传 ${uploaded} 张到【${cat}】` + (failed ? `，${failed} 张失败` : ''));
-    state.pendingFiles = [];
+    for (let i = 0; i < uploadQueue.length; i++) {
+      const item = uploadQueue[i];
+      const f = item.file;
+      const ext = getExt(f.name);
+
+      progressText.textContent = `上传中 ${i + 1} / ${total}...`;
+      progressBar.style.width = `${(i / total) * 100}%`;
+
+      try {
+        const b64 = await fileToBase64(f);
+        const result = await uploadFileWithRetry(cat, f, ext, b64, item.blobSha, nextIdx);
+        if (result.duplicate) {
+          skippedDuplicate++;
+        } else {
+          uploaded++;
+          nextIdx = result.index + 1;
+        }
+      } catch (e) {
+        console.error(`Upload failed: ${f.name}`, e);
+        failedItems.push(item);
+      }
+    }
+
+    const failed = failedItems.length;
+    progressBar.style.width = '100%';
+    progressText.textContent = `完成：成功 ${uploaded}，跳过重复 ${skippedDuplicate}，失败 ${failed}`;
+    state.pendingFiles = failedItems;
     renderPreview();
-    state.imageCache = {};
-    await syncFromRemote();
-  } else {
-    toast('上传失败', false);
-  }
 
-  upBtn.disabled = false;
-  upBtn.innerHTML = `✨ 上传 (<span id="up-count">${state.pendingFiles.length}</span>) 张`;
-  setTimeout(() => { progressWrap.classList.remove('show'); progressBar.style.width = '0%'; }, 3000);
+    if (uploaded > 0) {
+      state.imageCache = {};
+      await syncFromRemote();
+    }
+
+    const summary = uploaded > 0
+      ? `成功上传 ${uploaded} 张到【${cat}】` +
+        (skippedDuplicate ? `，已跳过 ${skippedDuplicate} 张重复图片` : '') +
+        (failed ? `，${failed} 张失败并保留在队列中` : '')
+      : skippedDuplicate > 0 && failed === 0
+        ? `没有新增图片，已跳过 ${skippedDuplicate} 张重复图片`
+        : `没有图片上传成功` +
+          (skippedDuplicate ? `，已跳过 ${skippedDuplicate} 张重复图片` : '') +
+          (failed ? `，${failed} 张失败并保留在队列中` : '');
+    toast(summary, failed === 0);
+  } catch (e) {
+    console.error('Upload preparation failed:', e);
+    progressText.textContent = '检查或上传失败，请稍后重试';
+    toast(`上传失败：${e.message}`, false);
+  } finally {
+    upBtn.disabled = false;
+    setTimeout(() => { progressWrap.classList.remove('show'); progressBar.style.width = '0%'; }, 3000);
+  }
 };
 
 function getExt(filename) {

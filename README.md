@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.8.2-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.8.3-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -191,7 +191,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | 分支 | `main` | 同步使用的分支 |
 | 访问令牌 | （空） | GitHub / Gitee 令牌，需读写权限 |
 
-**功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 SHA-256 去重、按全局最大编号续号。多个浏览器同时上传发生编号冲突时，页面会刷新远程树并重试分配新编号。
+**功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 SHA-256 去重、上传前按目标分类与远程图库做内容查重、按全局最大编号续号。重复图片会被跳过并明确显示数量；多个浏览器同时上传发生编号冲突时，页面会刷新远程树，再次查重并重试分配新编号。
 
 如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送 `/airi_gallery` 或 `/画廊帮助` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器查看表情包、批量上传和整理图片。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
 
@@ -295,6 +295,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.8.3
+
+- **修复** Gallery Cloud 网页上传未与远程图库查重的问题；现在会在上传前刷新远程文件树，并按目标分类比较图片内容
+- **优化** 上传结果明确显示成功、跳过重复和失败数量，并将上传失败的图片保留在待上传队列中
+- **优化** 并发上传发生编号冲突时会再次查重，避免其他用户刚上传的同一图片被重复保存
 
 ### v2.8.2
 
