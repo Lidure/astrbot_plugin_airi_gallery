@@ -27,6 +27,8 @@ MODE_NO_PREFIX = "no_prefix"
 MODE_PREFIX = "prefix"
 VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
+REMOTE_DELETE_CONFIRM_TTL = 300
+REMOTE_DELETE_PREVIEW_LIMIT = 20
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -275,6 +277,8 @@ class Main(Star):
         self._gallery_write_lock = threading.RLock()
         self._git_sync_enabled = False
         self._git_push_cancelled = False
+        self._remote_delete_previews: dict[str, dict] = {}
+        self._remote_delete_preview_lock = threading.RLock()
         self._load_hash_index()
 
         if self.llm_tool_enabled:
@@ -429,6 +433,12 @@ class Main(Star):
                     await event.send(
                         event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
                     )
+            elif kind == "preview_local_deletes":
+                await self._handle_preview_local_deletes(event)
+            elif kind == "confirm_local_deletes":
+                await self._handle_confirm_local_deletes(event, payload)
+            elif kind == "cancel_local_deletes":
+                await self._handle_cancel_local_deletes(event)
             elif kind == "view_number":
                 await self._handle_view_number(event, int(payload))
             elif kind == "view_range":
@@ -656,6 +666,217 @@ class Main(Star):
         self._git_push_cancelled = True
         await event.send(
             event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
+        )
+
+    @filter.command("推送本地删除")
+    async def cmd_preview_local_deletes(self, event: AstrMessageEvent):
+        """预览本地已删除、远程仍存在的图片，不立即执行删除。"""
+        await self._handle_preview_local_deletes(event)
+
+    @filter.command("确认推送本地删除")
+    async def cmd_confirm_local_deletes(self, event: AstrMessageEvent):
+        """确认执行最近一次本地删除预览。"""
+        text = self._normalize_command_text(event, "确认推送本地删除")
+        match = re.fullmatch(r"/确认推送本地删除(?:\s+(\d+))?", text)
+        expected_count = int(match.group(1)) if match and match.group(1) else None
+        await self._handle_confirm_local_deletes(event, expected_count)
+
+    @filter.command("取消推送本地删除")
+    async def cmd_cancel_local_deletes(self, event: AstrMessageEvent):
+        """取消当前账号最近一次远程删除预览。"""
+        await self._handle_cancel_local_deletes(event)
+
+    def _remote_delete_preview_key(self, event: AstrMessageEvent) -> str:
+        uid, name = self._get_event_actor_identity(event)
+        try:
+            sender_id = str(event.get_sender_id() or "")
+        except Exception:
+            sender_id = ""
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        return f"{origin}|{uid or sender_id or name or 'unknown'}"
+
+    @staticmethod
+    def _is_remote_gallery_image(git_path: str) -> bool:
+        parts = Path(git_path).parts
+        return (
+            len(parts) >= 3
+            and parts[0] == "gallery"
+            and ".." not in parts
+            and Path(git_path).suffix.lower() in IMAGE_SUFFIXES
+        )
+
+    def _find_remote_delete_candidates(self) -> list[dict] | None:
+        """查找曾被本地索引记录、当前本地缺失且远程仍存在的图片。"""
+        tree = self._git_list_tree()
+        if tree is None:
+            return None
+        with self._hash_index_lock:
+            known_local_paths = set(self._hash_index.keys())
+
+        candidates: list[dict] = []
+        for entry in tree:
+            git_path = str(entry.get("path", ""))
+            if not self._is_remote_gallery_image(git_path):
+                continue
+            if git_path not in known_local_paths:
+                continue
+            local_path = self.gallery_root.parent.joinpath(*Path(git_path).parts)
+            if local_path.exists():
+                continue
+            remote_sha = str(entry.get("sha", ""))
+            if not remote_sha:
+                continue
+            candidates.append({"path": git_path, "sha": remote_sha})
+        candidates.sort(key=lambda item: item["path"])
+        return candidates
+
+    def _execute_remote_delete_preview(self, items: list[dict]) -> dict[str, int | bool]:
+        result: dict[str, int | bool] = {
+            "deleted": 0,
+            "failed": 0,
+            "skipped": 0,
+            "busy": False,
+        }
+        if not self._sync_lock.acquire(blocking=False):
+            result["busy"] = True
+            return result
+        try:
+            tree = self._git_list_tree()
+            if tree is None:
+                result["failed"] = len(items)
+                return result
+            remote_images = {
+                str(entry.get("path", "")): entry
+                for entry in tree
+                if self._is_remote_gallery_image(str(entry.get("path", "")))
+            }
+
+            for item in items:
+                git_path = str(item.get("path", ""))
+                preview_sha = str(item.get("sha", ""))
+                local_path = self.gallery_root.parent.joinpath(*Path(git_path).parts)
+                current = remote_images.get(git_path)
+
+                if local_path.exists():
+                    result["skipped"] = int(result["skipped"]) + 1
+                    continue
+                if current is None:
+                    self._forget_file_hash(git_path, save=False)
+                    result["skipped"] = int(result["skipped"]) + 1
+                    continue
+
+                current_sha = str(current.get("sha", ""))
+                if not current_sha or current_sha != preview_sha:
+                    result["skipped"] = int(result["skipped"]) + 1
+                    continue
+
+                self._sha_cache[git_path] = current_sha
+                if self._git_delete_file(git_path, f"Delete locally removed {git_path}"):
+                    self._forget_file_hash(git_path, save=False)
+                    result["deleted"] = int(result["deleted"]) + 1
+                else:
+                    result["failed"] = int(result["failed"]) + 1
+            self._save_hash_index()
+        finally:
+            self._sync_lock.release()
+        return result
+
+    async def _handle_preview_local_deletes(self, event: AstrMessageEvent) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._git_sync_enabled:
+            await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+            return
+
+        await event.send(event.plain_result("正在检查本地删除记录，只生成预览，不会立即删除云端图片。"))
+        candidates = await asyncio.to_thread(self._find_remote_delete_candidates)
+        if candidates is None:
+            await event.send(event.plain_result("无法读取远程图库，未执行任何删除。"))
+            return
+
+        key = self._remote_delete_preview_key(event)
+        if not candidates:
+            with self._remote_delete_preview_lock:
+                self._remote_delete_previews.pop(key, None)
+            await event.send(
+                event.plain_result(
+                    "没有发现可安全推送的本地删除。只有曾被本地索引记录、当前本地缺失且远程未变化的图片才会进入清单。"
+                )
+            )
+            return
+
+        with self._remote_delete_preview_lock:
+            self._remote_delete_previews[key] = {
+                "created_at": time.time(),
+                "items": candidates,
+            }
+
+        examples = [item["path"].removeprefix("gallery/") for item in candidates[:REMOTE_DELETE_PREVIEW_LIMIT]]
+        message = [
+            f"发现 {len(candidates)} 张本地已删除、远程仍存在的图片。",
+            "预览：" + "、".join(examples),
+        ]
+        if len(candidates) > REMOTE_DELETE_PREVIEW_LIMIT:
+            message.append(f"另有 {len(candidates) - REMOTE_DELETE_PREVIEW_LIMIT} 张未展示。")
+        message.extend(
+            [
+                "当前尚未删除任何云端文件。",
+                f"确认无误后，请在 {REMOTE_DELETE_CONFIRM_TTL // 60} 分钟内发送：/确认推送本地删除 {len(candidates)}",
+                "如需放弃，请发送：/取消推送本地删除",
+            ]
+        )
+        await event.send(event.plain_result("\n".join(message)))
+
+    async def _handle_confirm_local_deletes(self, event: AstrMessageEvent, expected_count) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._git_sync_enabled:
+            await event.send(event.plain_result("Git 同步未启用，请先在配置中开启并填写仓库信息。"))
+            return
+
+        key = self._remote_delete_preview_key(event)
+        with self._remote_delete_preview_lock:
+            preview = self._remote_delete_previews.get(key)
+        if not preview:
+            await event.send(event.plain_result("没有待确认的删除清单，请先发送 /推送本地删除。"))
+            return
+
+        items = list(preview.get("items") or [])
+        if time.time() - float(preview.get("created_at", 0)) > REMOTE_DELETE_CONFIRM_TTL:
+            with self._remote_delete_preview_lock:
+                self._remote_delete_previews.pop(key, None)
+            await event.send(event.plain_result("删除清单已过期，请重新发送 /推送本地删除 获取最新预览。"))
+            return
+        if expected_count is None or int(expected_count) != len(items):
+            await event.send(
+                event.plain_result(f"确认数量不匹配。请发送：/确认推送本地删除 {len(items)}")
+            )
+            return
+
+        result = await asyncio.to_thread(self._execute_remote_delete_preview, items)
+        if result.get("busy"):
+            await event.send(event.plain_result("当前有同步任务正在运行，删除清单仍然保留，请稍后再次确认。"))
+            return
+        with self._remote_delete_preview_lock:
+            self._remote_delete_previews.pop(key, None)
+        await event.send(
+            event.plain_result(
+                f"本地删除推送完成：云端删除 {result.get('deleted', 0)} 张，"
+                f"状态变化跳过 {result.get('skipped', 0)} 张，失败 {result.get('failed', 0)} 张。"
+            )
+        )
+
+    async def _handle_cancel_local_deletes(self, event: AstrMessageEvent) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        key = self._remote_delete_preview_key(event)
+        with self._remote_delete_preview_lock:
+            removed = self._remote_delete_previews.pop(key, None)
+        await event.send(
+            event.plain_result("已取消本地删除推送清单。" if removed else "当前没有待确认的删除清单。")
         )
 
     @filter.command("看全部")
@@ -1896,6 +2117,8 @@ class Main(Star):
                 "- /导入图库：重新扫描 gallery 并自动整理数字编号",
                 "- /立即同步：立即从远程仓库拉取新增图片到本地（别名：/同步远程）",
                 "- /推送到远程：快速推送本地新增或变更图片到远程仓库，已存在则跳过",
+                "- /推送本地删除：预览曾在本地存在、现在缺失但远程仍存在的图片，不会立即删除",
+                "- /确认推送本地删除 N：在 5 分钟内按预览数量二次确认，安全删除对应远程图片",
                 "- /昵称列表：以图片形式查看当前分类昵称映射",
                 "",
                 "说明：",
@@ -2032,6 +2255,17 @@ class Main(Star):
 
         if normalized == "/推送到远程":
             return "push_to_remote", None
+
+        if normalized == "/推送本地删除":
+            return "preview_local_deletes", None
+
+        confirm_local_delete = re.fullmatch(r"/确认推送本地删除(?:\s+(\d+))?", normalized)
+        if confirm_local_delete:
+            count = confirm_local_delete.group(1)
+            return "confirm_local_deletes", int(count) if count else None
+
+        if normalized == "/取消推送本地删除":
+            return "cancel_local_deletes", None
 
         if normalized in {"/立即同步", "/同步远程"}:
             return "sync_from_remote", None
@@ -3127,6 +3361,8 @@ class Main(Star):
                     ("/导入图库", "重新扫描 gallery 并整理数字编号"),
                     ("/立即同步", "立即从远程仓库拉取新增图片；别名 /同步远程"),
                     ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
+                    ("/推送本地删除", "预览本地已删除、云端仍存在的图片，不会立即执行"),
+                    ("/确认推送本地删除 N", "5 分钟内按准确数量确认；执行前再次核对本地状态与远程 SHA"),
                     ("/取消推送", "取消正在进行的批量推送"),
                 ],
             ),

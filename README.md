@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.8.3-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.9.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -165,6 +165,8 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - 启动时如果本地有未推送的图片，会自动推送到远程
 - 可配置定时器，定期从远程拉取新增图片（默认每 5 分钟）
 - 使用 `/推送` 可手动快速推送本地新增或变更图片，远程已存在且内容一致的图片会直接跳过
+- 直接在本地文件夹删除图片后，可使用 `/推送本地删除` 生成远程删除预览；必须在 5 分钟内使用带准确数量的 `/确认推送本地删除 N` 才会执行
+- 本地删除预览只包含曾被本地哈希索引记录的图片；确认时会再次核对本地文件和远程 SHA，避免误删 Cloud 新增或已发生变化的图片
 - GitHub 平台下 `/推送` 会按 `git_push_batch_size` 合并为少量 commit，避免大量图片时一张图一个 commit 导致推送缓慢；Gitee 暂保留逐文件推送
 - 使用 `/取消推送` 可中断正在进行的批量推送
 - 使用 `/立即同步` 或 `/同步远程` 可手动立即从远程拉取新增图片到本地，不必等待定时器
@@ -283,6 +285,9 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/立即同步` / `/同步远程` | 管理员 | 立即从远程仓库拉取新增图片到本地 |
 | `/推送` | 管理员 | 快速推送本地新增或变更图片，已存在则跳过 |
 | `/取消推送` | 管理员 | 取消正在进行的批量推送 |
+| `/推送本地删除` | 管理员 | 预览本地已删除、远程仍存在的图片，不会立即删除 |
+| `/确认推送本地删除 N` | 管理员 | 在 5 分钟内按准确数量确认并推送本地删除 |
+| `/取消推送本地删除` | 管理员 | 放弃当前待确认的远程删除清单 |
 
 ## 📁 存储结构
 
@@ -295,6 +300,13 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.9.0
+
+- **新增** `/推送本地删除`，安全预览直接从本地文件夹删除但远程仍存在的图片
+- **新增** `/确认推送本地删除 N` 二次确认机制，清单 5 分钟后自动失效且必须填写准确数量
+- **安全** 仅处理本地哈希索引曾记录的文件，确认执行前再次核对本地缺失状态和远程 SHA，避免误删 Cloud 新图或已更新图片
+- **新增** `/取消推送本地删除`，可主动放弃待确认清单
 
 ### v2.8.3
 
