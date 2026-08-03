@@ -1,4 +1,10 @@
-from gallery_safety import git_blob_sha, normalize_hash_index, read_bool_flag, verified_remote_sha
+from gallery_safety import (
+    git_blob_sha,
+    normalize_hash_index,
+    read_bool_flag,
+    select_remote_delete_candidates,
+    verified_remote_sha,
+)
 
 
 def test_false_returning_admin_method_does_not_grant_permission():
@@ -71,3 +77,53 @@ def test_malformed_entries_cannot_become_verified():
         },
     })
     assert files == {}
+
+
+def test_only_missing_local_file_with_unchanged_verified_sha_is_candidate():
+    report = select_remote_delete_candidates(
+        tree=[
+            {"path": "gallery/airi/2.png", "sha": "blob-2"},
+            {"path": "gallery/airi/1.png", "sha": "blob-1"},
+        ],
+        hash_index={
+            "gallery/airi/1.png": {
+                "hash": "digest-1", "git_blob_sha": "blob-1", "remote_sha": "blob-1"
+            },
+            "gallery/airi/2.png": {
+                "hash": "digest-2", "git_blob_sha": "blob-2", "remote_sha": "blob-2"
+            },
+        },
+        local_exists=lambda path: path.endswith("2.png"),
+        supported_suffixes={".png", ".jpg"},
+    )
+    assert [(item.path, item.sha) for item in report.candidates] == [
+        ("gallery/airi/1.png", "blob-1")
+    ]
+    assert report.unverified == 0
+    assert report.changed == 0
+
+
+def test_unverified_and_changed_files_are_counted_not_deleted():
+    report = select_remote_delete_candidates(
+        tree=[
+            {"path": "gallery/airi/1.png", "sha": "blob-1"},
+            {"path": "gallery/airi/2.jpg", "sha": "new-blob"},
+            {"path": "gallery/../escape.png", "sha": "escape"},
+            {"path": "README.md", "sha": "readme"},
+            {"path": "gallery/airi/3.txt", "sha": "text"},
+        ],
+        hash_index={
+            "gallery/airi/1.png": {"hash": "digest-1"},
+            "gallery/airi/2.jpg": {
+                "hash": "digest-2", "git_blob_sha": "old-blob", "remote_sha": "old-blob"
+            },
+            "gallery/../escape.png": {
+                "hash": "escape", "git_blob_sha": "escape", "remote_sha": "escape"
+            },
+        },
+        local_exists=lambda path: False,
+        supported_suffixes={".png", ".jpg"},
+    )
+    assert report.candidates == ()
+    assert report.unverified == 1
+    assert report.changed == 1
