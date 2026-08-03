@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from collections.abc import Callable, Iterable, Mapping
 
 
@@ -118,6 +118,35 @@ def verified_remote_sha(entry: object) -> str | None:
     return remote_sha if git_sha and git_sha == remote_sha else None
 
 
+def _safe_gallery_relative_path(git_path: str) -> PurePosixPath | None:
+    if "\\" in git_path:
+        return None
+    raw_parts = git_path.split("/")
+    if any(part in {".", ".."} or ":" in part for part in raw_parts):
+        return None
+    path = PurePosixPath(git_path)
+    if (
+        path.is_absolute()
+        or len(path.parts) < 3
+        or path.parts[0] != "gallery"
+    ):
+        return None
+    return path
+
+
+def resolve_gallery_local_path(root: Path, git_path: str) -> Path | None:
+    path = _safe_gallery_relative_path(git_path)
+    if path is None:
+        return None
+    try:
+        resolved_root = root.resolve()
+        local_path = resolved_root.joinpath(*path.parts).resolve()
+        local_path.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return local_path
+
+
 def select_remote_delete_candidates(
     tree: Iterable[Mapping[str, object]],
     hash_index: Mapping[str, object],
@@ -132,11 +161,9 @@ def select_remote_delete_candidates(
         path_value = remote_entry.get("path")
         if not isinstance(path_value, str):
             continue
-        path = PurePosixPath(path_value)
+        path = _safe_gallery_relative_path(path_value)
         if (
-            len(path.parts) < 3
-            or path.parts[0] != "gallery"
-            or ".." in path.parts
+            path is None
             or path.suffix != path.suffix.lower()
             or path.suffix not in supported_suffixes
         ):

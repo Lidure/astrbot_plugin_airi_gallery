@@ -29,6 +29,7 @@ try:
         normalize_hash_index,
         read_bool_flag,
         remote_put_result,
+        resolve_gallery_local_path,
         select_remote_delete_candidates,
         verified_remote_sha,
     )
@@ -41,6 +42,7 @@ except ImportError:
         normalize_hash_index,
         read_bool_flag,
         remote_put_result,
+        resolve_gallery_local_path,
         select_remote_delete_candidates,
         verified_remote_sha,
     )
@@ -738,10 +740,15 @@ class Main(Star):
         with self._hash_index_lock:
             hash_index = dict(self._hash_index)
         gallery_root = self.gallery_root.parent
+
+        def local_exists(git_path: str) -> bool:
+            local_path = resolve_gallery_local_path(gallery_root, git_path)
+            return local_path is not None and local_path.exists()
+
         return select_remote_delete_candidates(
             tree,
             hash_index,
-            lambda git_path: gallery_root.joinpath(*Path(git_path).parts).exists(),
+            local_exists,
             IMAGE_SUFFIXES,
         )
 

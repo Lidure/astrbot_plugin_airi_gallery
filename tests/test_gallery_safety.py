@@ -1,3 +1,4 @@
+import gallery_safety
 from gallery_safety import (
     git_blob_sha,
     merge_hash_entry,
@@ -193,3 +194,52 @@ def test_unverified_and_changed_files_are_counted_not_deleted():
     assert report.candidates == ()
     assert report.unverified == 1
     assert report.changed == 1
+
+
+def test_resolve_gallery_local_path_stays_rooted_and_rejects_unsafe_components(tmp_path):
+    root = tmp_path / "plugin-data"
+    root.mkdir()
+    resolver = gallery_safety.resolve_gallery_local_path
+
+    assert resolver(root, "gallery/airi/1.png") == (
+        root / "gallery" / "airi" / "1.png"
+    ).resolve()
+    for unsafe_path in (
+        "gallery/C:/escape.png",
+        "gallery/C:escape.png",
+        r"gallery\airi\1.png",
+        r"gallery/airi\1.png",
+        "gallery/../escape.png",
+    ):
+        assert resolver(root, unsafe_path) is None
+
+
+def test_unsafe_remote_paths_never_become_delete_candidates():
+    valid_path = "gallery/airi/1.png"
+    unsafe_paths = (
+        "gallery/C:/escape.png",
+        "gallery/C:escape.png",
+        r"gallery\airi\1.png",
+        r"gallery/airi\1.png",
+        "gallery/../escape.png",
+    )
+    paths = (valid_path, *unsafe_paths)
+    report = select_remote_delete_candidates(
+        tree=[{"path": path, "sha": "verified-blob"} for path in paths],
+        hash_index={
+            path: {
+                "hash": "digest",
+                "git_blob_sha": "verified-blob",
+                "remote_sha": "verified-blob",
+            }
+            for path in paths
+        },
+        local_exists=lambda path: False,
+        supported_suffixes={".png"},
+    )
+
+    assert [(item.path, item.sha) for item in report.candidates] == [
+        (valid_path, "verified-blob")
+    ]
+    assert report.unverified == 0
+    assert report.changed == 0
