@@ -23,19 +23,25 @@ from astrbot.core.agent.tool import FunctionTool
 try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
+        RemoteDeleteReport,
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        read_bool_flag,
         remote_put_result,
+        select_remote_delete_candidates,
         verified_remote_sha,
     )
 except ImportError:
     from gallery_safety import (
         HASH_INDEX_VERSION,
+        RemoteDeleteReport,
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        read_bool_flag,
         remote_put_result,
+        select_remote_delete_candidates,
         verified_remote_sha,
     )
 
@@ -724,30 +730,20 @@ class Main(Star):
             and Path(git_path).suffix.lower() in IMAGE_SUFFIXES
         )
 
-    def _find_remote_delete_candidates(self) -> list[dict] | None:
+    def _find_remote_delete_candidates(self) -> RemoteDeleteReport | None:
         """查找曾被本地索引记录、当前本地缺失且远程仍存在的图片。"""
         tree = self._git_list_tree()
         if tree is None:
             return None
         with self._hash_index_lock:
-            known_local_paths = set(self._hash_index.keys())
-
-        candidates: list[dict] = []
-        for entry in tree:
-            git_path = str(entry.get("path", ""))
-            if not self._is_remote_gallery_image(git_path):
-                continue
-            if git_path not in known_local_paths:
-                continue
-            local_path = self.gallery_root.parent.joinpath(*Path(git_path).parts)
-            if local_path.exists():
-                continue
-            remote_sha = str(entry.get("sha", ""))
-            if not remote_sha:
-                continue
-            candidates.append({"path": git_path, "sha": remote_sha})
-        candidates.sort(key=lambda item: item["path"])
-        return candidates
+            hash_index = dict(self._hash_index)
+        gallery_root = self.gallery_root.parent
+        return select_remote_delete_candidates(
+            tree,
+            hash_index,
+            lambda git_path: gallery_root.joinpath(*Path(git_path).parts).exists(),
+            IMAGE_SUFFIXES,
+        )
 
     def _execute_remote_delete_preview(self, items: list[dict]) -> dict[str, int | bool]:
         result: dict[str, int | bool] = {
@@ -809,20 +805,34 @@ class Main(Star):
             return
 
         await event.send(event.plain_result("正在检查本地删除记录，只生成预览，不会立即删除云端图片。"))
-        candidates = await asyncio.to_thread(self._find_remote_delete_candidates)
-        if candidates is None:
+        report = await asyncio.to_thread(self._find_remote_delete_candidates)
+        if report is None:
             await event.send(event.plain_result("无法读取远程图库，未执行任何删除。"))
             return
+
+        candidates = [
+            {"path": item.path, "sha": item.sha}
+            for item in report.candidates
+        ]
+        skip_messages = []
+        if report.unverified:
+            skip_messages.append(
+                f"安全跳过：{report.unverified} 张缺少已验证同步基准，请先执行 /立即同步 或 /推送到远程。"
+            )
+        if report.changed:
+            skip_messages.append(
+                f"安全跳过：{report.changed} 张远程内容已变化，不会删除。"
+            )
 
         key = self._remote_delete_preview_key(event)
         if not candidates:
             with self._remote_delete_preview_lock:
                 self._remote_delete_previews.pop(key, None)
-            await event.send(
-                event.plain_result(
-                    "没有发现可安全推送的本地删除。只有曾被本地索引记录、当前本地缺失且远程未变化的图片才会进入清单。"
-                )
-            )
+            message = [
+                "没有发现可安全推送的本地删除。只有曾被本地索引记录、当前本地缺失且远程未变化的图片才会进入清单。"
+            ]
+            message.extend(skip_messages)
+            await event.send(event.plain_result("\n".join(message)))
             return
 
         with self._remote_delete_preview_lock:
@@ -838,6 +848,7 @@ class Main(Star):
         ]
         if len(candidates) > REMOTE_DELETE_PREVIEW_LIMIT:
             message.append(f"另有 {len(candidates) - REMOTE_DELETE_PREVIEW_LIMIT} 张未展示。")
+        message.extend(skip_messages)
         message.extend(
             [
                 "当前尚未删除任何云端文件。",
@@ -925,6 +936,11 @@ class Main(Star):
         cloud_text = self._build_cloud_gallery_help_text()
         if cloud_text:
             await event.send(event.plain_result(cloud_text))
+
+    @filter.command("图库帮助")
+    async def cmd_gallery_help_alias(self, event: AstrMessageEvent):
+        """注册 `/图库帮助` 命令，等同于 `/画廊帮助`。"""
+        await self.cmd_gallery_help(event)
 
     @filter.command("昵称列表")
     async def cmd_alias_list(self, event: AstrMessageEvent):
@@ -2149,7 +2165,7 @@ class Main(Star):
                 "Airi 画廊插件",
                 "",
                 "命令：",
-                "- /airi_gallery：查看插件帮助（图片海报）",
+                "- /airi_gallery、/画廊帮助、/图库帮助：查看插件帮助（图片海报）",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
                 f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
                 f"- /抽表情：从全图库随机抽取 1 张图片或表情包，可追加数字 N，最多 {self.view_multiple_max} 张",
@@ -2242,11 +2258,10 @@ class Main(Star):
         if not self.use_permission:
             return True
 
-        # 如果事件或 sender 有 is_admin 属性且为真，则放行
-        if getattr(event, "is_admin", False):
+        if read_bool_flag(event, "is_admin") or read_bool_flag(event, "is_master"):
             return True
         sender = getattr(event, "sender", None)
-        if sender and getattr(sender, "is_admin", False):
+        if sender is not None and read_bool_flag(sender, "is_admin"):
             return True
 
         uid, name = self._get_event_actor_identity(event)
@@ -2282,7 +2297,7 @@ class Main(Star):
         normalized = self._replace_command_aliases(normalized)
         # 仅“看图/浏览”类命令遵循 view_command_mode。
         # 管理类命令固定使用 '/' 前缀，避免和普通聊天文本冲突。
-        if normalized in {"/airi_gallery", "/图库帮助"}:
+        if normalized in {"/airi_gallery", "/画廊帮助", "/图库帮助"}:
             return "help", None
 
         if normalized == "/导入图库":
