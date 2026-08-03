@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.9.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.9.1-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -145,7 +145,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/去重图库 <分类>` / `/去重 <分类>` | 只清理指定分类中的重复图片 |
 | `/导入图库` | 重新扫描图库并整理编号 |
 
-> 如果开启了 `use_permission`，上述管理命令只允许 `admins` 或 `whitelist` 里的用户执行。
+> 在共享群组中强烈建议开启 `use_permission`。开启后，上述管理命令只允许 `admins` 或 `whitelist` 里的用户执行；保持关闭时，所有用户都可以运行管理命令。
 
 ### 8. Git 远程仓库同步
 
@@ -166,7 +166,8 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - 可配置定时器，定期从远程拉取新增图片（默认每 5 分钟）
 - 使用 `/推送` 可手动快速推送本地新增或变更图片，远程已存在且内容一致的图片会直接跳过
 - 直接在本地文件夹删除图片后，可使用 `/推送本地删除` 生成远程删除预览；必须在 5 分钟内使用带准确数量的 `/确认推送本地删除 N` 才会执行
-- 本地删除预览只包含曾被本地哈希索引记录的图片；确认时会再次核对本地文件和远程 SHA，避免误删 Cloud 新增或已发生变化的图片
+- 本地删除预览只包含有已验证远程基线的图片。旧版哈希索引需要先成功执行一次 `/立即同步` 或 `/推送到远程`，才能让已删除文件进入预览
+- 预览会跳过远程 SHA 已变化的文件，并显示跳过原因；确认时会再次核对本地文件和远程 SHA，避免误删 Cloud 新增或已发生变化的图片
 - GitHub 平台下 `/推送` 会按 `git_push_batch_size` 合并为少量 commit，避免大量图片时一张图一个 commit 导致推送缓慢；Gitee 暂保留逐文件推送
 - 使用 `/取消推送` 可中断正在进行的批量推送
 - 使用 `/立即同步` 或 `/同步远程` 可手动立即从远程拉取新增图片到本地，不必等待定时器
@@ -300,6 +301,14 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.9.1
+
+- **修复** 权限判断会正确处理 `is_admin` 和 `is_master` 的布尔值及同步方法返回值，避免方法对象被误判为管理员权限
+- **安全** 远程删除仅接受已验证的远程 SHA 基线；旧版哈希索引需先完成一次成功的 `/立即同步` 或 `/推送到远程`
+- **安全** 本地删除预览会跳过远程 SHA 已变化的文件，并报告缺少已验证基线和远程已变化的跳过数量
+- **测试** 增加远程基线、删除候选、帮助别名和发布版本契约覆盖
+- **新增** `/画廊帮助` 与 `/图库帮助` 都可打开帮助流程
 
 ### v2.9.0
 

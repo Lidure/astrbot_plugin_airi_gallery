@@ -68,12 +68,12 @@
     "type": "bool",
     "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
     "default": false,
-    "hint": "开启后，仅 admins 和 whitelist 中的用户可以执行创建、上传、删除、导入等管理命令。"
+    "hint": "共享群组强烈建议开启；开启后仅 admins 和 whitelist 中的用户可以执行创建、上传、删除、导入等管理命令。保持关闭时所有用户均可执行管理命令。"
   },
   "admins": {
     "type": "list",
     "description": "管理员 id 或用户名",
-    "hint": "用于放行全部受权限控制的管理命令。示例：q账号、username、群聊或平台返回的 UID；支持多个条目。",
+    "hint": "权限控制开启后，用于放行全部管理命令的可信管理员标识。填写平台返回的稳定 QQ 账号、username 或 UID；支持多个条目，避免填写显示昵称。",
     "items": {
       "type": "string"
     },
@@ -82,7 +82,7 @@
   "whitelist": {
     "type": "list",
     "description": "允许的白名单（id 或用户名）",
-    "hint": "用于给少数用户临时授权执行管理命令。示例：q账号、username、UID；支持多个条目。",
+    "hint": "权限控制开启后，用于给少数可信用户授权执行管理命令。填写平台返回的稳定 QQ 账号、username 或 UID；支持多个条目，移除条目即可撤销授权。",
     "items": {
       "type": "string"
     },
