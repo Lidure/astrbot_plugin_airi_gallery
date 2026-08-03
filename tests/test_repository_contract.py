@@ -73,6 +73,13 @@ def test_diagnostics_are_documented_for_novice_users():
     assert "/画廊检查" in main_source
 
 
+def test_diagnostics_command_access_matches_permission_configuration():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "| `/画廊检查` | 按权限配置 |" in readme
+    assert "| `/画廊检查` | 管理员 |" not in readme
+
+
 def test_gallery_diagnostics_command_and_lifecycle_are_wired():
     tree = parsed_main()
     commands = registered_filter_commands(tree)
