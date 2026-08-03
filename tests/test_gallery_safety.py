@@ -43,6 +43,26 @@ def test_flag_exception_and_awaitable_are_rejected():
     assert read_bool_flag(AsyncEvent(), "is_admin") is False
 
 
+def test_flag_property_exception_is_rejected():
+    class BrokenPropertyEvent:
+        @property
+        def is_admin(self):
+            raise RuntimeError("broken adapter property")
+
+    assert read_bool_flag(BrokenPropertyEvent(), "is_admin") is False
+
+
+def test_flag_truth_conversion_exception_is_rejected():
+    class BrokenTruthValue:
+        def __bool__(self):
+            raise RuntimeError("broken adapter value")
+
+    class Event:
+        is_admin = BrokenTruthValue()
+
+    assert read_bool_flag(Event(), "is_admin") is False
+
+
 def test_git_blob_sha_uses_git_blob_header():
     assert git_blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
 
@@ -128,6 +148,55 @@ def test_v1_index_preserves_duplicate_hash_but_is_not_verified():
     assert verified_remote_sha(entry) is None
 
 
+def test_v1_index_strips_matching_remote_baseline_fields():
+    files = normalize_hash_index({
+        "version": 1,
+        "files": {
+            "gallery/airi/1.png": {
+                "hash": "sha256-old",
+                "git_blob_sha": "matching-blob",
+                "remote_sha": "matching-blob",
+            }
+        },
+    })
+
+    assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
+
+
+def test_versionless_index_strips_matching_remote_baseline_fields():
+    files = normalize_hash_index({
+        "files": {
+            "gallery/airi/1.png": {
+                "hash": "sha256-old",
+                "git_blob_sha": "matching-blob",
+                "remote_sha": "matching-blob",
+            }
+        },
+    })
+
+    assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
+
+
+def test_only_exact_integer_v2_preserves_remote_baseline_fields():
+    entry = {
+        "hash": "sha256-old",
+        "git_blob_sha": "matching-blob",
+        "remote_sha": "matching-blob",
+    }
+    for invalid_version in (3, "2", 2.0, True, None, {"major": 2}):
+        files = normalize_hash_index({
+            "version": invalid_version,
+            "files": {"gallery/airi/1.png": entry},
+        })
+        assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
+
+    files = normalize_hash_index({
+        "version": 2,
+        "files": {"gallery/airi/1.png": entry},
+    })
+    assert verified_remote_sha(files["gallery/airi/1.png"]) == "matching-blob"
+
+
 def test_verified_entry_requires_matching_git_and_remote_sha():
     matching = {"hash": "digest", "git_blob_sha": "blob-a", "remote_sha": "blob-a"}
     changed = {"hash": "digest", "git_blob_sha": "blob-a", "remote_sha": "blob-b"}
@@ -194,6 +263,50 @@ def test_unverified_and_changed_files_are_counted_not_deleted():
     assert report.candidates == ()
     assert report.unverified == 1
     assert report.changed == 1
+
+
+def test_empty_remote_delete_preview_reports_both_skip_diagnostics():
+    report = gallery_safety.RemoteDeleteReport((), unverified=2, changed=1)
+
+    presentation = gallery_safety.present_remote_delete_report(
+        report,
+        preview_limit=5,
+        confirm_ttl_seconds=300,
+    )
+
+    assert presentation.cache_items == ()
+    assert "没有发现可安全推送的本地删除" in presentation.message
+    assert "2 张缺少已验证同步基准" in presentation.message
+    assert "/立即同步 或 /推送到远程" in presentation.message
+    assert "1 张远程内容已变化" in presentation.message
+
+
+def test_nonempty_remote_delete_preview_builds_cache_and_confirmation_message():
+    report = gallery_safety.RemoteDeleteReport(
+        (
+            gallery_safety.RemoteDeleteCandidate("gallery/airi/1.png", "blob-1"),
+            gallery_safety.RemoteDeleteCandidate("gallery/airi/2.jpg", "blob-2"),
+            gallery_safety.RemoteDeleteCandidate("gallery/meme/3.webp", "blob-3"),
+        ),
+        changed=2,
+    )
+
+    presentation = gallery_safety.present_remote_delete_report(
+        report,
+        preview_limit=2,
+        confirm_ttl_seconds=300,
+    )
+
+    assert presentation.cache_items == (
+        {"path": "gallery/airi/1.png", "sha": "blob-1"},
+        {"path": "gallery/airi/2.jpg", "sha": "blob-2"},
+        {"path": "gallery/meme/3.webp", "sha": "blob-3"},
+    )
+    assert "发现 3 张本地已删除、远程仍存在的图片" in presentation.message
+    assert "预览：airi/1.png、airi/2.jpg" in presentation.message
+    assert "另有 1 张未展示" in presentation.message
+    assert "2 张远程内容已变化" in presentation.message
+    assert "5 分钟内发送：/确认推送本地删除 3" in presentation.message
 
 
 def test_resolve_gallery_local_path_stays_rooted_and_rejects_unsafe_components(tmp_path):

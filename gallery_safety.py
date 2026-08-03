@@ -23,18 +23,24 @@ class RemoteDeleteReport:
     changed: int = 0
 
 
+@dataclass(frozen=True)
+class RemoteDeletePresentation:
+    cache_items: tuple[dict[str, str], ...]
+    message: str
+
+
 def read_bool_flag(obj: object, attribute: str) -> bool:
-    value = getattr(obj, attribute, False)
-    if callable(value):
-        try:
+    try:
+        value = getattr(obj, attribute, False)
+        if callable(value):
             value = value()
-        except Exception:
+        if inspect.isawaitable(value):
+            if inspect.iscoroutine(value):
+                value.close()
             return False
-    if inspect.isawaitable(value):
-        if inspect.iscoroutine(value):
-            value.close()
+        return bool(value)
+    except Exception:
         return False
-    return bool(value)
 
 
 def git_blob_sha(content: bytes) -> str:
@@ -91,11 +97,18 @@ def normalize_hash_index(payload: object) -> dict[str, dict[str, object]]:
     raw_files = payload.get("files", {})
     if not isinstance(raw_files, dict):
         return {}
+    version = payload.get("version")
+    is_v2 = type(version) is int and version == HASH_INDEX_VERSION
     normalized: dict[str, dict[str, object]] = {}
     for path, raw_entry in raw_files.items():
         if not isinstance(raw_entry, dict) or not raw_entry.get("hash"):
             continue
         entry = dict(raw_entry)
+        if not is_v2:
+            entry.pop("git_blob_sha", None)
+            entry.pop("remote_sha", None)
+            normalized[str(path)] = entry
+            continue
         git_sha = str(entry.get("git_blob_sha", "")).strip()
         remote_sha = str(entry.get("remote_sha", "")).strip()
         if git_sha:
@@ -189,3 +202,51 @@ def select_remote_delete_candidates(
 
     accepted.sort(key=lambda candidate: candidate.path)
     return RemoteDeleteReport(tuple(accepted), unverified, changed)
+
+
+def present_remote_delete_report(
+    report: RemoteDeleteReport,
+    *,
+    preview_limit: int,
+    confirm_ttl_seconds: int,
+) -> RemoteDeletePresentation:
+    cache_items = tuple(
+        {"path": candidate.path, "sha": candidate.sha}
+        for candidate in report.candidates
+    )
+    skip_messages: list[str] = []
+    if report.unverified:
+        skip_messages.append(
+            f"安全跳过：{report.unverified} 张缺少已验证同步基准，请先执行 /立即同步 或 /推送到远程。"
+        )
+    if report.changed:
+        skip_messages.append(
+            f"安全跳过：{report.changed} 张远程内容已变化，不会删除。"
+        )
+
+    if not cache_items:
+        message = [
+            "没有发现可安全推送的本地删除。只有曾被本地索引记录、当前本地缺失且远程未变化的图片才会进入清单。"
+        ]
+        message.extend(skip_messages)
+        return RemoteDeletePresentation(cache_items, "\n".join(message))
+
+    examples = [
+        item["path"].removeprefix("gallery/")
+        for item in cache_items[:preview_limit]
+    ]
+    message = [
+        f"发现 {len(cache_items)} 张本地已删除、远程仍存在的图片。",
+        "预览：" + "、".join(examples),
+    ]
+    if len(cache_items) > preview_limit:
+        message.append(f"另有 {len(cache_items) - preview_limit} 张未展示。")
+    message.extend(skip_messages)
+    message.extend(
+        [
+            "当前尚未删除任何云端文件。",
+            f"确认无误后，请在 {confirm_ttl_seconds // 60} 分钟内发送：/确认推送本地删除 {len(cache_items)}",
+            "如需放弃，请发送：/取消推送本地删除",
+        ]
+    )
+    return RemoteDeletePresentation(cache_items, "\n".join(message))

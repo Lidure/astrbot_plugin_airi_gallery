@@ -27,6 +27,7 @@ try:
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
         resolve_gallery_local_path,
@@ -40,6 +41,7 @@ except ImportError:
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
         resolve_gallery_local_path,
@@ -817,53 +819,25 @@ class Main(Star):
             await event.send(event.plain_result("无法读取远程图库，未执行任何删除。"))
             return
 
-        candidates = [
-            {"path": item.path, "sha": item.sha}
-            for item in report.candidates
-        ]
-        skip_messages = []
-        if report.unverified:
-            skip_messages.append(
-                f"安全跳过：{report.unverified} 张缺少已验证同步基准，请先执行 /立即同步 或 /推送到远程。"
-            )
-        if report.changed:
-            skip_messages.append(
-                f"安全跳过：{report.changed} 张远程内容已变化，不会删除。"
-            )
+        presentation = present_remote_delete_report(
+            report,
+            preview_limit=REMOTE_DELETE_PREVIEW_LIMIT,
+            confirm_ttl_seconds=REMOTE_DELETE_CONFIRM_TTL,
+        )
 
         key = self._remote_delete_preview_key(event)
-        if not candidates:
+        if not presentation.cache_items:
             with self._remote_delete_preview_lock:
                 self._remote_delete_previews.pop(key, None)
-            message = [
-                "没有发现可安全推送的本地删除。只有曾被本地索引记录、当前本地缺失且远程未变化的图片才会进入清单。"
-            ]
-            message.extend(skip_messages)
-            await event.send(event.plain_result("\n".join(message)))
+            await event.send(event.plain_result(presentation.message))
             return
 
         with self._remote_delete_preview_lock:
             self._remote_delete_previews[key] = {
                 "created_at": time.time(),
-                "items": candidates,
+                "items": list(presentation.cache_items),
             }
-
-        examples = [item["path"].removeprefix("gallery/") for item in candidates[:REMOTE_DELETE_PREVIEW_LIMIT]]
-        message = [
-            f"发现 {len(candidates)} 张本地已删除、远程仍存在的图片。",
-            "预览：" + "、".join(examples),
-        ]
-        if len(candidates) > REMOTE_DELETE_PREVIEW_LIMIT:
-            message.append(f"另有 {len(candidates) - REMOTE_DELETE_PREVIEW_LIMIT} 张未展示。")
-        message.extend(skip_messages)
-        message.extend(
-            [
-                "当前尚未删除任何云端文件。",
-                f"确认无误后，请在 {REMOTE_DELETE_CONFIRM_TTL // 60} 分钟内发送：/确认推送本地删除 {len(candidates)}",
-                "如需放弃，请发送：/取消推送本地删除",
-            ]
-        )
-        await event.send(event.plain_result("\n".join(message)))
+        await event.send(event.plain_result(presentation.message))
 
     async def _handle_confirm_local_deletes(self, event: AstrMessageEvent, expected_count) -> None:
         if not self._is_allowed(event):
