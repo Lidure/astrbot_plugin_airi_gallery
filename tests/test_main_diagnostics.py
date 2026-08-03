@@ -8,7 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from gallery_diagnostics import UpdateProbeCache, UpdateProbeResult
+from gallery_diagnostics import (
+    DiagnosticItem,
+    DiagnosticReport,
+    UpdateProbeCache,
+    UpdateProbeResult,
+)
 
 
 def _identity_decorator(*args, **kwargs):
@@ -249,3 +254,44 @@ def test_terminate_cancels_and_awaits_diagnostic_task(main_module):
         assert plugin._diagnostic_task is None
 
     asyncio.run(scenario())
+
+
+def test_startup_diagnostics_logs_without_using_any_chat_send_path(
+    main_module, monkeypatch
+):
+    logged = []
+    report = DiagnosticReport(
+        [
+            DiagnosticItem(
+                "startup.warning", "warning", "Startup warning", "warning detail"
+            ),
+            DiagnosticItem(
+                "startup.error", "error", "Startup error", "error detail"
+            ),
+        ]
+    )
+
+    def chat_send_trap(*args, **kwargs):
+        raise AssertionError("startup diagnostics must not send chat output")
+
+    monkeypatch.setattr(
+        main_module.logger,
+        "warning",
+        lambda message: logged.append(("warning", message)),
+    )
+    monkeypatch.setattr(
+        main_module.logger,
+        "error",
+        lambda message: logged.append(("error", message)),
+    )
+    plugin = types.SimpleNamespace(
+        _run_gallery_diagnostics=lambda: report,
+        send=chat_send_trap,
+        event=types.SimpleNamespace(send=chat_send_trap),
+    )
+
+    asyncio.run(main_module.Main._run_startup_diagnostics(plugin))
+
+    assert [level for level, _ in logged] == ["warning", "error"]
+    assert "Startup warning: warning detail" in logged[0][1]
+    assert "Startup error: error detail" in logged[1][1]
