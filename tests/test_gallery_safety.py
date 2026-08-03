@@ -1,5 +1,6 @@
 from gallery_safety import (
     git_blob_sha,
+    merge_hash_entry,
     normalize_hash_index,
     read_bool_flag,
     select_remote_delete_candidates,
@@ -42,6 +43,61 @@ def test_flag_exception_and_awaitable_are_rejected():
 
 def test_git_blob_sha_uses_git_blob_header():
     assert git_blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+def test_changed_local_entry_clears_old_remote_baseline():
+    previous = {
+        "hash": "old", "size": 10, "mtime_ns": 20, "category": "airi",
+        "git_blob_sha": "blob-old", "remote_sha": "blob-old",
+    }
+    entry = merge_hash_entry(
+        previous,
+        digest="new",
+        size=11,
+        mtime_ns=21,
+        category="airi",
+    )
+    assert entry == {"hash": "new", "size": 11, "mtime_ns": 21, "category": "airi"}
+
+
+def test_unchanged_local_entry_preserves_and_replaces_verified_baseline():
+    previous = {
+        "hash": "digest", "size": 10, "mtime_ns": 20, "category": "airi",
+        "git_blob_sha": "blob-old", "remote_sha": "blob-old",
+    }
+    preserved = merge_hash_entry(
+        previous, digest="digest", size=10, mtime_ns=20, category="renamed"
+    )
+    replaced = merge_hash_entry(
+        previous,
+        digest="digest",
+        size=10,
+        mtime_ns=20,
+        category="airi",
+        git_blob_sha="blob-new",
+        remote_sha="remote-new",
+    )
+    assert preserved == {
+        "hash": "digest", "size": 10, "mtime_ns": 20, "category": "renamed",
+        "git_blob_sha": "blob-old", "remote_sha": "blob-old",
+    }
+    assert replaced == {
+        "hash": "digest", "size": 10, "mtime_ns": 20, "category": "airi",
+        "git_blob_sha": "blob-new", "remote_sha": "remote-new",
+    }
+
+
+def test_hash_entry_drops_blank_and_non_string_sha_values():
+    entry = merge_hash_entry(
+        {"hash": "digest", "size": 10, "mtime_ns": 20, "git_blob_sha": 123},
+        digest="digest",
+        size=10,
+        mtime_ns=20,
+        category="airi",
+        git_blob_sha=" ",
+        remote_sha=123,  # type: ignore[arg-type]
+    )
+    assert entry == {"hash": "digest", "size": 10, "mtime_ns": 20, "category": "airi"}
 
 
 def test_v1_index_preserves_duplicate_hash_but_is_not_verified():

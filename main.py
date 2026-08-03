@@ -20,6 +20,23 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
 
+try:
+    from .gallery_safety import (
+        HASH_INDEX_VERSION,
+        git_blob_sha,
+        merge_hash_entry,
+        normalize_hash_index,
+        verified_remote_sha,
+    )
+except ImportError:
+    from gallery_safety import (
+        HASH_INDEX_VERSION,
+        git_blob_sha,
+        merge_hash_entry,
+        normalize_hash_index,
+        verified_remote_sha,
+    )
+
 
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 DEFAULT_CATEGORY = "default"
@@ -1390,11 +1407,11 @@ class Main(Star):
             return sha
         return None
 
-    def _git_put_file(self, path: str, content: bytes, message: str) -> bool:
+    def _git_put_file(self, path: str, content: bytes, message: str) -> str | None:
         """创建或更新远程仓库中的文件。
 
         如果 self._sha_cache 中已有该路径的 SHA，视为更新；否则视为创建。
-        成功返回 True，失败返回 False。
+        成功返回远程 blob SHA，失败返回 None。
         """
         base = self._git_api_base()
         owner = self._git_owner()
@@ -1431,10 +1448,10 @@ class Main(Star):
 
         if status in (200, 201):
             # 更新 SHA 缓存
-            new_sha = (data or {}).get("content", {}).get("sha", "")
-            if new_sha:
-                self._sha_cache[path] = new_sha
-            return True
+            new_sha = str((data or {}).get("content", {}).get("sha", "")).strip()
+            new_sha = new_sha or git_blob_sha(content)
+            self._sha_cache[path] = new_sha
+            return new_sha
 
         if status in (409, 422):
             # SHA 冲突 → 精准获取该文件的最新 SHA 后重试一次
@@ -1455,15 +1472,15 @@ class Main(Star):
                     body.pop("sha", None)
                 status2, data2 = self._git_request("PUT", url, json_body=body)
             if status2 in (200, 201):
-                new_sha = (data2 or {}).get("content", {}).get("sha", "")
-                if new_sha:
-                    self._sha_cache[path] = new_sha
-                return True
+                new_sha = str((data2 or {}).get("content", {}).get("sha", "")).strip()
+                new_sha = new_sha or git_blob_sha(content)
+                self._sha_cache[path] = new_sha
+                return new_sha
             logger.error(f"[Git Sync] 重试后仍失败 {path} (HTTP {status2})")
-            return False
+            return None
 
         logger.error(f"[Git Sync] 上传文件失败 {path} (HTTP {status})")
-        return False
+        return None
 
     def _git_get_head_commit_and_tree(self) -> tuple[str, str] | None:
         """获取 GitHub 当前分支 HEAD commit SHA 和 tree SHA。"""
@@ -1632,6 +1649,9 @@ class Main(Star):
 
         if self._git_platform() == "github":
             if self._git_push_batch_github(items):
+                for git_path, content in items:
+                    remote_sha = self._sha_cache.get(git_path, "")
+                    self._remember_verified_remote_content(git_path, content, remote_sha)
                 logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
                 return len(items), 0, 0
             logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
@@ -1643,8 +1663,9 @@ class Main(Star):
             if self._git_push_cancelled:
                 skipped += len(items) - offset
                 break
-            ok = self._git_put_file(git_path, content, f"Sync {git_path}")
-            if ok:
+            remote_sha = self._git_put_file(git_path, content, f"Sync {git_path}")
+            if remote_sha:
+                self._remember_verified_remote_content(git_path, content, remote_sha)
                 success += 1
             else:
                 failed += 1
@@ -1728,18 +1749,20 @@ class Main(Star):
                 # 转换为本地路径
                 local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
                 remote_sha = info.get("sha", "")
-                remote_size = int(info.get("size", 0) or 0)
-                previous_sha = self._sha_cache.get(git_path)
                 parts = Path(git_path).parts
                 category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
 
                 if local_path.exists():
-                    if previous_sha and previous_sha == remote_sha:
-                        self._sha_cache[git_path] = remote_sha
-                        continue
                     try:
-                        if remote_size and local_path.stat().st_size == remote_size:
+                        with self._hash_index_lock:
+                            entry = self._hash_index.get(git_path)
+                        if verified_remote_sha(entry) == remote_sha:
                             self._sha_cache[git_path] = remote_sha
+                            continue
+                        content = local_path.read_bytes()
+                        if git_blob_sha(content) == remote_sha:
+                            self._sha_cache[git_path] = remote_sha
+                            self._remember_verified_remote_content(git_path, content, remote_sha)
                             continue
                     except OSError:
                         pass
@@ -1761,7 +1784,7 @@ class Main(Star):
                     self._sha_cache[git_path] = remote_sha
                     local_path.write_bytes(content)
                     category_hashes.add(digest)
-                    self._remember_file_hash(local_path, digest, category=category)
+                    self._remember_verified_remote_content(git_path, content, remote_sha)
                     synced += 1
                     result["synced"] = synced
 
@@ -1800,8 +1823,9 @@ class Main(Star):
             return
         try:
             content = Path(local_abs_path).read_bytes()
-            ok = self._git_put_file(git_path, content, f"Upload {git_path}")
-            if ok:
+            remote_sha = self._git_put_file(git_path, content, f"Upload {git_path}")
+            if remote_sha:
+                self._remember_verified_remote_content(git_path, content, remote_sha)
                 logger.info(f"[Git Sync] 已推送到远程: {git_path}")
         except Exception as exc:
             logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
@@ -1823,8 +1847,7 @@ class Main(Star):
     @staticmethod
     def _git_blob_sha(content: bytes) -> str:
         """计算 Git blob SHA，用于和远程 tree 中的 blob sha 快速对比。"""
-        header = f"blob {len(content)}\0".encode("utf-8")
-        return hashlib.sha1(header + content).hexdigest()
+        return git_blob_sha(content)
 
     def _git_push_all_local(self) -> tuple[int, int, int]:
         """将本地 gallery 中新增或变更的图片批量推送到远程仓库。
@@ -1882,15 +1905,9 @@ class Main(Star):
                 local_sha = self._git_blob_sha(content)
                 remote = remote_files.get(git_path)
                 remote_sha = str(remote.get("sha", "")) if remote else ""
-                remote_size = -1
-                if remote and remote.get("size") is not None:
-                    try:
-                        remote_size = int(remote.get("size"))
-                    except (TypeError, ValueError):
-                        remote_size = -1
-
-                if remote_sha == local_sha and (remote_size < 0 or remote_size == len(content)):
+                if remote_sha == local_sha:
                     self._sha_cache[git_path] = remote_sha
+                    self._remember_verified_remote_content(git_path, content, remote_sha)
                     skipped += 1
                     continue
 
@@ -2426,13 +2443,7 @@ class Main(Star):
             if not self._hash_index_path.exists():
                 return
             data = json.loads(self._hash_index_path.read_text(encoding="utf-8"))
-            files = data.get("files", {}) if isinstance(data, dict) else {}
-            if isinstance(files, dict):
-                self._hash_index = {
-                    str(path): entry
-                    for path, entry in files.items()
-                    if isinstance(entry, dict) and entry.get("hash")
-                }
+            self._hash_index = normalize_hash_index(data)
             self._hash_index_dirty = False
             logger.info(f"[Gallery] 已加载图片哈希索引：{len(self._hash_index)} 条。")
         except Exception as exc:
@@ -2444,7 +2455,7 @@ class Main(Star):
         with self._hash_index_lock:
             if not force and not self._hash_index_dirty:
                 return
-            data = {"version": 1, "files": self._hash_index}
+            data = {"version": HASH_INDEX_VERSION, "files": self._hash_index}
             tmp_path = self._hash_index_path.with_suffix(".json.tmp")
             try:
                 tmp_path.write_text(
@@ -2480,15 +2491,50 @@ class Main(Star):
             return
         parts = Path(key).parts
         category = category or (parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY)
-        entry = {
-            "hash": digest,
-            "size": stat_data["size"],
-            "mtime_ns": stat_data["mtime_ns"],
-            "category": _sanitize_component(category),
-        }
         with self._hash_index_lock:
+            entry = merge_hash_entry(
+                self._hash_index.get(key),
+                digest=digest,
+                size=stat_data["size"],
+                mtime_ns=stat_data["mtime_ns"],
+                category=_sanitize_component(category),
+            )
             if self._hash_index.get(key) != entry:
                 self._hash_index[key] = entry
+                self._hash_index_dirty = True
+        if save:
+            self._save_hash_index()
+
+    def _remember_verified_remote_content(
+        self,
+        git_path: str,
+        content: bytes,
+        remote_sha: str,
+        save: bool = True,
+    ) -> None:
+        local_path = self.gallery_root.parent.joinpath(*Path(git_path).parts)
+        try:
+            stat_data = self._hash_index_stat(local_path)
+        except FileNotFoundError:
+            return
+        parts = Path(git_path).parts
+        category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
+        digest = self._bytes_hash(content)
+        local_sha = git_blob_sha(content)
+        normalized_remote_sha = remote_sha.strip() if isinstance(remote_sha, str) else ""
+        matching_sha = local_sha if local_sha == normalized_remote_sha else None
+        entry = merge_hash_entry(
+            None,
+            digest=digest,
+            size=stat_data["size"],
+            mtime_ns=stat_data["mtime_ns"],
+            category=_sanitize_component(category),
+            git_blob_sha=matching_sha,
+            remote_sha=matching_sha,
+        )
+        with self._hash_index_lock:
+            if self._hash_index.get(git_path) != entry:
+                self._hash_index[git_path] = entry
                 self._hash_index_dirty = True
         if save:
             self._save_hash_index()

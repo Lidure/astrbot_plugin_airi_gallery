@@ -42,6 +42,39 @@ def git_blob_sha(content: bytes) -> str:
     return hashlib.sha1(header + content).hexdigest()
 
 
+def merge_hash_entry(
+    previous: object,
+    *,
+    digest: str,
+    size: int,
+    mtime_ns: int,
+    category: str,
+    git_blob_sha: str | None = None,
+    remote_sha: str | None = None,
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "hash": digest,
+        "size": size,
+        "mtime_ns": mtime_ns,
+        "category": category,
+    }
+    unchanged = (
+        isinstance(previous, Mapping)
+        and previous.get("hash") == digest
+        and previous.get("size") == size
+        and previous.get("mtime_ns") == mtime_ns
+    )
+    if unchanged:
+        for key in ("git_blob_sha", "remote_sha"):
+            value = previous.get(key)
+            if isinstance(value, str) and value.strip():
+                entry[key] = value.strip()
+    for key, value in (("git_blob_sha", git_blob_sha), ("remote_sha", remote_sha)):
+        if isinstance(value, str) and value.strip():
+            entry[key] = value.strip()
+    return entry
+
+
 def normalize_hash_index(payload: object) -> dict[str, dict[str, object]]:
     if not isinstance(payload, dict):
         return {}
