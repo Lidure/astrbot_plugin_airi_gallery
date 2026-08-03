@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from gallery_diagnostics import (
     DiagnosticItem,
     DiagnosticReport,
@@ -193,3 +195,39 @@ def test_cloud_url_rejects_explicit_empty_query_or_fragment(tmp_path):
     }))
 
     assert any(item.code == "cloud_url.credentials" for item in report.items)
+
+
+@pytest.mark.parametrize("url", [
+    "https://exa mple.com",
+    "https://example.com:bad",
+    r"https://example.com\bad",
+    r"https://example.com/path\bad",
+    " https://example.com",
+    "https://example.com/path with space",
+    "https://-example.com",
+    "https://example-.com",
+    "https://example..com",
+    "https://example.com:65536",
+    "https://example.com:-1",
+])
+def test_cloud_url_rejects_malformed_http_urls(tmp_path, url):
+    report = run_local_diagnostics(local_context(tmp_path, {"cloud_gallery_url": url}))
+    rendered = report.render_chat() + "\n" + "\n".join(report.render_log_lines())
+
+    assert any(item.code == "cloud_url.invalid" for item in report.items)
+    assert not any(item.code == "cloud_url.valid" for item in report.items)
+    assert url not in rendered
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.com",
+    "http://example.com:0",
+    "https://example.com/gallery",
+    "http://192.0.2.1:8080/gallery",
+    "https://[2001:db8::1]",
+    "https://[2001:db8::1]:443/gallery",
+])
+def test_cloud_url_accepts_valid_http_urls(tmp_path, url):
+    report = run_local_diagnostics(local_context(tmp_path, {"cloud_gallery_url": url}))
+
+    assert any(item.code == "cloud_url.valid" for item in report.items)

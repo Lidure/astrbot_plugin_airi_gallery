@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import unicodedata
 from typing import Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
@@ -396,6 +398,59 @@ def _permission_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
     return items
 
 
+_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _valid_hostname(hostname: str) -> bool:
+    if not hostname or len(hostname) > 253:
+        return False
+    if hostname.endswith("."):
+        hostname = hostname[:-1]
+    if not hostname or len(hostname) > 253:
+        return False
+    return all(_HOST_LABEL_RE.fullmatch(label) for label in hostname.split("."))
+
+
+def _valid_http_url(url: str) -> bool:
+    if "\\" in url or any(unicodedata.category(char) == "Cc" or char.isspace() for char in url):
+        return False
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return False
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return False
+    if not hostname:
+        return False
+
+    authority = parsed.netloc.rsplit("@", 1)[-1]
+    if authority.startswith("["):
+        closing_bracket = authority.find("]")
+        remainder = authority[closing_bracket + 1 :] if closing_bracket >= 0 else ""
+        if closing_bracket < 0 or (remainder and not remainder.startswith(":")):
+            return False
+        host_text = authority[1:closing_bracket]
+        if not host_text or remainder == ":":
+            return False
+        try:
+            if ipaddress.ip_address(host_text).version != 6:
+                return False
+        except ValueError:
+            return False
+    else:
+        if "[" in authority or "]" in authority or authority.count(":") > 1:
+            return False
+        host_text, separator, raw_port = authority.partition(":")
+        if separator and not raw_port.isdigit():
+            return False
+        if not _valid_hostname(hostname) or host_text.lower() != hostname.lower():
+            return False
+
+    return port is None or 0 <= port <= 65535
+
+
 def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
     raw_url = config.get("cloud_gallery_url", "")
     if raw_url is None:
@@ -417,7 +472,16 @@ def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
         ]
 
     try:
-        parsed = urlsplit(raw_url.strip())
+        parsed = urlsplit(raw_url)
+        if not _valid_http_url(raw_url):
+            return [
+                DiagnosticItem(
+                    "cloud_url.invalid",
+                    "warning",
+                    "Cloud gallery URL",
+                    "Cloud gallery URL must be a valid http or https URL with a valid hostname and port.",
+                )
+            ]
         has_sensitive_parts = bool(
             parsed.username is not None
             or parsed.password is not None
