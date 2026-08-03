@@ -6,9 +6,15 @@ import pytest
 from gallery_diagnostics import (
     DiagnosticItem,
     DiagnosticReport,
+    GitProbeResult,
     LocalDiagnosticContext,
+    UpdateProbeCache,
+    UpdateProbeResult,
     coerce_bounded_int,
     compare_versions,
+    evaluate_git_probe,
+    evaluate_update_probe,
+    parse_metadata_version,
     run_local_diagnostics,
     sanitize_text,
 )
@@ -231,3 +237,56 @@ def test_cloud_url_accepts_valid_http_urls(tmp_path, url):
     report = run_local_diagnostics(local_context(tmp_path, {"cloud_gallery_url": url}))
 
     assert any(item.code == "cloud_url.valid" for item in report.items)
+
+
+def test_git_probe_distinguishes_auth_repo_branch_and_permission_states():
+    assert evaluate_git_probe(GitProbeResult(401, None, None))[0].code == "git.auth"
+    assert evaluate_git_probe(GitProbeResult(404, None, None))[0].code == "git.repository_missing"
+    assert any(
+        item.code == "git.branch_missing"
+        for item in evaluate_git_probe(GitProbeResult(200, 404, True))
+    )
+
+    writable = evaluate_git_probe(GitProbeResult(200, 200, True))
+    assert any(item.code == "git.write" and item.level == "ok" for item in writable)
+
+    uncertain = evaluate_git_probe(GitProbeResult(200, 200, None))
+    assert any(item.code == "git.write_unknown" and item.level == "warning" for item in uncertain)
+
+
+def test_git_probe_maps_network_and_rate_limit_without_raw_body():
+    network = evaluate_git_probe(GitProbeResult(0, None, None))
+    limited = evaluate_git_probe(GitProbeResult(429, None, None))
+    assert network[0].code == "git.network"
+    assert limited[0].code == "git.rate_limit"
+    assert all("response" not in item.message.lower() for item in network + limited)
+
+
+def test_metadata_version_parser_and_update_messages():
+    assert parse_metadata_version("name: plugin\nversion: v2.10.0\nauthor: Lidure\n") == "v2.10.0"
+    assert parse_metadata_version("version: latest") is None
+
+    available = evaluate_update_probe("v2.9.1", UpdateProbeResult(latest_version="v2.10.0"))
+    current = evaluate_update_probe("v2.10.0", UpdateProbeResult(latest_version="v2.10.0"))
+    failed = evaluate_update_probe("v2.10.0", UpdateProbeResult(error="timeout"))
+
+    assert available == [DiagnosticItem("update.available", "update", "发现 v2.10.0", "当前版本：v2.9.1", "前往插件仓库更新，更新前先备份配置和图库")]
+    assert current[0].code == "update.current" and current[0].level == "ok"
+    assert failed[0].code == "update.unavailable" and failed[0].level == "warning"
+
+
+def test_update_probe_cache_uses_result_for_exact_ttl_window():
+    calls = []
+    cache = UpdateProbeCache(ttl_seconds=600.0)
+
+    def load():
+        calls.append(True)
+        return UpdateProbeResult(latest_version=f"v2.10.{len(calls)}")
+
+    first = cache.get_or_load(load, now=1000.0)
+    cached = cache.get_or_load(load, now=1599.999)
+    refreshed = cache.get_or_load(load, now=1600.0)
+
+    assert first is cached
+    assert refreshed.latest_version == "v2.10.2"
+    assert len(calls) == 2

@@ -6,13 +6,19 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
+import time
 import unicodedata
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 
 LEVEL_LABELS = {"warning": "警告", "error": "错误", "update": "更新"}
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
+METADATA_VERSION_RE = re.compile(
+    r"^version:\s*(v?\d+\.\d+\.\d+)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s]+", re.IGNORECASE)
 AUTHORIZATION_RE = re.compile(
     r"(\bAuthorization\s*[:=]\s*)[^\r\n]+", re.IGNORECASE
@@ -79,6 +85,45 @@ class DiagnosticReport:
             + (f" 建议：{item.suggestion}" if item.suggestion else "")
             for item in actionable
         ]
+
+
+@dataclass(frozen=True)
+class GitProbeResult:
+    repository_status: int
+    branch_status: int | None
+    can_push: bool | None
+
+
+@dataclass(frozen=True)
+class UpdateProbeResult:
+    latest_version: str | None = None
+    error: str | None = None
+
+
+class UpdateProbeCache:
+    def __init__(self, ttl_seconds: float = 600.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._lock = threading.Lock()
+        self._checked_at: float | None = None
+        self._result: UpdateProbeResult | None = None
+
+    def get_or_load(
+        self,
+        loader: Callable[[], UpdateProbeResult],
+        now: float | None = None,
+    ) -> UpdateProbeResult:
+        with self._lock:
+            checked_at = time.monotonic() if now is None else now
+            if (
+                self._result is not None
+                and self._checked_at is not None
+                and checked_at - self._checked_at < self.ttl_seconds
+            ):
+                return self._result
+            result = loader()
+            self._result = result
+            self._checked_at = checked_at
+            return result
 
 
 def _strip_url_details(match: re.Match[str]) -> str:
@@ -551,6 +596,148 @@ def check_git_configuration(config: Mapping[str, object]) -> tuple[list[Diagnost
     return [
         DiagnosticItem("git.config", "ok", "Git sync configuration", "Git configuration is valid.")
     ], True
+
+
+def _git_status_item(status: int, scope: str) -> DiagnosticItem:
+    if status == 0:
+        return DiagnosticItem(
+            "git.network" if scope == "repository" else "git.branch_network",
+            "warning",
+            f"Git {scope}",
+            f"Git {scope} could not be reached.",
+        )
+    if status in {401, 403}:
+        return DiagnosticItem(
+            "git.auth" if scope == "repository" else "git.branch_auth",
+            "error",
+            f"Git {scope} authentication",
+            f"Git {scope} authentication failed.",
+        )
+    if status == 404:
+        code = "git.repository_missing" if scope == "repository" else "git.branch_missing"
+        return DiagnosticItem(
+            code,
+            "error",
+            f"Git {scope}",
+            f"Git {scope} was not found.",
+        )
+    if status == 429:
+        return DiagnosticItem(
+            "git.rate_limit" if scope == "repository" else "git.branch_rate_limit",
+            "warning",
+            f"Git {scope} rate limit",
+            f"Git {scope} requests are rate limited.",
+        )
+    return DiagnosticItem(
+        "git.repository_error" if scope == "repository" else "git.branch_error",
+        "error",
+        f"Git {scope}",
+        f"Git {scope} returned status {status}.",
+    )
+
+
+def evaluate_git_probe(result: GitProbeResult) -> list[DiagnosticItem]:
+    if result.repository_status != 200:
+        return [_git_status_item(result.repository_status, "repository")]
+
+    items = [
+        DiagnosticItem("git.repository", "ok", "Git repository", "Git repository is available.")
+    ]
+    if result.branch_status is None:
+        items.append(
+            DiagnosticItem(
+                "git.branch_unknown",
+                "warning",
+                "Git branch",
+                "Git branch status could not be confirmed.",
+            )
+        )
+        return items
+    if result.branch_status != 200:
+        items.append(_git_status_item(result.branch_status, "branch"))
+        return items
+
+    items.append(DiagnosticItem("git.branch", "ok", "Git branch", "Git branch is available."))
+    if result.can_push is True:
+        items.append(DiagnosticItem("git.write", "ok", "Git write", "Git repository is writable."))
+    elif result.can_push is False:
+        items.append(
+            DiagnosticItem(
+                "git.read_only",
+                "error",
+                "Git write",
+                "Git repository is read-only.",
+            )
+        )
+    else:
+        items.append(
+            DiagnosticItem(
+                "git.write_unknown",
+                "warning",
+                "Git write",
+                "Git write permission could not be confirmed.",
+            )
+        )
+    return items
+
+
+def parse_metadata_version(text: object) -> str | None:
+    if not isinstance(text, str):
+        return None
+    match = METADATA_VERSION_RE.search(text)
+    return match.group(1) if match else None
+
+
+def evaluate_update_probe(
+    current_version: str, result: UpdateProbeResult
+) -> list[DiagnosticItem]:
+    if parse_version(current_version) is None:
+        return [
+            DiagnosticItem(
+                "update.current_invalid",
+                "warning",
+                "当前版本无效",
+                "当前插件版本格式无效，无法比较更新。",
+            )
+        ]
+    if result.error is not None or parse_version(result.latest_version) is None:
+        return [
+            DiagnosticItem(
+                "update.unavailable",
+                "warning",
+                "更新检查不可用",
+                "暂时无法检查最新版本。",
+            )
+        ]
+
+    comparison = compare_versions(current_version, result.latest_version)
+    if comparison == 1:
+        return [
+            DiagnosticItem(
+                "update.current",
+                "ok",
+                "当前版本",
+                "当前版本不低于远程版本。",
+            )
+        ]
+    if comparison == 0:
+        return [
+            DiagnosticItem(
+                "update.current",
+                "ok",
+                "当前版本",
+                "当前版本已是最新版本。",
+            )
+        ]
+    return [
+        DiagnosticItem(
+            "update.available",
+            "update",
+            f"发现 {result.latest_version}",
+            f"当前版本：{current_version}",
+            "前往插件仓库更新，更新前先备份配置和图库",
+        )
+    ]
 
 
 def run_local_diagnostics(context: LocalDiagnosticContext) -> DiagnosticReport:
