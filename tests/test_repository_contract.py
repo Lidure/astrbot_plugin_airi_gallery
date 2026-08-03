@@ -27,6 +27,18 @@ def registered_filter_commands(tree: ast.AST) -> set[str]:
     return commands
 
 
+def parsed_main() -> ast.AST:
+    return ast.parse(Path("main.py").read_text(encoding="utf-8"))
+
+
+def function_names(tree: ast.AST) -> set[str]:
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def test_all_help_aliases_are_registered():
     tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
     commands = registered_filter_commands(tree)
@@ -47,3 +59,41 @@ def test_release_version_is_2_9_1_everywhere():
     assert metadata["version"] == "v2.9.1"
     assert badge == "v2.9.1"
     assert changelog == "v2.9.1"
+
+
+def test_gallery_diagnostics_command_and_lifecycle_are_wired():
+    tree = parsed_main()
+    commands = registered_filter_commands(tree)
+    names = function_names(tree)
+
+    assert "画廊检查" in commands
+    assert {
+        "cmd_gallery_diagnostics",
+        "_probe_gallery_git",
+        "_probe_gallery_update",
+        "_run_gallery_diagnostics",
+        "_run_startup_diagnostics",
+    } <= names
+
+
+def test_diagnostic_git_requests_can_avoid_mutating_sync_enablement():
+    source = Path("main.py").read_text(encoding="utf-8")
+
+    assert "disable_on_auth_failure: bool = True" in source
+    assert "disable_on_auth_failure=False" in source
+
+
+def test_startup_diagnostics_are_background_only_and_cancelled_on_shutdown():
+    source = Path("main.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    startup = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_run_startup_diagnostics"
+    )
+    startup_source = ast.get_source_segment(source, startup)
+
+    assert "asyncio.create_task(self._run_startup_diagnostics())" in source
+    assert "self._diagnostic_task.cancel()" in source
+    assert "event.send" not in startup_source

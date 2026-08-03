@@ -12,6 +12,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -19,6 +20,37 @@ from astrbot.api.message_components import Image, Reply
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
+
+try:
+    from .gallery_diagnostics import (
+        DiagnosticItem,
+        DiagnosticReport,
+        GitProbeResult,
+        LocalDiagnosticContext,
+        UpdateProbeCache,
+        UpdateProbeResult,
+        check_git_configuration,
+        coerce_bounded_int,
+        evaluate_git_probe,
+        evaluate_update_probe,
+        parse_metadata_version,
+        run_local_diagnostics,
+    )
+except ImportError:
+    from gallery_diagnostics import (
+        DiagnosticItem,
+        DiagnosticReport,
+        GitProbeResult,
+        LocalDiagnosticContext,
+        UpdateProbeCache,
+        UpdateProbeResult,
+        check_git_configuration,
+        coerce_bounded_int,
+        evaluate_git_probe,
+        evaluate_update_probe,
+        parse_metadata_version,
+        run_local_diagnostics,
+    )
 
 try:
     from .gallery_safety import (
@@ -58,6 +90,9 @@ VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
 REMOTE_DELETE_CONFIRM_TTL = 300
 REMOTE_DELETE_PREVIEW_LIMIT = 20
+CURRENT_PLUGIN_VERSION = "v2.10.0"
+UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
+UPDATE_CACHE_SECONDS = 600.0
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -284,7 +319,12 @@ class Main(Star):
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         self.view_multiple_mode = self._resolve_view_multiple_mode()
-        self.view_multiple_max = max(5, min(10, int(self.config.get("view_multiple_max", 10))))
+        self.view_multiple_max = coerce_bounded_int(
+            self.config.get("view_multiple_max", 10),
+            default=10,
+            minimum=5,
+            maximum=10,
+        )
         self.view_all_collage_compress = self._resolve_view_all_collage_compress()
         self.view_all_collage_scale = self._resolve_view_all_collage_scale()
         # 权限相关配置
@@ -306,6 +346,10 @@ class Main(Star):
         self._gallery_write_lock = threading.RLock()
         self._git_sync_enabled = False
         self._git_push_cancelled = False
+        self._diagnostic_task: asyncio.Task | None = None
+        self._diagnostic_update_cache = UpdateProbeCache(
+            ttl_seconds=UPDATE_CACHE_SECONDS
+        )
         self._remote_delete_previews: dict[str, dict] = {}
         self._remote_delete_preview_lock = threading.RLock()
         self._load_hash_index()
@@ -379,12 +423,20 @@ class Main(Star):
                     target=self._git_startup_sync, daemon=True
                 ).start()
                 self._start_sync_timer()
+        self._diagnostic_task = asyncio.create_task(self._run_startup_diagnostics())
 
     async def terminate(self):
         """插件卸载时清理定时同步任务。"""
         if self._sync_timer is not None:
             self._sync_timer.cancel()
             self._sync_timer = None
+        if self._diagnostic_task is not None:
+            self._diagnostic_task.cancel()
+            try:
+                await self._diagnostic_task
+            except asyncio.CancelledError:
+                pass
+            self._diagnostic_task = None
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
     async def handle_gallery_message(self, event: AstrMessageEvent):
@@ -529,6 +581,20 @@ class Main(Star):
         cloud_text = self._build_cloud_gallery_help_text()
         if cloud_text:
             await event.send(event.plain_result(cloud_text))
+
+    @filter.command("画廊检查")
+    async def cmd_gallery_diagnostics(self, event: AstrMessageEvent):
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        try:
+            report = await asyncio.to_thread(self._run_gallery_diagnostics)
+            await event.send(event.plain_result(report.render_chat()))
+        except Exception as exc:
+            logger.error(
+                f"[Gallery Diagnostics] Command failed: {type(exc).__name__}"
+            )
+            await event.send(event.plain_result("画廊检查暂时无法完成，请稍后重试。"))
 
     @filter.command("看看")
     @filter.command("看")
@@ -1187,6 +1253,123 @@ class Main(Star):
     # Git 远程仓库同步
     # ──────────────────────────────────────────────
 
+    def _probe_gallery_git(self) -> GitProbeResult:
+        _, can_probe = check_git_configuration(self.config)
+        if not can_probe:
+            return GitProbeResult(0, None, None)
+
+        owner = quote(str(self.config.get("git_repo_owner", "")).strip(), safe="")
+        repository = quote(str(self.config.get("git_repo_name", "")).strip(), safe="")
+        branch = quote(str(self.config.get("git_branch", "main")).strip(), safe="")
+        repository_url = f"{self._git_api_base()}/repos/{owner}/{repository}"
+        repository_status, repository_body = self._git_request(
+            "GET",
+            repository_url,
+            timeout=10,
+            disable_on_auth_failure=False,
+        )
+        if repository_status != 200:
+            return GitProbeResult(repository_status, None, None)
+
+        can_push = None
+        if isinstance(repository_body, dict):
+            permissions = repository_body.get("permissions")
+            if isinstance(permissions, dict) and isinstance(
+                permissions.get("push"), bool
+            ):
+                can_push = permissions["push"]
+
+        branch_status, _ = self._git_request(
+            "GET",
+            f"{repository_url}/branches/{branch}",
+            timeout=10,
+            disable_on_auth_failure=False,
+        )
+        return GitProbeResult(repository_status, branch_status, can_push)
+
+    def _probe_gallery_update(self) -> UpdateProbeResult:
+        def load_update_probe() -> UpdateProbeResult:
+            import requests
+
+            try:
+                response = requests.get(UPDATE_METADATA_URL, timeout=10)
+            except requests.RequestException as exc:
+                return UpdateProbeResult(error=type(exc).__name__)
+
+            if response.status_code != 200:
+                return UpdateProbeResult(error=f"http_{response.status_code}")
+            return UpdateProbeResult(
+                latest_version=parse_metadata_version(response.text)
+            )
+
+        return self._diagnostic_update_cache.get_or_load(load_update_probe)
+
+    def _run_gallery_diagnostics(self) -> DiagnosticReport:
+        report = run_local_diagnostics(
+            LocalDiagnosticContext(
+                gallery_root=self.gallery_root,
+                hash_index_path=self._hash_index_path,
+                config=self.config,
+                image_suffixes=frozenset(IMAGE_SUFFIXES),
+            )
+        )
+        _, can_probe = check_git_configuration(self.config)
+        if can_probe:
+            try:
+                report.extend(evaluate_git_probe(self._probe_gallery_git()))
+            except Exception:
+                report.add(
+                    DiagnosticItem(
+                        "git.internal",
+                        "warning",
+                        "Remote check",
+                        "Remote check encountered an internal error.",
+                        "Check the AstrBot logs and try again.",
+                    )
+                )
+        try:
+            report.extend(
+                evaluate_update_probe(
+                    CURRENT_PLUGIN_VERSION, self._probe_gallery_update()
+                )
+            )
+        except Exception:
+            report.add(
+                DiagnosticItem(
+                    "update.internal",
+                    "warning",
+                    "Version check",
+                    "Version check could not be completed.",
+                    "Run /画廊检查 again later.",
+                )
+            )
+        return report
+
+    async def _run_startup_diagnostics(self) -> None:
+        try:
+            report = await asyncio.to_thread(self._run_gallery_diagnostics)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                f"[Gallery Diagnostics] Startup failed: {type(exc).__name__}"
+            )
+            return
+
+        actionable_items = [
+            item for item in report.items if item.level in {"warning", "error", "update"}
+        ]
+        log_lines = report.render_log_lines()
+        if not actionable_items:
+            for line in log_lines:
+                logger.info(f"[Gallery Diagnostics] {line}")
+            return
+        for item, line in zip(actionable_items, log_lines):
+            if item.level == "error":
+                logger.error(f"[Gallery Diagnostics] {line}")
+            else:
+                logger.warning(f"[Gallery Diagnostics] {line}")
+
     def _validate_git_config(self) -> None:
         """检查 Git 同步所需的配置是否完整，结果写入 self._git_sync_enabled。"""
         if not self.config.get("git_sync_enabled", False):
@@ -1249,6 +1432,7 @@ class Main(Star):
         json_body: dict | None = None,
         params: dict | None = None,
         timeout: int = 30,
+        disable_on_auth_failure: bool = True,
     ) -> tuple[int, dict | None]:
         """统一的 Git API 请求方法。
 
@@ -1277,13 +1461,19 @@ class Main(Star):
             logger.warning(f"[Git Sync] 连接失败: {method} {url}")
             return 0, None
         except Exception as exc:
-            logger.error(f"[Git Sync] 请求异常: {exc}")
+            if disable_on_auth_failure:
+                logger.error(f"[Git Sync] 请求异常: {exc}")
+            else:
+                logger.error(
+                    f"[Gallery Diagnostics] Git request failed: {type(exc).__name__}"
+                )
             return 0, None
 
         status = resp.status_code
         if status in (401, 403):
             logger.error(f"[Git Sync] 认证失败 (HTTP {status})，请检查 git_token。URL: {url}")
-            self._git_sync_enabled = False
+            if disable_on_auth_failure:
+                self._git_sync_enabled = False
             return status, None
         if status == 429:
             reset = resp.headers.get("X-RateLimit-Reset", "")
@@ -1295,7 +1485,12 @@ class Main(Star):
                 body = resp.json()
             except Exception:
                 body = None
-            logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
+            if disable_on_auth_failure:
+                logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
+            else:
+                logger.warning(
+                    f"[Gallery Diagnostics] Git request returned HTTP {status}"
+                )
             return status, body
 
         try:
