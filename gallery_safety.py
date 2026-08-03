@@ -42,6 +42,16 @@ def git_blob_sha(content: bytes) -> str:
     return hashlib.sha1(header + content).hexdigest()
 
 
+def remote_put_result(success: bool, remote_sha: object) -> tuple[bool, str | None]:
+    if not success:
+        return False, None
+    if isinstance(remote_sha, str):
+        normalized_sha = remote_sha.strip()
+        if normalized_sha:
+            return True, normalized_sha
+    return True, None
+
+
 def merge_hash_entry(
     previous: object,
     *,

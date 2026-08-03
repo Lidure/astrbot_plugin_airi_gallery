@@ -26,6 +26,7 @@ try:
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        remote_put_result,
         verified_remote_sha,
     )
 except ImportError:
@@ -34,6 +35,7 @@ except ImportError:
         git_blob_sha,
         merge_hash_entry,
         normalize_hash_index,
+        remote_put_result,
         verified_remote_sha,
     )
 
@@ -1407,11 +1409,11 @@ class Main(Star):
             return sha
         return None
 
-    def _git_put_file(self, path: str, content: bytes, message: str) -> str | None:
+    def _git_put_file(self, path: str, content: bytes, message: str) -> tuple[bool, str | None]:
         """创建或更新远程仓库中的文件。
 
         如果 self._sha_cache 中已有该路径的 SHA，视为更新；否则视为创建。
-        成功返回远程 blob SHA，失败返回 None。
+        返回 (是否上传成功, 远程 API 已证明的 blob SHA)。
         """
         base = self._git_api_base()
         owner = self._git_owner()
@@ -1449,9 +1451,12 @@ class Main(Star):
         if status in (200, 201):
             # 更新 SHA 缓存
             new_sha = str((data or {}).get("content", {}).get("sha", "")).strip()
-            new_sha = new_sha or git_blob_sha(content)
-            self._sha_cache[path] = new_sha
-            return new_sha
+            success, remote_sha = remote_put_result(True, new_sha)
+            if remote_sha:
+                self._sha_cache[path] = remote_sha
+            else:
+                self._sha_cache.pop(path, None)
+            return success, remote_sha
 
         if status in (409, 422):
             # SHA 冲突 → 精准获取该文件的最新 SHA 后重试一次
@@ -1473,14 +1478,17 @@ class Main(Star):
                 status2, data2 = self._git_request("PUT", url, json_body=body)
             if status2 in (200, 201):
                 new_sha = str((data2 or {}).get("content", {}).get("sha", "")).strip()
-                new_sha = new_sha or git_blob_sha(content)
-                self._sha_cache[path] = new_sha
-                return new_sha
+                success, remote_sha = remote_put_result(True, new_sha)
+                if remote_sha:
+                    self._sha_cache[path] = remote_sha
+                else:
+                    self._sha_cache.pop(path, None)
+                return success, remote_sha
             logger.error(f"[Git Sync] 重试后仍失败 {path} (HTTP {status2})")
-            return None
+            return remote_put_result(False, None)
 
         logger.error(f"[Git Sync] 上传文件失败 {path} (HTTP {status})")
-        return None
+        return remote_put_result(False, None)
 
     def _git_get_head_commit_and_tree(self) -> tuple[str, str] | None:
         """获取 GitHub 当前分支 HEAD commit SHA 和 tree SHA。"""
@@ -1649,9 +1657,14 @@ class Main(Star):
 
         if self._git_platform() == "github":
             if self._git_push_batch_github(items):
-                for git_path, content in items:
-                    remote_sha = self._sha_cache.get(git_path, "")
-                    self._remember_verified_remote_content(git_path, content, remote_sha)
+                try:
+                    for git_path, content in items:
+                        remote_sha = self._sha_cache.get(git_path, "")
+                        self._remember_verified_remote_content(
+                            git_path, content, remote_sha, save=False
+                        )
+                finally:
+                    self._save_hash_index()
                 logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
                 return len(items), 0, 0
             logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
@@ -1659,16 +1672,24 @@ class Main(Star):
         success = 0
         failed = 0
         skipped = 0
-        for offset, (git_path, content) in enumerate(items):
-            if self._git_push_cancelled:
-                skipped += len(items) - offset
-                break
-            remote_sha = self._git_put_file(git_path, content, f"Sync {git_path}")
-            if remote_sha:
-                self._remember_verified_remote_content(git_path, content, remote_sha)
-                success += 1
-            else:
-                failed += 1
+        try:
+            for offset, (git_path, content) in enumerate(items):
+                if self._git_push_cancelled:
+                    skipped += len(items) - offset
+                    break
+                uploaded, remote_sha = self._git_put_file(
+                    git_path, content, f"Sync {git_path}"
+                )
+                if uploaded:
+                    if remote_sha:
+                        self._remember_verified_remote_content(
+                            git_path, content, remote_sha, save=False
+                        )
+                    success += 1
+                else:
+                    failed += 1
+        finally:
+            self._save_hash_index()
         return success, failed, skipped
 
     def _git_delete_file(self, path: str, message: str) -> bool:
@@ -1762,7 +1783,9 @@ class Main(Star):
                         content = local_path.read_bytes()
                         if git_blob_sha(content) == remote_sha:
                             self._sha_cache[git_path] = remote_sha
-                            self._remember_verified_remote_content(git_path, content, remote_sha)
+                            self._remember_verified_remote_content(
+                                git_path, content, remote_sha, save=False
+                            )
                             continue
                     except OSError:
                         pass
@@ -1773,7 +1796,7 @@ class Main(Star):
                 if content is not None:
                     category_hashes = category_hash_cache.get(category)
                     if category_hashes is None:
-                        category_hashes = self._category_hashes(category)
+                        category_hashes = self._category_hashes(category, save=False)
                         category_hash_cache[category] = category_hashes
                     digest = self._bytes_hash(content)
                     if digest in category_hashes:
@@ -1784,7 +1807,9 @@ class Main(Star):
                     self._sha_cache[git_path] = remote_sha
                     local_path.write_bytes(content)
                     category_hashes.add(digest)
-                    self._remember_verified_remote_content(git_path, content, remote_sha)
+                    self._remember_verified_remote_content(
+                        git_path, content, remote_sha, save=False
+                    )
                     synced += 1
                     result["synced"] = synced
 
@@ -1802,7 +1827,7 @@ class Main(Star):
                     parts = Path(cached_path).parts
                     if len(parts) >= 3:
                         self._invalidate_category_hash_cache(parts[1])
-                    self._forget_file_hash(local_path)
+                    self._forget_file_hash(local_path, save=False)
                     result["removed"] = int(result["removed"]) + 1
                 self._sha_cache.pop(cached_path, None)
 
@@ -1811,6 +1836,7 @@ class Main(Star):
         except Exception as exc:
             logger.error(f"[Git Sync] 同步异常: {exc}")
         finally:
+            self._save_hash_index()
             self._sync_lock.release()
         return result
 
@@ -1823,9 +1849,10 @@ class Main(Star):
             return
         try:
             content = Path(local_abs_path).read_bytes()
-            remote_sha = self._git_put_file(git_path, content, f"Upload {git_path}")
-            if remote_sha:
-                self._remember_verified_remote_content(git_path, content, remote_sha)
+            uploaded, remote_sha = self._git_put_file(git_path, content, f"Upload {git_path}")
+            if uploaded:
+                if remote_sha:
+                    self._remember_verified_remote_content(git_path, content, remote_sha)
                 logger.info(f"[Git Sync] 已推送到远程: {git_path}")
         except Exception as exc:
             logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
@@ -1907,7 +1934,9 @@ class Main(Star):
                 remote_sha = str(remote.get("sha", "")) if remote else ""
                 if remote_sha == local_sha:
                     self._sha_cache[git_path] = remote_sha
-                    self._remember_verified_remote_content(git_path, content, remote_sha)
+                    self._remember_verified_remote_content(
+                        git_path, content, remote_sha, save=False
+                    )
                     skipped += 1
                     continue
 
@@ -1931,6 +1960,7 @@ class Main(Star):
         if self._git_push_cancelled:
             skipped += max(0, len(local_images) - processed)
             logger.info(f"[Git Sync] 批量推送已取消：成功 {success}，失败 {failed}，跳过 {skipped}。")
+            self._save_hash_index()
             return success, failed, skipped
 
         if pending:
@@ -1940,6 +1970,7 @@ class Main(Star):
             skipped += skip_count
 
         logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
+        self._save_hash_index()
         return success, failed, skipped
 
     def _git_startup_sync(self) -> None:
@@ -2577,7 +2608,7 @@ class Main(Star):
             self._remember_file_hash(path, digest, category=category, save=save)
         return digest
 
-    def _category_hashes(self, category: str) -> set[str]:
+    def _category_hashes(self, category: str, save: bool = True) -> set[str]:
         """返回指定分类内已存在图片的内容哈希集合。"""
         category = _sanitize_component(category)
         cached = self._category_hash_cache.get(category)
@@ -2593,7 +2624,8 @@ class Main(Star):
                 digest = self._file_hash_cached(path, category=category, save=False)
                 if digest:
                     hashes.add(digest)
-        self._save_hash_index()
+        if save:
+            self._save_hash_index()
 
         self._category_hash_cache[category] = hashes
         return hashes

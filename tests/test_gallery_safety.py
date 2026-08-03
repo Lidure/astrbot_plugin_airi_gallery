@@ -3,6 +3,7 @@ from gallery_safety import (
     merge_hash_entry,
     normalize_hash_index,
     read_bool_flag,
+    remote_put_result,
     select_remote_delete_candidates,
     verified_remote_sha,
 )
@@ -43,6 +44,15 @@ def test_flag_exception_and_awaitable_are_rejected():
 
 def test_git_blob_sha_uses_git_blob_header():
     assert git_blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+def test_successful_upload_without_api_sha_stays_unverified():
+    assert remote_put_result(True, None) == (True, None)
+    assert remote_put_result(True, "  remote-blob  ") == (True, "remote-blob")
+
+
+def test_failed_upload_cannot_carry_a_remote_sha():
+    assert remote_put_result(False, "remote-blob") == (False, None)
 
 
 def test_changed_local_entry_clears_old_remote_baseline():
