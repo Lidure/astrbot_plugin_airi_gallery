@@ -54,6 +54,21 @@ def test_sanitize_text_removes_explicit_and_url_credentials():
     assert "#frag" not in cleaned
 
 
+def test_sanitize_text_masks_bearer_authorization_values():
+    cleaned = sanitize_text("Authorization: Bearer bearer-secret")
+
+    assert cleaned == "Authorization: [已隐藏]"
+    assert "bearer-secret" not in cleaned
+
+
+def test_sanitize_text_removes_credentials_from_non_http_urls():
+    cleaned = sanitize_text("ssh://user:ssh-secret@example.com/repo?token=value#frag")
+
+    assert cleaned == "ssh://example.com/repo"
+    assert "ssh-secret" not in cleaned
+    assert "user:" not in cleaned
+
+
 def test_version_comparison_and_bounded_integer_fallback():
     assert compare_versions("v2.9.1", "2.10.0") == -1
     assert compare_versions("v2.10.0", "v2.10.0") == 0

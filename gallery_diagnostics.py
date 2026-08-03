@@ -8,7 +8,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 LEVEL_LABELS = {"warning": "警告", "error": "错误", "update": "更新"}
 VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
-URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s]+", re.IGNORECASE)
+AUTHORIZATION_RE = re.compile(
+    r"(\bAuthorization\s*[:=]\s*)[^\r\n]+", re.IGNORECASE
+)
 TOKEN_RE = re.compile(
     r"\b(authorization|token|access_token|private_token|upload_token)"
     r"(\s*[:=]\s*|\s+)[^\s,;]+",
@@ -100,6 +103,7 @@ def sanitize_text(text: object, secrets: Iterable[object] = ()) -> str:
         value = str(secret)
         if value:
             cleaned = cleaned.replace(value, "[已隐藏]")
+    cleaned = AUTHORIZATION_RE.sub(r"\1[已隐藏]", cleaned)
     cleaned = TOKEN_RE.sub(lambda match: match.group(1) + match.group(2) + "[已隐藏]", cleaned)
     return cleaned[:500]
 
