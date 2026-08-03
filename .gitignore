@@ -12,3 +12,4 @@ env/
 .vscode/
 node_modules/
 dist/
+.worktrees/
