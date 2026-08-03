@@ -40,7 +40,7 @@
   "cloud_gallery_url": {
     "type": "string",
     "description": "云端图库链接",
-    "hint": "填写已部署的 Cloudflare Pages 云端图库页面 URL，可省略 https://。填写后，发送 /airi_gallery 或 /画廊帮助 时会顺便发出这个入口，方便大家从浏览器查看表情包、批量上传和管理图片。",
+    "hint": "填写已部署的 Cloudflare Pages 云端图库页面 URL，可省略 https://。填写后，发送 /airi_gallery 或 /画廊帮助 时会顺便发出这个入口，方便大家从浏览器查看表情包、批量上传和管理图片。/画廊检查会验证 URL 格式，但不会请求该页面。",
     "default": ""
   },
   "category_aliases": {
@@ -68,7 +68,7 @@
     "type": "bool",
     "description": "是否开启权限控制（针对删除、导入、创建等破坏性命令）",
     "default": false,
-    "hint": "共享群组强烈建议开启；开启后仅 admins 和 whitelist 中的用户可以执行创建、上传、删除、导入等管理命令。保持关闭时所有用户均可执行管理命令。"
+    "hint": "共享群组强烈建议开启；开启后仅 admins 和 whitelist 中的用户可以执行创建、上传、删除、导入等管理命令。保持关闭时所有用户均可执行管理命令，/画廊检查会提示权限保护未开启的警告。"
   },
   "admins": {
     "type": "list",
@@ -91,7 +91,7 @@
   "git_sync_enabled": {
     "type": "bool",
     "description": "启用 Git 远程仓库同步",
-    "hint": "开启后，图片上传/删除将自动同步到 GitHub 或 Gitee 仓库。Bot 离线时也可通过 Git 平台网页直接管理图片。",
+    "hint": "开启后，图片上传/删除将自动同步到 GitHub 或 Gitee 仓库。Bot 离线时也可通过 Git 平台网页直接管理图片。/画廊检查可验证必填配置并进行只读连接测试。",
     "default": false
   },
   "git_platform": {

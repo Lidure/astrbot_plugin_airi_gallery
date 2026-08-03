@@ -50,15 +50,27 @@ def test_config_schema_is_valid_json():
     assert isinstance(schema, dict)
 
 
-def test_release_version_is_2_9_1_everywhere():
+def test_release_version_is_2_10_0_everywhere():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
     readme = Path("README.md").read_text(encoding="utf-8")
+    main_source = Path("main.py").read_text(encoding="utf-8")
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.9.1"
-    assert badge == "v2.9.1"
-    assert changelog == "v2.9.1"
+    assert metadata["version"] == "v2.10.0"
+    assert badge == "v2.10.0"
+    assert changelog == "v2.10.0"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.10.0"' in main_source
+
+
+def test_diagnostics_are_documented_for_novice_users():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    main_source = Path("main.py").read_text(encoding="utf-8")
+
+    assert "/画廊检查" in readme
+    assert "只读" in readme
+    assert "不会自动更新" in readme
+    assert "/画廊检查" in main_source
 
 
 def test_gallery_diagnostics_command_and_lifecycle_are_wired():
