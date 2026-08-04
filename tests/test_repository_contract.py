@@ -99,6 +99,23 @@ def test_gallery_script_wires_alias_management():
     assert "if (await loadAliases(true))" in script
 
 
+def test_gallery_modern_desktop_ui_contract():
+    root_logo = Path("logo.png")
+    page_logo = Path("pages/gallery/logo.png")
+    html = Path("pages/gallery/index.html").read_text(encoding="utf-8")
+    css = Path("pages/gallery/style.css").read_text(encoding="utf-8")
+    script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
+
+    assert page_logo.read_bytes() == root_logo.read_bytes()
+    assert 'class="header-logo"' in html
+    assert 'src="./logo.png"' in html
+    assert 'class="alias-actions"' in html
+    assert "position: sticky" in css
+    assert "bottom: 12px" in css
+    assert "有未保存的修改" in script
+    assert "所有修改已保存" in script
+
+
 def test_diagnostics_are_documented_for_novice_users():
     readme = Path("README.md").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
