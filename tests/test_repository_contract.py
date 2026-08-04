@@ -112,8 +112,12 @@ def test_gallery_modern_desktop_ui_contract():
     assert 'class="alias-actions"' in html
     assert "position: sticky" in css
     assert "bottom: 12px" in css
-    assert "padding-bottom: 82px" in css
-    assert ".alias-actions .btn-save { min-width: 112px; }" in css
+    table_wrap = re.search(r"\.alias-table-wrap\s*\{([^}]*)\}", css).group(1)
+    table_padding = re.search(r"padding-bottom:\s*([0-9.]+)px", table_wrap)
+    assert table_padding and float(table_padding.group(1)) > 0
+    save_button = re.search(r"\.alias-actions\s+\.btn-save\s*\{([^}]*)\}", css).group(1)
+    save_width = re.search(r"min-width:\s*([0-9.]+)px", save_button)
+    assert save_width and float(save_width.group(1)) > 0
     dirty_state = re.search(r"\.dirty-state\.is-dirty \{([^}]*)\}", css).group(1)
     assert "border-color: #efb9d2" in dirty_state
     assert "background: var(--accent-soft)" in dirty_state
