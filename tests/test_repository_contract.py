@@ -50,17 +50,35 @@ def test_config_schema_is_valid_json():
     assert isinstance(schema, dict)
 
 
-def test_release_version_is_2_10_0_everywhere():
+def test_release_version_is_2_11_0_everywhere():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
     readme = Path("README.md").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.10.0"
-    assert badge == "v2.10.0"
-    assert changelog == "v2.10.0"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.10.0"' in main_source
+    assert metadata["version"] == "v2.11.0"
+    assert badge == "v2.11.0"
+    assert changelog == "v2.11.0"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.0"' in main_source
+
+
+def test_gallery_page_integrates_alias_management():
+    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
+    html = Path("pages/gallery/index.html").read_text(encoding="utf-8")
+    script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
+
+    assert metadata["pages"] == ["gallery", "zz_cloud"]
+    assert not Path("pages/zz_aliases").exists()
+    assert 'id="view-gallery"' in html
+    assert 'id="view-aliases"' in html
+    assert 'id="alias-tbody"' in html
+    assert 'id="alias-save-btn"' in html
+    assert 'rel="stylesheet" href="./style.css' in html
+    assert "<style>" not in html
+    assert 'apiGet("aliases")' in script
+    assert 'apiPost("aliases/save"' in script
+    assert 'addEventListener("beforeunload"' in script
 
 
 def test_diagnostics_are_documented_for_novice_users():
