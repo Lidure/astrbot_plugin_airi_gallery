@@ -66,7 +66,7 @@
 - `pages/gallery/style.css`：统一样式并补充响应式规则。
 - `pages/zz_aliases/`：整合完成后删除。
 - `metadata.yaml`：从 `pages` 移除 `zz_aliases`，保留 `gallery` 和 `zz_cloud`；版本更新为 `v2.11.0`。
-- `_conf_schema.json`、`README.md`：同步版本和使用说明。
+- `README.md`：同步版本和使用说明。
 - `tests/`：补充页面清单、前端接线和版本一致性契约测试。
 
 ## 兼容性与升级
