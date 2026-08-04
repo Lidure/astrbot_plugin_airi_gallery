@@ -65,7 +65,7 @@
 - `pages/gallery/app.js`：合并昵称交互、校验、保存及未保存状态处理。
 - `pages/gallery/style.css`：统一样式并补充响应式规则。
 - `pages/zz_aliases/`：整合完成后删除。
-- `metadata.yaml`：`pages` 仅保留 `gallery`；版本更新为 `v2.11.0`。
+- `metadata.yaml`：从 `pages` 移除 `zz_aliases`，保留 `gallery` 和 `zz_cloud`；版本更新为 `v2.11.0`。
 - `_conf_schema.json`、`README.md`：同步版本和使用说明。
 - `tests/`：补充页面清单、前端接线和版本一致性契约测试。
 
@@ -79,7 +79,7 @@
 
 自动测试应验证：
 
-- `metadata.yaml` 只暴露 `gallery` 页面。
+- `metadata.yaml` 的页面清单为 `gallery`、`zz_cloud`，不再包含 `zz_aliases`。
 - `gallery` 页面包含两个主视图及昵称管理所需 DOM。
 - `gallery/app.js` 接通 `/aliases`、`/aliases/save` 和 `/categories`。
 - 独立 `zz_aliases` 页面不再存在。
