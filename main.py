@@ -31,8 +31,11 @@ try:
         UpdateProbeResult,
         check_git_configuration,
         coerce_bounded_int,
+        coerce_strict_bool,
+        coerce_strict_int,
         evaluate_git_probe,
         evaluate_update_probe,
+        normalize_identifier_list,
         parse_metadata_version,
         run_local_diagnostics,
     )
@@ -46,8 +49,11 @@ except ImportError:
         UpdateProbeResult,
         check_git_configuration,
         coerce_bounded_int,
+        coerce_strict_bool,
+        coerce_strict_int,
         evaluate_git_probe,
         evaluate_update_probe,
+        normalize_identifier_list,
         parse_metadata_version,
         run_local_diagnostics,
     )
@@ -93,6 +99,7 @@ REMOTE_DELETE_PREVIEW_LIMIT = 20
 CURRENT_PLUGIN_VERSION = "v2.10.0"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
+_GIT_REQUEST_STATE = threading.local()
 IMAGE_SUFFIXES = {
     ".bmp",
     ".gif",
@@ -328,10 +335,24 @@ class Main(Star):
         self.view_all_collage_compress = self._resolve_view_all_collage_compress()
         self.view_all_collage_scale = self._resolve_view_all_collage_scale()
         # 权限相关配置
-        self.use_permission = bool(self.config.get("use_permission", False))
-        self.admins = {str(x) for x in (self.config.get("admins") or [])}
-        self.whitelist = {str(x) for x in (self.config.get("whitelist") or [])}
-        self.llm_tool_enabled = bool(self.config.get("llm_tool_enabled", False))
+        self.use_permission = coerce_strict_bool(
+            self.config.get("use_permission", False)
+        )
+        self.admins = {
+            entry
+            for entry in (normalize_identifier_list(self.config.get("admins", [])) or [])
+            if entry
+        }
+        self.whitelist = {
+            entry
+            for entry in (
+                normalize_identifier_list(self.config.get("whitelist", [])) or []
+            )
+            if entry
+        }
+        self.llm_tool_enabled = coerce_strict_bool(
+            self.config.get("llm_tool_enabled", False)
+        )
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
 
         # Git 远程同步状态
@@ -416,7 +437,7 @@ class Main(Star):
         """初始化时整理一次图库，确保编号是可用的数字序列。"""
         await self._normalize_gallery_tree()
         # Git 远程同步初始化
-        if self.config.get("git_sync_enabled", False):
+        if coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self._validate_git_config()
             if self._git_sync_enabled:
                 threading.Thread(
@@ -592,7 +613,7 @@ class Main(Star):
             await event.send(event.plain_result(report.render_chat()))
         except Exception as exc:
             logger.error(
-                f"[Gallery Diagnostics] Command failed: {type(exc).__name__}"
+                f"[画廊检查] 命令执行失败：{type(exc).__name__}"
             )
             await event.send(event.plain_result("画廊检查暂时无法完成，请稍后重试。"))
 
@@ -1262,14 +1283,21 @@ class Main(Star):
         repository = quote(str(self.config.get("git_repo_name", "")).strip(), safe="")
         branch = quote(str(self.config.get("git_branch", "main")).strip(), safe="")
         repository_url = f"{self._git_api_base()}/repos/{owner}/{repository}"
+        _GIT_REQUEST_STATE.failure = None
         repository_status, repository_body = self._git_request(
             "GET",
             repository_url,
             timeout=10,
             disable_on_auth_failure=False,
         )
+        repository_failure = getattr(_GIT_REQUEST_STATE, "failure", None)
         if repository_status != 200:
-            return GitProbeResult(repository_status, None, None)
+            return GitProbeResult(
+                repository_status,
+                None,
+                None,
+                repository_failure=repository_failure,
+            )
 
         can_push = None
         if isinstance(repository_body, dict):
@@ -1279,13 +1307,21 @@ class Main(Star):
             ):
                 can_push = permissions["push"]
 
+        _GIT_REQUEST_STATE.failure = None
         branch_status, _ = self._git_request(
             "GET",
             f"{repository_url}/branches/{branch}",
             timeout=10,
             disable_on_auth_failure=False,
         )
-        return GitProbeResult(repository_status, branch_status, can_push)
+        branch_failure = getattr(_GIT_REQUEST_STATE, "failure", None)
+        return GitProbeResult(
+            repository_status,
+            branch_status,
+            can_push,
+            repository_failure=repository_failure,
+            branch_failure=branch_failure,
+        )
 
     def _probe_gallery_update(self) -> UpdateProbeResult:
         def load_update_probe() -> UpdateProbeResult:
@@ -1322,9 +1358,9 @@ class Main(Star):
                     DiagnosticItem(
                         "git.internal",
                         "warning",
-                        "Remote check",
-                        "Remote check encountered an internal error.",
-                        "Check the AstrBot logs and try again.",
+                        "Git 远程检查",
+                        "Git 远程检查发生内部错误。",
+                        "查看 AstrBot 日志后重新运行检查。",
                     )
                 )
         try:
@@ -1338,9 +1374,9 @@ class Main(Star):
                 DiagnosticItem(
                     "update.internal",
                     "warning",
-                    "Version check",
-                    "Version check could not be completed.",
-                    "Run /画廊检查 again later.",
+                    "版本检查",
+                    "版本检查发生内部错误。",
+                    "稍后重新运行 /画廊检查。",
                 )
             )
         return report
@@ -1352,7 +1388,7 @@ class Main(Star):
             raise
         except Exception as exc:
             logger.error(
-                f"[Gallery Diagnostics] Startup failed: {type(exc).__name__}"
+                f"[画廊检查] 启动诊断失败：{type(exc).__name__}"
             )
             return
 
@@ -1362,17 +1398,17 @@ class Main(Star):
         log_lines = report.render_log_lines()
         if not actionable_items:
             for line in log_lines:
-                logger.info(f"[Gallery Diagnostics] {line}")
+                logger.info(f"[画廊检查] {line}")
             return
         for item, line in zip(actionable_items, log_lines):
             if item.level == "error":
-                logger.error(f"[Gallery Diagnostics] {line}")
+                logger.error(f"[画廊检查] {line}")
             else:
-                logger.warning(f"[Gallery Diagnostics] {line}")
+                logger.warning(f"[画廊检查] {line}")
 
     def _validate_git_config(self) -> None:
         """检查 Git 同步所需的配置是否完整，结果写入 self._git_sync_enabled。"""
-        if not self.config.get("git_sync_enabled", False):
+        if not coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self._git_sync_enabled = False
             return
         platform = str(self.config.get("git_platform", "github")).strip().lower()
@@ -1445,6 +1481,7 @@ class Main(Star):
             merged_params.update(params)
 
         headers = self._git_headers()
+        _GIT_REQUEST_STATE.failure = None
         try:
             resp = req_lib.request(
                 method,
@@ -1455,17 +1492,20 @@ class Main(Star):
                 timeout=timeout,
             )
         except req_lib.Timeout:
+            _GIT_REQUEST_STATE.failure = "timeout"
             logger.warning(f"[Git Sync] 请求超时: {method} {url}")
             return 0, None
         except req_lib.ConnectionError:
+            _GIT_REQUEST_STATE.failure = "connection"
             logger.warning(f"[Git Sync] 连接失败: {method} {url}")
             return 0, None
         except Exception as exc:
+            _GIT_REQUEST_STATE.failure = "request"
             if disable_on_auth_failure:
                 logger.error(f"[Git Sync] 请求异常: {exc}")
             else:
                 logger.error(
-                    f"[Gallery Diagnostics] Git request failed: {type(exc).__name__}"
+                    f"[画廊检查] Git 请求失败：{type(exc).__name__}"
                 )
             return 0, None
 
@@ -1489,7 +1529,7 @@ class Main(Star):
                 logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
             else:
                 logger.warning(
-                    f"[Gallery Diagnostics] Git request returned HTTP {status}"
+                    f"[画廊检查] Git 请求返回 HTTP {status}"
                 )
             return status, body
 
@@ -2193,7 +2233,7 @@ class Main(Star):
 
     def _start_sync_timer(self) -> None:
         """启动定时从远程拉取的后台任务。"""
-        interval = int(self.config.get("git_sync_interval", 5))
+        interval = coerce_strict_int(self.config.get("git_sync_interval", 5), 5)
         if interval <= 0:
             logger.info("[Git Sync] 自动同步已禁用（间隔为 0）。")
             return

@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import re
 import sys
 import threading
 import time
@@ -13,6 +14,7 @@ from gallery_diagnostics import (
     DiagnosticReport,
     UpdateProbeCache,
     UpdateProbeResult,
+    evaluate_git_probe,
 )
 
 
@@ -21,6 +23,26 @@ def _identity_decorator(*args, **kwargs):
         return function
 
     return decorate
+
+
+class ContextStub:
+    def __init__(self):
+        self.llm_tools = []
+        self.web_routes = []
+
+    def add_llm_tools(self, tool):
+        self.llm_tools.append(tool)
+
+    def register_web_api(self, *args):
+        self.web_routes.append(args)
+
+
+def construct_plugin(main_module, monkeypatch, tmp_path, config):
+    monkeypatch.setattr(
+        main_module, "get_astrbot_plugin_data_path", lambda: str(tmp_path)
+    )
+    context = ContextStub()
+    return main_module.Main(context, config), context
 
 
 @pytest.fixture
@@ -123,6 +145,212 @@ def test_unauthorized_diagnostics_command_skips_probe_and_sends_only_denial(main
     assert event.sent == ["没有权限执行此操作。"]
 
 
+def test_diagnostics_command_failure_uses_chinese_fallback_logging(
+    main_module, monkeypatch
+):
+    logged = []
+
+    class Plugin:
+        def _is_allowed(self, event):
+            return True
+
+        def _run_gallery_diagnostics(self):
+            raise RuntimeError("private detail")
+
+    class Event:
+        def __init__(self):
+            self.sent = []
+
+        def plain_result(self, text):
+            return text
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    monkeypatch.setattr(main_module.logger, "error", logged.append)
+    event = Event()
+
+    asyncio.run(main_module.Main.cmd_gallery_diagnostics(Plugin(), event))
+
+    assert logged == ["[画廊检查] 命令执行失败：RuntimeError"]
+    assert event.sent == ["画廊检查暂时无法完成，请稍后重试。"]
+
+
+def test_string_permission_list_does_not_authorize_character_ids(
+    main_module, monkeypatch, tmp_path
+):
+    plugin, _ = construct_plugin(
+        main_module,
+        monkeypatch,
+        tmp_path,
+        {"use_permission": True, "admins": "alice", "whitelist": []},
+    )
+
+    assert plugin.admins == set()
+    assert plugin._is_allowed(types.SimpleNamespace(user_id="a")) is False
+
+
+def test_valid_permission_lists_keep_authorizing_complete_identifiers(
+    main_module, monkeypatch, tmp_path
+):
+    plugin, _ = construct_plugin(
+        main_module,
+        monkeypatch,
+        tmp_path,
+        {"use_permission": True, "admins": ["alice"], "whitelist": ["bob"]},
+    )
+
+    assert plugin.admins == {"alice"}
+    assert plugin.whitelist == {"bob"}
+    assert plugin._is_allowed(types.SimpleNamespace(user_id="alice")) is True
+
+
+def test_non_list_permission_values_do_not_break_construction(
+    main_module, monkeypatch, tmp_path
+):
+    plugin, _ = construct_plugin(
+        main_module,
+        monkeypatch,
+        tmp_path,
+        {"use_permission": True, "admins": 123, "whitelist": object()},
+    )
+
+    assert plugin.admins == set()
+    assert plugin.whitelist == set()
+
+
+@pytest.mark.parametrize("value", ["true", 1, object()])
+def test_only_real_boolean_true_enables_permission_and_llm_tool(
+    main_module, monkeypatch, tmp_path, value
+):
+    plugin, context = construct_plugin(
+        main_module,
+        monkeypatch,
+        tmp_path,
+        {"use_permission": value, "llm_tool_enabled": value},
+    )
+
+    assert plugin.use_permission is False
+    assert plugin.llm_tool_enabled is False
+    assert context.llm_tools == []
+
+
+def test_real_boolean_true_keeps_permission_and_llm_tool_enabled(
+    main_module, monkeypatch, tmp_path
+):
+    plugin, context = construct_plugin(
+        main_module,
+        monkeypatch,
+        tmp_path,
+        {"use_permission": True, "llm_tool_enabled": True},
+    )
+
+    assert plugin.use_permission is True
+    assert plugin.llm_tool_enabled is True
+    assert len(context.llm_tools) == 1
+
+
+@pytest.mark.parametrize("value", ["false", 1, object()])
+def test_initialize_only_starts_git_for_real_boolean_true(
+    main_module, monkeypatch, value
+):
+    async def scenario():
+        calls = []
+        plugin = object.__new__(main_module.Main)
+        plugin.config = {"git_sync_enabled": value}
+        plugin._git_sync_enabled = False
+        plugin._diagnostic_task = None
+
+        async def normalize_gallery():
+            calls.append("normalize")
+
+        async def run_diagnostics():
+            calls.append("diagnostics")
+
+        plugin._normalize_gallery_tree = normalize_gallery
+        plugin._run_startup_diagnostics = run_diagnostics
+        plugin._validate_git_config = lambda: calls.append("validate_git")
+        plugin._git_startup_sync = lambda: calls.append("startup_sync")
+        plugin._start_sync_timer = lambda: calls.append("timer")
+
+        await main_module.Main.initialize(plugin)
+        await plugin._diagnostic_task
+
+        assert calls == ["normalize", "diagnostics"]
+
+    asyncio.run(scenario())
+
+
+def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
+    main_module, monkeypatch
+):
+    async def scenario():
+        timer_delays = []
+        diagnostics_ran = asyncio.Event()
+
+        class ThreadStub:
+            def __init__(self, *, target, daemon):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                pass
+
+        class TimerStub:
+            def __init__(self, delay, callback):
+                timer_delays.append(delay)
+                self.daemon = False
+
+            def start(self):
+                pass
+
+        async def normalize_gallery(self):
+            pass
+
+        async def run_diagnostics(self):
+            diagnostics_ran.set()
+
+        monkeypatch.setattr(main_module.threading, "Thread", ThreadStub)
+        monkeypatch.setattr(main_module.threading, "Timer", TimerStub)
+        monkeypatch.setattr(main_module.Main, "_normalize_gallery_tree", normalize_gallery)
+        monkeypatch.setattr(main_module.Main, "_run_startup_diagnostics", run_diagnostics)
+
+        plugin = object.__new__(main_module.Main)
+        plugin.config = {
+            "git_sync_enabled": True,
+            "git_platform": "github",
+            "git_repo_owner": "owner",
+            "git_repo_name": "gallery",
+            "git_branch": "main",
+            "git_token": "token",
+            "git_sync_interval": object(),
+        }
+        plugin._git_sync_enabled = False
+        plugin._diagnostic_task = None
+
+        await main_module.Main.initialize(plugin)
+        await plugin._diagnostic_task
+
+        assert timer_delays == [300]
+        assert diagnostics_ran.is_set()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("interval", [0, -1])
+def test_non_positive_integer_git_intervals_keep_timer_disabled(
+    main_module, monkeypatch, interval
+):
+    monkeypatch.setattr(
+        main_module.threading,
+        "Timer",
+        lambda *args, **kwargs: pytest.fail("disabled interval must not create a timer"),
+    )
+    plugin = types.SimpleNamespace(config={"git_sync_interval": interval})
+
+    main_module.Main._start_sync_timer(plugin)
+
+
 @pytest.mark.parametrize("status", [401, 403])
 def test_diagnostic_git_auth_failure_does_not_disable_sync(main_module, monkeypatch, status):
     import requests
@@ -204,6 +432,127 @@ def test_git_probe_uses_two_get_requests_with_encoded_components(main_module):
             {"timeout": 10, "disable_on_auth_failure": False},
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("exception_name", "expected_failure", "expected_code"),
+    [
+        ("Timeout", "timeout", "git.timeout"),
+        ("ConnectionError", "connection", "git.network"),
+    ],
+)
+def test_repository_probe_preserves_typed_transport_failure_and_short_circuits_branch(
+    main_module, monkeypatch, exception_name, expected_failure, expected_code
+):
+    import requests
+
+    calls = []
+
+    def failed_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        raise getattr(requests, exception_name)("private transport detail")
+
+    monkeypatch.setattr(requests, "request", failed_request)
+    plugin = object.__new__(main_module.Main)
+    plugin.config = {
+        "git_sync_enabled": True,
+        "git_platform": "github",
+        "git_repo_owner": "owner",
+        "git_repo_name": "gallery",
+        "git_branch": "main",
+        "git_token": "token",
+    }
+    plugin._git_sync_enabled = True
+
+    result = main_module.Main._probe_gallery_git(plugin)
+    items = evaluate_git_probe(result)
+
+    assert result.repository_failure == expected_failure
+    assert result.branch_status is None
+    assert [item.code for item in items] == [expected_code]
+    assert len(calls) == 1
+    assert calls[0][0] == "GET"
+    assert calls[0][2]["timeout"] == 10
+
+
+@pytest.mark.parametrize(
+    ("exception_name", "expected_failure", "expected_code"),
+    [
+        ("Timeout", "timeout", "git.branch_timeout"),
+        ("ConnectionError", "connection", "git.branch_network"),
+    ],
+)
+def test_branch_probe_preserves_typed_transport_failure(
+    main_module, monkeypatch, exception_name, expected_failure, expected_code
+):
+    import requests
+
+    calls = []
+
+    class RepositoryResponse:
+        status_code = 200
+        content = b"{}"
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"permissions": {"push": True}}
+
+    def branch_failure(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if len(calls) == 1:
+            return RepositoryResponse()
+        raise getattr(requests, exception_name)("private transport detail")
+
+    monkeypatch.setattr(requests, "request", branch_failure)
+    plugin = object.__new__(main_module.Main)
+    plugin.config = {
+        "git_sync_enabled": True,
+        "git_platform": "github",
+        "git_repo_owner": "owner",
+        "git_repo_name": "gallery",
+        "git_branch": "main",
+        "git_token": "token",
+    }
+    plugin._git_sync_enabled = True
+
+    result = main_module.Main._probe_gallery_git(plugin)
+    items = evaluate_git_probe(result)
+
+    assert result.repository_status == 200
+    assert result.branch_failure == expected_failure
+    assert any(item.code == expected_code for item in items)
+    assert len(calls) == 2
+    assert all(call[0] == "GET" and call[2]["timeout"] == 10 for call in calls)
+
+
+def test_internal_diagnostic_fallbacks_are_chinese_and_actionable(
+    main_module, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        main_module, "run_local_diagnostics", lambda context: DiagnosticReport()
+    )
+    plugin = object.__new__(main_module.Main)
+    plugin.config = {
+        "git_sync_enabled": True,
+        "git_platform": "github",
+        "git_repo_owner": "owner",
+        "git_repo_name": "gallery",
+        "git_branch": "main",
+        "git_token": "token",
+    }
+    plugin.gallery_root = tmp_path
+    plugin._hash_index_path = tmp_path / "hash_index.json"
+    plugin._probe_gallery_git = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
+    plugin._probe_gallery_update = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
+
+    report = main_module.Main._run_gallery_diagnostics(plugin)
+
+    assert [item.code for item in report.items] == ["git.internal", "update.internal"]
+    for item in report.items:
+        assert re.search(r"[\u3400-\u9fff]", item.title)
+        assert re.search(r"[\u3400-\u9fff]", item.message)
+        assert item.suggestion and re.search(r"[\u3400-\u9fff]", item.suggestion)
 
 
 def test_concurrent_update_probe_cache_executes_loader_once():

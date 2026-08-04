@@ -24,7 +24,7 @@ AUTHORIZATION_RE = re.compile(
     r"(\bAuthorization\s*[:=]\s*)[^\r\n]+", re.IGNORECASE
 )
 TOKEN_RE = re.compile(
-    r"\b(authorization|token|access_token|private_token|upload_token)"
+    r"\b(authorization|token|access_token|private_token|upload_token|git_token)"
     r"(\s*[:=]\s*|\s+)[^\s,;]+",
     re.IGNORECASE,
 )
@@ -92,6 +92,8 @@ class GitProbeResult:
     repository_status: int
     branch_status: int | None
     can_push: bool | None
+    repository_failure: str | None = None
+    branch_failure: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,7 +145,7 @@ def _strip_url_details(match: re.Match[str]) -> str:
         cleaned = urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
         return cleaned + trailing
     except ValueError:
-        return raw_url + trailing
+        return "[已隐藏的 URL]" + trailing
 
 
 def sanitize_text(text: object, secrets: Iterable[object] = ()) -> str:
@@ -195,6 +197,26 @@ def coerce_bounded_int(
     return default
 
 
+def coerce_strict_bool(value: object) -> bool:
+    return value is True
+
+
+def coerce_strict_int(value: object, default: int | None) -> int | None:
+    return value if type(value) is int else default
+
+
+def normalize_identifier_list(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    normalized: list[str] = []
+    for entry in value:
+        try:
+            normalized.append(str(entry).strip())
+        except Exception:
+            normalized.append("")
+    return normalized
+
+
 def _exception_name(exc: BaseException) -> str:
     return sanitize_text(type(exc).__name__)
 
@@ -207,8 +229,9 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
                 DiagnosticItem(
                     "gallery.root",
                     "error",
-                    "Gallery root",
-                    "Gallery root is missing or is not a directory.",
+                    "图库目录",
+                    "图库目录不存在或不是文件夹。",
+                    "检查数据目录并创建 gallery 文件夹。",
                 )
             )
             return
@@ -217,8 +240,9 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
             DiagnosticItem(
                 "gallery.root",
                 "error",
-                "Gallery root",
-                f"Gallery root could not be checked ({_exception_name(exc)}).",
+                "图库目录",
+                f"无法检查图库目录（{_exception_name(exc)}）。",
+                "检查图库目录路径和访问权限。",
             )
         )
         return
@@ -232,7 +256,7 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
         read_error = ""
     if readable:
         report.add(
-            DiagnosticItem("gallery.read", "ok", "Gallery read", "Gallery root is readable.")
+            DiagnosticItem("gallery.read", "ok", "图库读取", "图库目录可读取。")
         )
     else:
         suffix = f" ({read_error})" if read_error else ""
@@ -240,8 +264,9 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
             DiagnosticItem(
                 "gallery.read",
                 "error",
-                "Gallery read",
-                f"Gallery root could not be read{suffix}.",
+                "图库读取",
+                f"无法读取图库目录{suffix}。",
+                "为 AstrBot 运行用户授予图库目录读取权限。",
             )
         )
 
@@ -254,7 +279,7 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
         write_error = ""
     if writable:
         report.add(
-            DiagnosticItem("gallery.write", "ok", "Gallery write", "Gallery root is writable.")
+            DiagnosticItem("gallery.write", "ok", "图库写入", "图库目录可写入。")
         )
     else:
         suffix = f" ({write_error})" if write_error else ""
@@ -262,8 +287,9 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
             DiagnosticItem(
                 "gallery.write",
                 "warning",
-                "Gallery write",
-                f"Write access could not be confirmed{suffix}; no probe file was created.",
+                "图库写入",
+                f"无法确认图库目录写权限{suffix}，诊断未创建测试文件。",
+                "如需上传或整理图片，请授予图库目录写权限。",
             )
         )
 
@@ -293,8 +319,9 @@ def _gallery_items(context: LocalDiagnosticContext, report: DiagnosticReport) ->
             DiagnosticItem(
                 "gallery.traversal",
                 "error",
-                "Gallery traversal",
-                f"Gallery traversal failed ({walk_error}).",
+                "图库扫描",
+                f"扫描图库子目录失败（{walk_error}）。",
+                "检查图库内子目录的读取权限。",
             )
         )
 
@@ -306,7 +333,7 @@ def _hash_index_items(context: LocalDiagnosticContext, report: DiagnosticReport)
     except FileNotFoundError:
         report.add(
             DiagnosticItem(
-                "hash_index.missing", "ok", "Hash index", "Hash index is not present yet."
+                "hash_index.missing", "ok", "哈希索引", "哈希索引尚未生成。"
             )
         )
         return
@@ -315,23 +342,25 @@ def _hash_index_items(context: LocalDiagnosticContext, report: DiagnosticReport)
             DiagnosticItem(
                 "hash_index.invalid",
                 "warning",
-                "Hash index",
-                f"Hash index is invalid ({_exception_name(exc)}).",
+                "哈希索引",
+                f"哈希索引无法读取或解析（{_exception_name(exc)}）。",
+                "备份后删除 hash_index.json，让插件按需重建。",
             )
         )
         return
 
     if isinstance(payload, Mapping) and isinstance(payload.get("files"), Mapping):
         report.add(
-            DiagnosticItem("hash_index.valid", "ok", "Hash index", "Hash index is valid.")
+            DiagnosticItem("hash_index.valid", "ok", "哈希索引", "哈希索引结构有效。")
         )
     else:
         report.add(
             DiagnosticItem(
                 "hash_index.invalid",
                 "warning",
-                "Hash index",
-                "Hash index must be a JSON object with a files mapping.",
+                "哈希索引",
+                "哈希索引缺少有效的 files 映射。",
+                "备份后删除 hash_index.json，让插件按需重建。",
             )
         )
 
@@ -350,8 +379,9 @@ def _check_enum_setting(
         DiagnosticItem(
             f"config.{key}",
             "warning",
-            f"Configuration: {key}",
-            f"{key} must be one of: {', '.join(sorted(allowed))}.",
+            f"配置项 {key}",
+            f"{key} 的取值不受支持。",
+            f"将 {key} 设置为：{'、'.join(sorted(allowed))}。",
         )
     )
 
@@ -362,8 +392,7 @@ def _check_numeric_settings(config: Mapping[str, object], report: DiagnosticRepo
         valid_max = False
         if not isinstance(raw_max, bool) and isinstance(raw_max, (int, str)):
             try:
-                valid_max = 5 <= coerce_bounded_int(raw_max, 10, 5, 10) <= 10
-                valid_max = valid_max and 5 <= int(raw_max) <= 10
+                valid_max = 5 <= int(raw_max) <= 10
             except (TypeError, ValueError, OverflowError):
                 valid_max = False
         if not valid_max:
@@ -371,8 +400,9 @@ def _check_numeric_settings(config: Mapping[str, object], report: DiagnosticRepo
                 DiagnosticItem(
                     "config.view_multiple_max",
                     "warning",
-                    "Configuration: view_multiple_max",
-                    "view_multiple_max must be an integer from 5 to 10.",
+                    "多图数量",
+                    "view_multiple_max 必须是 5 到 10 的整数。",
+                    "将 view_multiple_max 设置为 5 到 10，非法值会回退为 10。",
                 )
             )
 
@@ -388,47 +418,64 @@ def _check_numeric_settings(config: Mapping[str, object], report: DiagnosticRepo
                 DiagnosticItem(
                     "config.view_all_collage_scale",
                     "warning",
-                    "Configuration: view_all_collage_scale",
-                    "view_all_collage_scale must be a number from 0.5 to 1.0.",
+                    "拼图缩放",
+                    "view_all_collage_scale 必须是 0.5 到 1.0 的数值。",
+                    "将 view_all_collage_scale 设置为 0.5 到 1.0，非法值会回退为 0.85。",
+                )
+            )
+
+    if "git_sync_interval" in config:
+        raw_interval = config["git_sync_interval"]
+        if coerce_strict_int(raw_interval, None) is None:
+            report.add(
+                DiagnosticItem(
+                    "config.git_sync_interval",
+                    "warning",
+                    "Git 同步间隔",
+                    "git_sync_interval 不是整数，将回退为 5 分钟。",
+                    "将 git_sync_interval 设置为整数；设为 0 或负数可禁用定时同步。",
                 )
             )
 
 
 def _permission_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
     items: list[DiagnosticItem] = []
-    lists: dict[str, list[object] | None] = {}
+    lists: dict[str, list[str] | None] = {}
     for key in ("admins", "whitelist"):
-        value = config.get(key, [])
-        if not isinstance(value, list):
+        value = normalize_identifier_list(config.get(key, []))
+        if value is None:
             lists[key] = None
             items.append(
                 DiagnosticItem(
                     f"permission.{key}_type",
                     "warning",
-                    f"Permission {key}",
-                    f"{key} must be a list.",
+                    f"权限名单 {key}",
+                    f"{key} 必须使用列表格式。",
+                    f"将 {key} 改为列表，例如 [\"10001\"]。",
                 )
             )
             continue
         lists[key] = value
-        empty_count = sum(not str(entry).strip() for entry in value)
+        empty_count = sum(not entry for entry in value)
         if empty_count:
             items.append(
                 DiagnosticItem(
                     f"permission.{key}_empty",
                     "warning",
-                    f"Permission {key}",
-                    f"{key} contains {empty_count} empty or whitespace entries.",
+                    f"权限名单 {key}",
+                    f"{key} 中有 {empty_count} 个空白条目。",
+                    f"删除 {key} 中的空白条目。",
                 )
             )
 
-    if config.get("use_permission", False) is False:
+    if not coerce_strict_bool(config.get("use_permission", False)):
         items.append(
             DiagnosticItem(
                 "permission.disabled",
                 "warning",
-                "Permission protection",
-                "Permission protection is disabled.",
+                "权限保护",
+                "管理命令权限保护未启用。",
+                "共享群组请将 use_permission 设置为 true。",
             )
         )
     elif lists["admins"] == [] and lists["whitelist"] == []:
@@ -436,8 +483,9 @@ def _permission_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
             DiagnosticItem(
                 "permission.empty",
                 "warning",
-                "Permission lists",
-                "Both permission lists are empty; AstrBot platform administrators may still pass.",
+                "权限名单",
+                "admins 和 whitelist 都为空，仅平台管理员仍可能获准。",
+                "在 admins 或 whitelist 中添加可信用户标识。",
             )
         )
     return items
@@ -504,27 +552,33 @@ def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
         if raw_url == "" or (isinstance(raw_url, str) and not raw_url.strip()):
             return [
                 DiagnosticItem(
-                    "cloud_url.empty", "ok", "Cloud gallery URL", "Cloud gallery URL is empty."
+                    "cloud_url.empty", "ok", "云端图库地址", "未配置云端图库地址。"
                 )
             ]
         return [
             DiagnosticItem(
                 "cloud_url.invalid",
                 "warning",
-                "Cloud gallery URL",
-                "Cloud gallery URL must be an http or https URL with a hostname.",
+                "云端图库地址",
+                "cloud_gallery_url 必须是有效的 HTTP 或 HTTPS 地址。",
+                "填写有效域名和路径，可省略 https://。",
             )
         ]
 
+    normalized_url = raw_url
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", raw_url, flags=re.IGNORECASE):
+        normalized_url = f"https://{raw_url}"
+
     try:
-        parsed = urlsplit(raw_url)
-        if not _valid_http_url(raw_url):
+        parsed = urlsplit(normalized_url)
+        if not _valid_http_url(normalized_url):
             return [
                 DiagnosticItem(
                     "cloud_url.invalid",
                     "warning",
-                    "Cloud gallery URL",
-                    "Cloud gallery URL must be a valid http or https URL with a valid hostname and port.",
+                    "云端图库地址",
+                    "cloud_gallery_url 的主机名或端口格式无效。",
+                    "检查域名、端口和路径，可省略 https://。",
                 )
             ]
         has_sensitive_parts = bool(
@@ -540,8 +594,9 @@ def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
                 DiagnosticItem(
                     "cloud_url.credentials",
                     "warning",
-                    "Cloud gallery URL",
-                    "Cloud gallery URL must not contain credentials, query, or fragment details.",
+                    "云端图库地址",
+                    "cloud_gallery_url 不得包含账号、密码、查询参数或片段。",
+                    "只保留公开的站点域名和路径。",
                 )
             ]
         if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
@@ -549,8 +604,9 @@ def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
                 DiagnosticItem(
                     "cloud_url.invalid",
                     "warning",
-                    "Cloud gallery URL",
-                    "Cloud gallery URL must be an http or https URL with a hostname.",
+                    "云端图库地址",
+                    "cloud_gallery_url 必须使用 HTTP 或 HTTPS 并包含主机名。",
+                    "填写有效域名和路径，可省略 https://。",
                 )
             ]
     except ValueError as exc:
@@ -558,18 +614,19 @@ def _cloud_url_items(config: Mapping[str, object]) -> list[DiagnosticItem]:
             DiagnosticItem(
                 "cloud_url.invalid",
                 "warning",
-                "Cloud gallery URL",
-                f"Cloud gallery URL could not be parsed ({_exception_name(exc)}).",
+                "云端图库地址",
+                f"无法解析 cloud_gallery_url（{_exception_name(exc)}）。",
+                "检查地址格式并移除无效端口或特殊字符。",
             )
         ]
     return [
-        DiagnosticItem("cloud_url.valid", "ok", "Cloud gallery URL", "Cloud gallery URL is valid.")
+        DiagnosticItem("cloud_url.valid", "ok", "云端图库地址", "云端图库地址格式有效。")
     ]
 
 
 def check_git_configuration(config: Mapping[str, object]) -> tuple[list[DiagnosticItem], bool]:
-    if config.get("git_sync_enabled", False) is not True:
-        return [DiagnosticItem("git.disabled", "ok", "Git sync", "Git sync is disabled.")], False
+    if not coerce_strict_bool(config.get("git_sync_enabled", False)):
+        return [DiagnosticItem("git.disabled", "ok", "Git 同步", "Git 同步未启用。")], False
 
     missing: list[str] = []
     platform = config.get("git_platform", "github")
@@ -589,84 +646,120 @@ def check_git_configuration(config: Mapping[str, object]) -> tuple[list[Diagnost
             DiagnosticItem(
                 "git.config_missing",
                 "error",
-                "Git sync configuration",
-                "Git configuration fields need attention: " + ", ".join(missing) + ".",
+                "Git 同步配置",
+                "这些 Git 配置项缺失或无效：" + "、".join(missing) + "。",
+                "补全列出的配置项后重新检查。",
             )
         ], False
     return [
-        DiagnosticItem("git.config", "ok", "Git sync configuration", "Git configuration is valid.")
+        DiagnosticItem("git.config", "ok", "Git 同步配置", "Git 同步配置完整。")
     ], True
 
 
-def _git_status_item(status: int, scope: str) -> DiagnosticItem:
+def _git_status_item(
+    status: int, scope: str, failure: str | None = None
+) -> DiagnosticItem:
+    repository_scope = scope == "repository"
+    scope_title = "Git 仓库" if repository_scope else "Git 分支"
+    if status == 0 and failure == "timeout":
+        return DiagnosticItem(
+            "git.timeout" if repository_scope else "git.branch_timeout",
+            "warning",
+            f"{scope_title}超时",
+            f"连接{scope_title}时请求超时。",
+            "检查网络或代理设置，稍后重试。",
+        )
     if status == 0:
         return DiagnosticItem(
-            "git.network" if scope == "repository" else "git.branch_network",
+            "git.network" if repository_scope else "git.branch_network",
             "warning",
-            f"Git {scope}",
-            f"Git {scope} could not be reached.",
+            f"{scope_title}连接",
+            f"无法连接{scope_title}。",
+            "检查网络、代理和 Git 平台服务状态后重试。",
         )
     if status in {401, 403}:
         return DiagnosticItem(
-            "git.auth" if scope == "repository" else "git.branch_auth",
+            "git.auth" if repository_scope else "git.branch_auth",
             "error",
-            f"Git {scope} authentication",
-            f"Git {scope} authentication failed.",
+            f"{scope_title}认证",
+            f"{scope_title}认证失败。",
+            "检查 git_token 是否有效且具有仓库读取权限。",
         )
     if status == 404:
-        code = "git.repository_missing" if scope == "repository" else "git.branch_missing"
+        code = "git.repository_missing" if repository_scope else "git.branch_missing"
         return DiagnosticItem(
             code,
             "error",
-            f"Git {scope}",
-            f"Git {scope} was not found.",
+            scope_title,
+            f"未找到{scope_title}。",
+            (
+                "检查 git_repo_owner 和 git_repo_name。"
+                if repository_scope
+                else "检查 git_branch 是否存在且拼写正确。"
+            ),
         )
     if status == 429:
         return DiagnosticItem(
-            "git.rate_limit" if scope == "repository" else "git.branch_rate_limit",
+            "git.rate_limit" if repository_scope else "git.branch_rate_limit",
             "warning",
-            f"Git {scope} rate limit",
-            f"Git {scope} requests are rate limited.",
+            f"{scope_title}限流",
+            f"{scope_title}请求受到平台限流。",
+            "等待限流恢复后再运行检查。",
         )
     return DiagnosticItem(
-        "git.repository_error" if scope == "repository" else "git.branch_error",
+        "git.repository_error" if repository_scope else "git.branch_error",
         "error",
-        f"Git {scope}",
-        f"Git {scope} returned status {status}.",
+        scope_title,
+        f"{scope_title}返回 HTTP {status}。",
+        "检查 Git 配置和平台服务状态后重试。",
     )
 
 
 def evaluate_git_probe(result: GitProbeResult) -> list[DiagnosticItem]:
     if result.repository_status != 200:
-        return [_git_status_item(result.repository_status, "repository")]
+        return [
+            _git_status_item(
+                result.repository_status,
+                "repository",
+                result.repository_failure,
+            )
+        ]
 
     items = [
-        DiagnosticItem("git.repository", "ok", "Git repository", "Git repository is available.")
+        DiagnosticItem("git.repository", "ok", "Git 仓库", "Git 仓库可访问。")
     ]
     if result.branch_status is None:
         items.append(
             DiagnosticItem(
                 "git.branch_unknown",
                 "warning",
-                "Git branch",
-                "Git branch status could not be confirmed.",
+                "Git 分支",
+                "无法确认 Git 分支状态。",
+                "检查 git_branch 后重新运行检查。",
             )
         )
         return items
     if result.branch_status != 200:
-        items.append(_git_status_item(result.branch_status, "branch"))
+        items.append(
+            _git_status_item(
+                result.branch_status,
+                "branch",
+                result.branch_failure,
+            )
+        )
         return items
 
-    items.append(DiagnosticItem("git.branch", "ok", "Git branch", "Git branch is available."))
+    items.append(DiagnosticItem("git.branch", "ok", "Git 分支", "Git 分支可访问。"))
     if result.can_push is True:
-        items.append(DiagnosticItem("git.write", "ok", "Git write", "Git repository is writable."))
+        items.append(DiagnosticItem("git.write", "ok", "Git 写权限", "仓库允许写入。"))
     elif result.can_push is False:
         items.append(
             DiagnosticItem(
                 "git.read_only",
                 "error",
-                "Git write",
-                "Git repository is read-only.",
+                "Git 写权限",
+                "仓库明确为只读，无法同步写入。",
+                "为 git_token 授予仓库写权限，或更换令牌。",
             )
         )
     else:
@@ -674,8 +767,9 @@ def evaluate_git_probe(result: GitProbeResult) -> list[DiagnosticItem]:
             DiagnosticItem(
                 "git.write_unknown",
                 "warning",
-                "Git write",
-                "Git write permission could not be confirmed.",
+                "Git 写权限",
+                "平台未返回可靠的写权限信息。",
+                "确认 git_token 具有仓库写权限后再启用同步。",
             )
         )
     return items
@@ -698,6 +792,7 @@ def evaluate_update_probe(
                 "warning",
                 "当前版本无效",
                 "当前插件版本格式无效，无法比较更新。",
+                "检查插件版本是否为 vMAJOR.MINOR.PATCH 格式。",
             )
         ]
     if result.error is not None or parse_version(result.latest_version) is None:
@@ -707,6 +802,7 @@ def evaluate_update_probe(
                 "warning",
                 "更新检查不可用",
                 "暂时无法检查最新版本。",
+                "检查网络连接后稍后重试。",
             )
         ]
 
