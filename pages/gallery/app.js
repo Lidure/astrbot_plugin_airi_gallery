@@ -510,7 +510,9 @@ function validateAliases() {
 }
 
 async function loadAliases(force = false) {
-  if (aliasesLoaded && !force) return;
+  if (aliasesLoaded && !force) return true;
+  aliasAddBtn.disabled = true;
+  aliasSaveBtn.disabled = true;
   aliasReloadBtn.disabled = true;
   aliasSummary.textContent = "加载中...";
   try {
@@ -519,10 +521,14 @@ async function loadAliases(force = false) {
     aliasesLoaded = true;
     setAliasesDirty(false);
     renderAliases();
+    return true;
   } catch (error) {
     aliasSummary.textContent = "加载失败";
     showMsg(error.message || "昵称加载失败，请稍后重试", false);
+    return false;
   } finally {
+    aliasAddBtn.disabled = !aliasesLoaded;
+    aliasSaveBtn.disabled = !aliasesLoaded || !aliasesDirty;
     aliasReloadBtn.disabled = false;
   }
 }
@@ -573,9 +579,7 @@ aliasSaveBtn.addEventListener("click", async () => {
 
 aliasReloadBtn.addEventListener("click", async () => {
   if (aliasesDirty && !window.confirm("尚有未保存的昵称修改，确定重新加载吗？")) return;
-  aliasesLoaded = false;
-  await loadAliases(true);
-  showMsg("分类昵称已重新加载");
+  if (await loadAliases(true)) showMsg("分类昵称已重新加载");
 });
 
 window.addEventListener("beforeunload", event => {

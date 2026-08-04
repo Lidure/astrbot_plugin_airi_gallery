@@ -95,6 +95,8 @@ def test_gallery_script_wires_alias_management():
     assert "document.createElement(\"input\")" in script
     assert "window.confirm(" in script
     assert 'event.returnValue = ""' in script
+    assert "aliasAddBtn.disabled = !aliasesLoaded" in script
+    assert "if (await loadAliases(true))" in script
 
 
 def test_diagnostics_are_documented_for_novice_users():
