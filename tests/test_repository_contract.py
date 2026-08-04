@@ -63,19 +63,27 @@ def test_release_version_is_2_11_0_everywhere():
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.0"' in main_source
 
 
-def test_gallery_page_integrates_alias_management():
+def test_plugin_pages_remove_legacy_aliases_entry():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
-    html = Path("pages/gallery/index.html").read_text(encoding="utf-8")
-    script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
 
     assert metadata["pages"] == ["gallery", "zz_cloud"]
     assert not Path("pages/zz_aliases").exists()
+
+
+def test_gallery_page_contains_alias_management():
+    html = Path("pages/gallery/index.html").read_text(encoding="utf-8")
+
     assert 'id="view-gallery"' in html
     assert 'id="view-aliases"' in html
     assert 'id="alias-tbody"' in html
     assert 'id="alias-save-btn"' in html
     assert 'rel="stylesheet" href="./style.css' in html
     assert "<style>" not in html
+
+
+def test_gallery_script_wires_alias_management():
+    script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
+
     assert 'apiGet("aliases")' in script
     assert 'apiPost("aliases/save"' in script
     assert 'addEventListener("beforeunload"' in script
