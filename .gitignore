@@ -8,6 +8,10 @@ env/
 /.env
 /.venv
 .pytest_cache/
+.tmp/
+.agents/
+.superpowers/
+/docs/superpowers/
 .idea/
 .vscode/
 node_modules/
