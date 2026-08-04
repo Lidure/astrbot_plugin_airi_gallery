@@ -112,8 +112,14 @@ def test_gallery_modern_desktop_ui_contract():
     assert 'class="alias-actions"' in html
     assert "position: sticky" in css
     assert "bottom: 12px" in css
+    assert "padding-bottom: 82px" in css
+    assert ".alias-actions .btn-save { min-width: 112px; }" in css
+    assert ".dirty-state.is-dirty" in css
+    assert ".dirty-state.is-saved" in css
     assert "有未保存的修改" in script
     assert "所有修改已保存" in script
+    assert 'aliasDirtyState.classList.toggle("is-dirty", aliasesDirty)' in script
+    assert 'aliasDirtyState.classList.toggle("is-saved", !aliasesDirty)' in script
 
 
 def test_diagnostics_are_documented_for_novice_users():

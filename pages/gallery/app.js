@@ -428,7 +428,9 @@ function parseAliasEntry(entry) {
 function setAliasesDirty(value) {
   aliasesDirty = Boolean(value);
   aliasSaveBtn.disabled = !aliasesDirty;
-  aliasDirtyState.textContent = aliasesDirty ? "有未保存的修改" : "";
+  aliasDirtyState.textContent = aliasesDirty ? "有未保存的修改" : "所有修改已保存";
+  aliasDirtyState.classList.toggle("is-dirty", aliasesDirty);
+  aliasDirtyState.classList.toggle("is-saved", !aliasesDirty);
 }
 
 function renderAliases() {

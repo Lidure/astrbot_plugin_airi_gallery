@@ -262,7 +262,7 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
 
 .alias-form { display: grid; grid-template-columns: minmax(140px, 0.8fr) auto minmax(300px, 1.7fr) auto; align-items: end; gap: 10px; }
 .alias-equals { padding-bottom: 8px; color: var(--accent-hover); font-size: 18px; font-weight: 700; }
-.alias-table-wrap { overflow-x: auto; }
+.alias-table-wrap { overflow-x: auto; padding-bottom: 82px; }
 .alias-table { width: 100%; min-width: 580px; border-collapse: collapse; table-layout: fixed; }
 .alias-table th, .alias-table td { padding: 10px 8px; border-bottom: 1px solid var(--border); text-align: left; }
 .alias-table th { background: #faf7f9; color: var(--muted); font-size: 11px; font-weight: 700; }
@@ -279,9 +279,39 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
 .alias-delete-btn { transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease; }
 .alias-delete-btn:hover { border-color: var(--red); background: #ffe3e7; }
 .alias-empty td { padding: 32px 12px; color: var(--muted); text-align: center; }
-.alias-actions { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.alias-actions {
+  position: sticky;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 20px -8px -8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -8px 24px rgba(48, 37, 51, 0.1);
+}
 .action-buttons { display: flex; gap: 8px; }
-.dirty-state { color: var(--accent-hover); font-size: 12px; font-weight: 650; }
+.alias-actions .btn-save { min-width: 112px; }
+.dirty-state {
+  display: inline-flex;
+  min-width: 132px;
+  min-height: 32px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+.dirty-state.is-dirty { border-color: #edb5bf; background: var(--red-soft); color: var(--red); }
+.dirty-state.is-saved { border-color: #9bcfbb; background: var(--green-soft); color: #17614d; }
 
 .toast {
   position: fixed;
