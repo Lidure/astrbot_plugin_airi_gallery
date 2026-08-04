@@ -310,7 +310,7 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
   white-space: nowrap;
   transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
 }
-.dirty-state.is-dirty { border-color: #edb5bf; background: var(--red-soft); color: var(--red); }
+.dirty-state.is-dirty { border-color: #efb9d2; background: var(--accent-soft); color: var(--accent-hover); }
 .dirty-state.is-saved { border-color: #9bcfbb; background: var(--green-soft); color: #17614d; }
 
 .toast {

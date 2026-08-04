@@ -114,7 +114,11 @@ def test_gallery_modern_desktop_ui_contract():
     assert "bottom: 12px" in css
     assert "padding-bottom: 82px" in css
     assert ".alias-actions .btn-save { min-width: 112px; }" in css
-    assert ".dirty-state.is-dirty" in css
+    dirty_state = re.search(r"\.dirty-state\.is-dirty \{([^}]*)\}", css).group(1)
+    assert "border-color: #efb9d2" in dirty_state
+    assert "background: var(--accent-soft)" in dirty_state
+    assert "color: var(--accent-hover)" in dirty_state
+    assert "var(--red" not in dirty_state
     assert ".dirty-state.is-saved" in css
     assert "有未保存的修改" in script
     assert "所有修改已保存" in script
