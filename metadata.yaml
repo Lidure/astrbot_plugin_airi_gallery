@@ -2,10 +2,9 @@ name: astrbot_plugin_airi_gallery
 display_name: Airi画廊🌸
 short_desc: 数字排序画廊插件，支持全图库抽表情、范围查看、合并转发上传、GitHub 批量推送与内容去重。
 desc: 数字排序画廊插件，支持按分类随机看图、全图库随机抽表情、按编号/范围查看、回复图片/多图/合并转发聊天记录上传、删除、本地导入、内容去重，以及 GitHub/Gitee 远程仓库自动同步、GitHub 批量合并推送、立即同步和 Cloudflare Pages 云端管理。
-version: v2.10.0
+version: v2.11.0
 author: Lidure
 repo: https://github.com/Lidure/astrbot_plugin_airi_gallery
 pages:
   - gallery
-  - zz_aliases
   - zz_cloud

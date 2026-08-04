@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.10.0-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.0-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -30,7 +30,7 @@
 | 🔗 **合并转发** | 多图查看支持合并转发模式，告别刷屏 |
 | 🤖 **LLM 工具** | 接入 LLM Function Calling，让 AI 在对话中自动发表情包 |
 | 🏷️ **分类昵称** | 为分类设置多个别名，「看看爱莉」等同于「看看airi」 |
-| 🌐 **昵称管理页** | 内置 Web UI 页面，可视化管理分类昵称，告别手动编辑配置 |
+| 🌐 **统一管理页** | 在默认 Web UI 中浏览、上传图库并可视化管理分类昵称 |
 | ☁️ **Git 远程同步** | 图片自动同步到 GitHub / Gitee 仓库，支持定时拉取与批量推送 |
 | 🖥️ **云端管理页** | 独立 Cloudflare Pages SPA，暗色模式、紧凑分页，无需 Bot 在线即可管理图片 |
 | 📤 **公开上传** | 通过 `upload_token` 密钥控制外部上传权限，支持网页端直接传图 |
@@ -48,8 +48,7 @@
 | `metadata.yaml` | 插件元数据 |
 | `_conf_schema.json` | 插件配置说明 |
 | `requirements.txt` | 依赖声明 |
-| `pages/gallery/` | 本地画廊 Web UI 页面（HTML / CSS / JS） |
-| `pages/zz_aliases/` | 昵称管理 Web UI 页面（HTML / CSS / JS，后置命名以便 `gallery` 成为插件页默认入口） |
+| `pages/gallery/` | 本地图库与分类昵称统一管理页面（HTML / CSS / JS） |
 | `pages/zz_cloud/` | 云端管理页面（独立 SPA，部署到 Cloudflare Pages，后置命名以便 `gallery` 成为插件页默认入口） |
 | `assets/` | 角标图片等静态资源 |
 
@@ -108,7 +107,7 @@
 
 </div>
 
-也可以通过插件内置的 **Web UI 管理页面** 可视化管理昵称（详见下方 [Web UI 页面](#-web-ui-昵称管理页面) 章节）。
+也可以通过插件内置的 **Web UI 管理页面** 可视化管理昵称（详见下方 [Web UI 管理页面](#-web-ui-管理页面) 章节）。
 
 ### 5. LLM 表情包工具
 
@@ -220,18 +219,22 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 > ⚠️ **安全提示：** `upload_token` 留空则任何人皆可上传，建议务必设置一个密钥。
 
-### 11. Web UI 昵称管理页面
+### 11. Web UI 管理页面
 
-插件内置了 Web UI 页面，用于可视化管理分类昵称。
+插件内置了统一 Web UI 页面，可在一个入口中管理本地图库和分类昵称。
 
-**访问方式：** AstrBot WebUI → 插件管理 → 点击 Airi画廊 插件卡片会默认进入「gallery」本地画廊；如需管理昵称，可在插件页面组件中进入「zz_aliases」页面。
+**访问方式：** AstrBot WebUI → 插件管理 → 点击 Airi画廊插件卡片进入 `gallery` 页面，再通过顶部的「图库管理 / 分类昵称」标签切换功能。
 
 **功能：**
+- 浏览分类、分页查看、上传和删除本地图库图片
 - 表格展示所有当前昵称
 - 下拉选择已有分类或手动输入分类名
 - 行内编辑昵称和分类名
 - 一键删除/添加昵称
-- 保存后即时生效并持久化到配置文件，自动按分类名排序
+- 离开前提示尚未保存的昵称修改
+- 保存后即时生效并持久化到配置文件
+
+从旧版本升级时，原有 `category_aliases` 配置会自动沿用，无需迁移或重新录入。建议先备份插件配置和图库数据，通过 AstrBot 插件管理器更新或替换官方仓库代码，重启 AstrBot 后打开本页面检查图库与昵称，再发送 `/画廊检查` 验证状态。
 
 ## ⚙️ 配置项一览
 
@@ -318,6 +321,14 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+
+### v2.11.0
+
+- **整合** 分类昵称管理已并入默认 `gallery` 页面，通过「图库管理 / 分类昵称」标签切换
+- **优化** 统一页面样式与移动端布局，图库和昵称编辑状态在标签切换时保持不变
+- **安全** 昵称列表使用 DOM API 渲染，并增加空值、重复昵称校验和未保存修改提示
+- **兼容** 原有 `category_aliases` 配置自动沿用，无需迁移或重新录入
+- **调整** 移除独立 `zz_aliases` 插件页面，`zz_cloud` 云端页面保持不变
 
 ### v2.10.0
 
