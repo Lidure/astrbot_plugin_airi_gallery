@@ -138,7 +138,7 @@ def _strip_url_details(match: re.Match[str]) -> str:
         parsed = urlsplit(raw_url)
         hostname = parsed.hostname
         if not hostname:
-            return raw_url + trailing
+            return "[已隐藏的 URL]" + trailing
         if ":" in hostname and not hostname.startswith("["):
             hostname = f"[{hostname}]"
         port = f":{parsed.port}" if parsed.port is not None else ""

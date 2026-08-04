@@ -119,6 +119,29 @@ def test_sanitize_text_fails_closed_for_malformed_authenticated_url():
         assert sensitive_text not in cleaned
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "https://user:password@/path?token=x#frag",
+            "[已隐藏的 URL]",
+        ),
+        (
+            "ssh://user:password@/path?token=x#frag).",
+            "[已隐藏的 URL]).",
+        ),
+    ],
+)
+def test_sanitize_text_fails_closed_for_authenticated_url_without_host(
+    raw, expected
+):
+    cleaned = sanitize_text(raw)
+
+    assert cleaned == expected
+    for sensitive_text in ("user", "password", "?", "token=x", "#frag"):
+        assert sensitive_text not in cleaned
+
+
 def test_sanitize_text_masks_git_token_without_explicit_secret_list():
     cleaned = sanitize_text("git_token=github_pat_private")
 
