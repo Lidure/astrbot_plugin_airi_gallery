@@ -160,6 +160,49 @@ def resolve_gallery_local_path(root: Path, git_path: str) -> Path | None:
     return local_path
 
 
+def _is_safe_local_component(value: str) -> bool:
+    return bool(value) and value not in {".", ".."} and not any(
+        marker in value for marker in ("/", "\\", ":", "\x00")
+    )
+
+
+def resolve_gallery_category_dir(gallery_root: Path, category: str) -> Path | None:
+    if not _is_safe_local_component(category):
+        return None
+    try:
+        resolved_root = gallery_root.resolve()
+        category_path = resolved_root / category
+        if category_path.is_symlink():
+            return None
+        resolved_category = category_path.resolve()
+        if resolved_category.parent != resolved_root:
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return resolved_category
+
+
+def resolve_gallery_image_path(
+    gallery_root: Path, category: str, name: str
+) -> Path | None:
+    if not _is_safe_local_component(name):
+        return None
+    category_path = resolve_gallery_category_dir(gallery_root, category)
+    if category_path is None:
+        return None
+
+    try:
+        image_path = category_path / name
+        if image_path.is_symlink():
+            return None
+        resolved_image = image_path.resolve()
+        if resolved_image.parent != category_path:
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return image_path
+
+
 def select_remote_delete_candidates(
     tree: Iterable[Mapping[str, object]],
     hash_index: Mapping[str, object],

@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import inspect
 import re
 import sys
 import threading
@@ -43,6 +44,156 @@ def construct_plugin(main_module, monkeypatch, tmp_path, config):
     )
     context = ContextStub()
     return main_module.Main(context, config), context
+
+
+def test_gallery_web_api_rejects_unauthenticated_image_delete(
+    main_module, monkeypatch, tmp_path
+):
+    from quart import Quart
+
+    assert hasattr(main_module, "_is_authenticated_web_request")
+    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})
+    image = plugin.gallery_root / "airi" / "1.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    monkeypatch.setattr(main_module, "_is_authenticated_web_request", lambda: False)
+    app = Quart(__name__)
+
+    async def invoke():
+        async with app.test_request_context(
+            "/delete", method="POST", json={"category": "airi", "name": "1.png"}
+        ):
+            response, status = await plugin._api_delete_image()
+            return await response.get_json(), status
+
+    payload, status = asyncio.run(invoke())
+
+    assert status == 403
+    assert payload["ok"] is False
+    assert image.exists()
+
+
+def test_gallery_web_api_rejects_unsafe_image_name_for_read_and_delete(
+    main_module, monkeypatch, tmp_path
+):
+    from quart import Quart
+
+    assert hasattr(main_module, "_is_authenticated_web_request")
+    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})
+    outside = plugin.gallery_root / "outside.png"
+    outside.write_bytes(b"outside")
+    (plugin.gallery_root / "airi").mkdir()
+    monkeypatch.setattr(main_module, "_is_authenticated_web_request", lambda: True)
+    app = Quart(__name__)
+
+    async def invoke_read():
+        async with app.test_request_context(
+            "/image?category=airi&name=../outside.png", method="GET"
+        ):
+            return await plugin._api_category_image()
+
+    async def invoke_delete():
+        async with app.test_request_context(
+            "/delete",
+            method="POST",
+            json={"category": "airi", "name": "../outside.png"},
+        ):
+            response, status = await plugin._api_delete_image()
+            return await response.get_json(), status
+
+    _, read_status = asyncio.run(invoke_read())
+    delete_payload, delete_status = asyncio.run(invoke_delete())
+
+    assert read_status == 400
+    assert delete_status == 400
+    assert delete_payload["ok"] is False
+    assert outside.exists()
+
+
+def test_gallery_web_auth_uses_modern_and_legacy_dashboard_identity(
+    main_module, monkeypatch
+):
+    from quart import Quart, g
+
+    web = types.ModuleType("astrbot.api.web")
+    web.request = types.SimpleNamespace(username="dashboard-admin")
+    monkeypatch.setitem(sys.modules, "astrbot.api.web", web)
+    assert main_module._is_authenticated_web_request() is True
+
+    web.request.username = ""
+    app = Quart(__name__)
+
+    async def legacy_authenticated():
+        async with app.test_request_context("/"):
+            g.username = "legacy-admin"
+            return main_module._is_authenticated_web_request()
+
+    assert asyncio.run(legacy_authenticated()) is True
+    assert main_module._is_authenticated_web_request() is False
+
+
+def test_all_internal_gallery_web_apis_require_dashboard_auth(main_module):
+    internal_handlers = (
+        "_api_get_aliases",
+        "_api_save_aliases",
+        "_api_get_categories",
+        "_api_category_images",
+        "_api_upload_images",
+        "_api_category_image",
+        "_api_delete_image",
+    )
+
+    for handler_name in internal_handlers:
+        source = inspect.getsource(getattr(main_module.Main, handler_name))
+        assert "if not _is_authenticated_web_request():" in source
+
+
+def test_gallery_web_apis_reject_linked_category_for_list_and_uploads(
+    main_module, monkeypatch, tmp_path
+):
+    import base64
+    from quart import Quart
+
+    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    linked = plugin.gallery_root / "linked"
+    try:
+        linked.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlink creation is unavailable")
+    monkeypatch.setattr(main_module, "_is_authenticated_web_request", lambda: True)
+    app = Quart(__name__)
+    payload = {
+        "category": "linked",
+        "images": [{"name": "1.png", "data": base64.b64encode(b"image").decode()}],
+    }
+
+    def status_of(result):
+        return result[1] if isinstance(result, tuple) else result.status_code
+
+    async def invoke_list():
+        async with app.test_request_context("/images?category=linked"):
+            return status_of(await plugin._api_category_images())
+
+    async def invoke_internal_upload():
+        async with app.test_request_context("/upload", method="POST", json=payload):
+            return status_of(await plugin._api_upload_images())
+
+    async def invoke_public_upload():
+        async with app.test_request_context(
+            "/pub/upload", method="POST", json={**payload, "token": ""}
+        ):
+            return status_of(await plugin._api_pub_upload())
+
+    list_status = asyncio.run(invoke_list())
+    internal_status = asyncio.run(invoke_internal_upload())
+    public_status = asyncio.run(invoke_public_upload())
+
+    assert list_status == 400
+    assert internal_status == 400
+    assert public_status == 400
+    assert not (outside / "1.png").exists()
 
 
 @pytest.fixture

@@ -68,6 +68,8 @@ try:
         present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
+        resolve_gallery_category_dir,
+        resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
         verified_remote_sha,
@@ -82,6 +84,8 @@ except ImportError:
         present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
+        resolve_gallery_category_dir,
+        resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
         verified_remote_sha,
@@ -122,6 +126,26 @@ def _sanitize_component(value: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", value.strip())
     cleaned = cleaned.strip(". _")
     return cleaned or DEFAULT_CATEGORY
+
+
+def _is_authenticated_web_request() -> bool:
+    username = None
+    try:
+        from astrbot.api.web import request as plugin_request
+
+        username = plugin_request.username
+    except (ImportError, RuntimeError, AttributeError):
+        pass
+    if isinstance(username, str) and username.strip():
+        return True
+
+    try:
+        from quart import g
+
+        username = getattr(g, "username", None)
+    except (ImportError, RuntimeError, AttributeError):
+        return False
+    return isinstance(username, str) and bool(username.strip())
 
 
 def _is_image_file(path: Path) -> bool:
@@ -1025,11 +1049,15 @@ class Main(Star):
 
     async def _api_get_aliases(self):
         from quart import jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         entries = [f"{alias}={cat}" for alias, cat in self.category_aliases.items()]
         return jsonify({"aliases": entries})
 
     async def _api_save_aliases(self):
         from quart import request, jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         data = await request.get_json()
         entries = data.get("aliases", [])
         parsed = self._parse_aliases(entries)
@@ -1041,10 +1069,19 @@ class Main(Star):
 
     async def _api_get_categories(self):
         from quart import jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         cats = []
         if self.gallery_root.exists():
             cats = sorted(
-                [p.name for p in self.gallery_root.iterdir() if p.is_dir() and p.name != "generated"],
+                [
+                    p.name
+                    for p in self.gallery_root.iterdir()
+                    if p.is_dir()
+                    and p.name != "generated"
+                    and resolve_gallery_category_dir(self.gallery_root, p.name)
+                    is not None
+                ],
                 key=lambda s: s.lower(),
             )
         return jsonify({"categories": cats})
@@ -1052,18 +1089,26 @@ class Main(Star):
     async def _api_category_images(self):
         from quart import request, jsonify
         import base64 as b64mod
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         category = request.args.get("category", "").strip()
         page = max(1, int(request.args.get("page", 1)))
         per_page = max(1, min(50, int(request.args.get("per_page", 20))))
         if not category:
             return jsonify({"error": "缺少 category 参数"}), 400
-        category_dir = self._category_dir(category)
+        category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+        if category_dir is None:
+            return jsonify({"error": "invalid category"}), 400
         if not category_dir.exists():
             return jsonify({"images": [], "total": 0, "page": page, "per_page": per_page})
-        all_files = sorted(
-            [p for p in category_dir.iterdir() if _is_image_file(p)],
-            key=lambda x: _image_sort_key(x, category_dir),
-        )
+        all_files = []
+        for path in category_dir.iterdir():
+            safe_path = resolve_gallery_image_path(
+                self.gallery_root, category, path.name
+            )
+            if safe_path is not None and _is_image_file(safe_path):
+                all_files.append(safe_path)
+        all_files.sort(key=lambda x: _image_sort_key(x, category_dir))
         total = len(all_files)
         start = (page - 1) * per_page
         page_files = all_files[start:start + per_page]
@@ -1081,6 +1126,8 @@ class Main(Star):
     async def _api_upload_images(self):
         from quart import request, jsonify
         import base64 as b64mod
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         try:
             data = await request.get_json()
             category = data.get("category", "").strip()
@@ -1090,8 +1137,13 @@ class Main(Star):
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
             category = _sanitize_component(category)
-            category_dir = self._category_dir(category)
+            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+            if category_dir is None:
+                return jsonify({"ok": False, "error": "invalid category"}), 400
             category_dir.mkdir(parents=True, exist_ok=True)
+            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+            if category_dir is None:
+                return jsonify({"ok": False, "error": "invalid category"}), 400
             uploaded: list[str] = []
             skipped_duplicate = 0
             for img in images:
@@ -1124,11 +1176,15 @@ class Main(Star):
     async def _api_category_image(self):
         from quart import request, jsonify
         import base64 as b64mod
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         category = request.args.get("category", "").strip()
         name = request.args.get("name", "").strip()
         if not category or not name:
             return jsonify({"error": "missing params"}), 400
-        img_path = self._category_dir(category) / name
+        img_path = resolve_gallery_image_path(self.gallery_root, category, name)
+        if img_path is None:
+            return jsonify({"error": "invalid path"}), 400
         if not img_path.exists() or not _is_image_file(img_path):
             return jsonify({"error": "not found"}), 404
         suffix = img_path.suffix.lower()
@@ -1138,13 +1194,17 @@ class Main(Star):
 
     async def _api_delete_image(self):
         from quart import request, jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
         data = await request.get_json()
         category = data.get("category", "").strip()
         name = data.get("name", "").strip()
         if not category or not name:
             return jsonify({"ok": False, "error": "参数不完整"})
-        img_path = self._category_dir(category) / name
-        if not img_path.exists():
+        img_path = resolve_gallery_image_path(self.gallery_root, category, name)
+        if img_path is None:
+            return jsonify({"ok": False, "error": "invalid path"}), 400
+        if not img_path.exists() or not _is_image_file(img_path):
             return jsonify({"ok": False, "error": "文件不存在"})
         img_path_str = str(img_path)
         img_path.unlink()
@@ -1171,7 +1231,14 @@ class Main(Star):
         cats = []
         if self.gallery_root.exists():
             cats = sorted(
-                [p.name for p in self.gallery_root.iterdir() if p.is_dir() and p.name != "generated"],
+                [
+                    p.name
+                    for p in self.gallery_root.iterdir()
+                    if p.is_dir()
+                    and p.name != "generated"
+                    and resolve_gallery_category_dir(self.gallery_root, p.name)
+                    is not None
+                ],
                 key=lambda s: s.lower(),
             )
         return jsonify({"ok": True, "categories": cats})
@@ -1191,8 +1258,13 @@ class Main(Star):
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
             category = _sanitize_component(category)
-            category_dir = self._category_dir(category)
+            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+            if category_dir is None:
+                return jsonify({"ok": False, "error": "invalid category"}), 400
             category_dir.mkdir(parents=True, exist_ok=True)
+            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+            if category_dir is None:
+                return jsonify({"ok": False, "error": "invalid category"}), 400
             uploaded: list[str] = []
             skipped_duplicate = 0
             for img in images:

@@ -327,6 +327,59 @@ def test_resolve_gallery_local_path_stays_rooted_and_rejects_unsafe_components(t
         assert resolver(root, unsafe_path) is None
 
 
+def test_resolve_gallery_image_path_rejects_traversal_and_symlink_escape(tmp_path):
+    root = tmp_path / "gallery"
+    category = root / "airi"
+    category.mkdir(parents=True)
+    image = category / "1.png"
+    image.write_bytes(b"image")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"outside")
+
+    resolver = gallery_safety.resolve_gallery_image_path
+
+    assert resolver(root, "airi", "1.png") == image.resolve()
+    for unsafe_category in ("../airi", "sub/airi", r"sub\airi", "C:airi"):
+        assert resolver(root, unsafe_category, "1.png") is None
+    for unsafe_name in (
+        "../outside.png",
+        "sub/2.png",
+        r"sub\2.png",
+        "C:/outside.png",
+        "C:outside.png",
+    ):
+        assert resolver(root, "airi", unsafe_name) is None
+
+    symlink = category / "link.png"
+    try:
+        symlink.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    assert resolver(root, "airi", "link.png") is None
+
+
+def test_resolve_gallery_category_dir_rejects_unsafe_and_linked_categories(tmp_path):
+    root = tmp_path / "gallery"
+    category = root / "airi"
+    category.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    resolver = gallery_safety.resolve_gallery_category_dir
+
+    assert resolver(root, "airi") == category.resolve()
+    assert resolver(root, "new-category") == (root / "new-category").resolve()
+    for unsafe_category in ("../airi", "sub/airi", r"sub\airi", "C:airi"):
+        assert resolver(root, unsafe_category) is None
+
+    linked_category = root / "linked"
+    try:
+        linked_category.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlink creation is unavailable")
+    assert resolver(root, "linked") is None
+
+
 def test_unsafe_remote_paths_never_become_delete_candidates():
     valid_path = "gallery/airi/1.png"
     unsafe_paths = (
