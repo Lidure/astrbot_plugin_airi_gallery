@@ -87,6 +87,14 @@ def test_gallery_script_wires_alias_management():
     assert 'apiGet("aliases")' in script
     assert 'apiPost("aliases/save"' in script
     assert 'addEventListener("beforeunload"' in script
+    assert "function switchView(" in script
+    assert "async function loadAliases(" in script
+    assert "function renderAliases(" in script
+    assert "function validateAliases(" in script
+    assert "function setAliasesDirty(" in script
+    assert "document.createElement(\"input\")" in script
+    assert "window.confirm(" in script
+    assert 'event.returnValue = ""' in script
 
 
 def test_diagnostics_are_documented_for_novice_users():
