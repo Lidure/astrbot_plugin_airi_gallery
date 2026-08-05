@@ -15,6 +15,17 @@
 </a>
 
 </div>
+---
+
+## 🖼️ 作者的图库
+
+分享一下我自己的图库：
+
+点击 [Lidure的图库](https://github.com/Lidure/airi-gallery-images/tree/main/gallery) 查看作者图库
+
+可以直接clone到本地，也可以选择自己喜欢的图进行下载哦~
+
+方便大家建立初期的图库
 
 ---
 
