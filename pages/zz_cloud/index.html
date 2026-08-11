@@ -874,11 +874,14 @@ async function ghRequest(method, path, { body = null, params = {} } = {}) {
     throw err;
   };
 
+  const rateLimited = resp.status === 429
+    || resp.headers.get('x-ratelimit-remaining') === '0'
+    || /rate limit/i.test(data?.message || '');
+  if (rateLimited) {
+    throwRequestError('API 请求频率超限，请稍后重试');
+  }
   if (resp.status === 401 || resp.status === 403) {
     throwRequestError('认证失败，请检查 Token');
-  }
-  if (resp.status === 429) {
-    throwRequestError('API 请求频率超限，请稍后重试');
   }
   if (!resp.ok) {
     const fallback = resp.status === 409
@@ -1476,6 +1479,13 @@ cfgDefaultGallery.onchange = () => {
   cfgRepo.value = selected.dataset.repo;
   cfgBranch.value = selected.dataset.branch;
 };
+
+const markDefaultGalleryCustom = () => {
+  cfgDefaultGallery.value = 'custom';
+};
+cfgOwner.addEventListener('input', markDefaultGalleryCustom);
+cfgRepo.addEventListener('input', markDefaultGalleryCustom);
+cfgBranch.addEventListener('input', markDefaultGalleryCustom);
 
 saveCfgBtn.onclick = () => {
   const cfg = {

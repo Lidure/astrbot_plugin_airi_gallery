@@ -222,3 +222,21 @@ def test_cloud_page_allows_sync_and_initialization_without_github_token():
     assert "if (!hasReadConfig())" in html
     assert "if (config.owner && config.repo)" in html
     assert "if (!config.token)" not in html.split("syncBtn.onclick", 1)[1].split("//", 1)[0]
+
+
+def test_cloud_page_distinguishes_anonymous_rate_limits_from_auth_failures():
+    html = cloud_page()
+
+    assert "x-ratelimit-remaining" in html
+    assert "config.token" in html
+    assert "rate limit" in html.lower()
+    assert "if (rateLimited)" in html
+
+
+def test_cloud_page_marks_default_gallery_selector_custom_after_manual_edits():
+    html = cloud_page()
+
+    assert "cfgDefaultGallery.value = 'custom'" in html
+    assert "cfgOwner.addEventListener('input'" in html
+    assert "cfgRepo.addEventListener('input'" in html
+    assert "cfgBranch.addEventListener('input'" in html
