@@ -968,7 +968,7 @@ async function getFileContent(path) {
 }
 
 async function putFile(path, contentB64, message) {
-  if (!requireWriteAccess()) return;
+  if (!requireWriteAccess()) throw new Error('写入需要有效 Token');
   const branch = config.branch || 'main';
   const existingSha = state.shaCache[path];
   const body = { message, content: contentB64 };
@@ -997,7 +997,7 @@ async function putFile(path, contentB64, message) {
 }
 
 async function deleteFile(path, message) {
-  if (!requireWriteAccess()) return;
+  if (!requireWriteAccess()) throw new Error('写入需要有效 Token');
   const branch = config.branch || 'main';
   const sha = state.shaCache[path];
   if (!sha) {
@@ -1071,6 +1071,7 @@ function showMainUI(show) {
   welcomeCard.style.display = show ? 'none' : 'block';
   uploadCard.style.display = show && canWrite() ? 'block' : 'none';
   browseCard.style.display = show ? 'block' : 'none';
+  if (!canWrite()) document.querySelectorAll('.del-btn').forEach(button => button.remove());
 }
 
 // ──────────────────────────────────────────────
@@ -1494,6 +1495,7 @@ saveCfgBtn.onclick = () => {
     toast('请填写完整配置', false); return;
   }
   saveConfig(cfg);
+  showMainUI(state.connected);
   toast(cfg.token ? '配置已保存' : '配置已保存：只读模式');
   settingsPanel.classList.remove('show');
   // Reset state and reconnect
