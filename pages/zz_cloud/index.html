@@ -741,6 +741,19 @@ function canWrite(cfg = config) {
   return Boolean(cfg.owner && cfg.repo && cfg.token);
 }
 
+function useImageProxy() {
+  return config.platform === 'github'
+    && config.owner === 'Lidure'
+    && config.repo === 'airi-gallery-images'
+    && (config.branch || 'main') === 'main';
+}
+
+function imageProxyUrl(file) {
+  const path = file.path.split('/').map(encodeURIComponent).join('/');
+  const version = file.sha ? `?v=${encodeURIComponent(file.sha)}` : '';
+  return `/__gallery-image/${path}${version}`;
+}
+
 function requireWriteAccess() {
   if (canWrite()) return true;
   toast('当前为只读模式，上传或删除需要有效 Token', false);
@@ -1197,8 +1210,20 @@ async function loadCategoryImages() {
     div.appendChild(badge);
     if (canWrite()) div.appendChild(del);
 
-    // Load image via Contents API with concurrency pool & retry
-    imagePool(() => withRetry(async () => {
+    const proxyUrl = useImageProxy() ? imageProxyUrl(file) : null;
+    if (proxyUrl) {
+      div.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = proxyUrl;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.alt = fileName;
+      div.appendChild(img);
+      div.appendChild(badge);
+      if (canWrite()) div.appendChild(del);
+    } else {
+      // Load image via Contents API with concurrency pool & retry
+      imagePool(() => withRetry(async () => {
       let blobUrl = state.imageCache[file.path];
       if (!blobUrl) {
         const buf = await getFileContent(file.path);
@@ -1213,15 +1238,21 @@ async function loadCategoryImages() {
       div.appendChild(img);
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
-    })).catch((err) => {
+      })).catch((err) => {
       console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
       div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px;flex-direction:column;gap:2px"><span>加载失败</span><span style="font-size:10px;opacity:0.7">点击重试</span></div>';
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
-    });
+      });
+    }
 
     div.onclick = async () => {
       try {
+        if (useImageProxy()) {
+          mimg.src = imageProxyUrl(file);
+          mask.classList.add('show');
+          return;
+        }
         let blobUrl = state.imageCache[file.path];
         if (!blobUrl) {
           const buf = await getFileContent(file.path);

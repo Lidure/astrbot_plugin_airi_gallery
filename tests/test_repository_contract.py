@@ -35,6 +35,10 @@ def cloud_page() -> str:
     return Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
 
 
+def cloud_worker() -> str:
+    return Path("pages/zz_cloud/worker.js").read_text(encoding="utf-8")
+
+
 def function_names(tree: ast.AST) -> set[str]:
     return {
         node.name
@@ -241,3 +245,26 @@ def test_cloud_page_marks_default_gallery_selector_custom_after_manual_edits():
     assert "cfgOwner.addEventListener('input'" in html
     assert "cfgRepo.addEventListener('input'" in html
     assert "cfgBranch.addEventListener('input'" in html
+
+
+def test_cloud_page_uses_same_origin_proxy_for_builtin_gallery_images():
+    html = cloud_page()
+    worker = cloud_worker()
+
+    assert "function useImageProxy" in html
+    assert "__gallery-image/" in html
+    assert "file.sha" in html
+    assert "img.loading = 'lazy'" in html
+    assert "img.decoding = 'async'" in html
+    assert "raw.githubusercontent.com/Lidure/airi-gallery-images/main/" in worker
+    assert "cacheEverything: true" in worker
+    assert "cacheTtl" in worker
+    assert "env.ASSETS.fetch(request)" in worker
+
+
+def test_cloud_worker_is_configured_alongside_static_assets():
+    config = json.loads(Path("pages/zz_cloud/wrangler.jsonc").read_text(encoding="utf-8"))
+
+    assert config["main"] == "./worker.js"
+    assert config["assets"]["directory"] == "."
+    assert config["assets"]["binding"] == "ASSETS"

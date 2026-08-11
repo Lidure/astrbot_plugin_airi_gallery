@@ -1,12 +1,15 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "airi-gallery",
+  "main": "./worker.js",
   "compatibility_date": "2026-06-29",
   "observability": {
     "enabled": true
   },
   "assets": {
-    "directory": "."
+    "directory": ".",
+    "binding": "ASSETS",
+    "run_worker_first": ["/__gallery-image/*"]
   },
   "compatibility_flags": [
     "nodejs_compat"
