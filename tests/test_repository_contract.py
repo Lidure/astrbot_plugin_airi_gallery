@@ -31,6 +31,10 @@ def parsed_main() -> ast.AST:
     return ast.parse(Path("main.py").read_text(encoding="utf-8"))
 
 
+def cloud_page() -> str:
+    return Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+
+
 def function_names(tree: ast.AST) -> set[str]:
     return {
         node.name
@@ -183,3 +187,38 @@ def test_startup_diagnostics_are_background_only_and_cancelled_on_shutdown():
     assert "asyncio.create_task(self._run_startup_diagnostics())" in source
     assert "self._diagnostic_task.cancel()" in source
     assert "event.send" not in startup_source
+
+
+def test_cloud_page_offers_builtin_gallery_and_optional_token_reads():
+    html = cloud_page()
+
+    assert 'id="cfg-default-gallery"' in html
+    assert 'value="builtin"' in html
+    assert 'data-platform="github"' in html
+    assert 'data-owner="Lidure"' in html
+    assert 'data-repo="airi-gallery-images"' in html
+    assert 'data-branch="main"' in html
+    assert "function hasReadConfig" in html
+    assert "function canWrite" in html
+    assert "config.platform !== 'github' && !config.token" in html
+    assert "if (!config.owner || !config.repo)" in html
+
+
+def test_cloud_page_omits_anonymous_auth_and_rejects_unauthenticated_writes():
+    html = cloud_page()
+
+    assert "if (config.token) headers.Authorization" in html
+    assert "if (config.token) url.searchParams.set('access_token', config.token)" in html
+    assert "const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE'])" in html
+    assert "if (WRITE_METHODS.has(method) && !canWrite())" in html
+    assert "requireWriteAccess()" in html
+    assert "鍙妯″紡" in html
+
+
+def test_cloud_page_allows_sync_and_initialization_without_github_token():
+    html = cloud_page()
+
+    assert "if (!hasReadConfig()) return" in html
+    assert "if (!hasReadConfig())" in html
+    assert "if (config.owner && config.repo)" in html
+    assert "if (!config.token)" not in html.split("syncBtn.onclick", 1)[1].split("//", 1)[0]
