@@ -557,6 +557,13 @@ select { cursor: pointer; appearance: auto; }
   <div class="settings-panel" id="settings-panel">
     <div class="card-title">⚙️ GitHub / Gitee 配置</div>
     <div class="settings-grid">
+      <div class="field full">
+        <label class="field-label">默认图库</label>
+        <select id="cfg-default-gallery">
+          <option value="custom">自定义仓库</option>
+          <option value="builtin" data-platform="github" data-owner="Lidure" data-repo="airi-gallery-images" data-branch="main">Airi 默认公共图库</option>
+        </select>
+      </div>
       <div class="field">
         <label class="field-label">平台</label>
         <select id="cfg-platform">
@@ -579,6 +586,7 @@ select { cursor: pointer; appearance: auto; }
       <div class="field full">
         <label class="field-label">Access Token</label>
         <input type="password" id="cfg-token" placeholder="ghp_xxxx 或 Gitee 私人令牌" />
+        <div class="hint">公开 GitHub 图库可不填 Token 只读浏览；上传或删除需要 Token。</div>
       </div>
     </div>
     <div style="margin-top:14px; display:flex; gap:8px;">
@@ -670,6 +678,7 @@ select { cursor: pointer; appearance: auto; }
 // ──────────────────────────────────────────────
 const LS_KEY = 'airi_gallery_cloud_config';
 const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
+const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE']);
 
 let config = loadConfig();
 let state = {
@@ -693,7 +702,7 @@ const statusBar = $('status-bar'), statusText = $('status-text'), statusStats = 
 const settingsPanel = $('settings-panel'), settingsBtn = $('settings-btn'), syncBtn = $('sync-btn');
 const welcomeCard = $('welcome-card'), uploadCard = $('upload-card'), browseCard = $('browse-card');
 const cfgPlatform = $('cfg-platform'), cfgOwner = $('cfg-owner'), cfgRepo = $('cfg-repo');
-const cfgBranch = $('cfg-branch'), cfgToken = $('cfg-token');
+const cfgBranch = $('cfg-branch'), cfgToken = $('cfg-token'), cfgDefaultGallery = $('cfg-default-gallery');
 const saveCfgBtn = $('save-cfg-btn'), testCfgBtn = $('test-cfg-btn');
 const upSel = $('up-sel'), upInput = $('up-input');
 const dropZone = $('drop'), fileInput = $('file'), previewEl = $('preview');
@@ -724,12 +733,32 @@ function saveConfig(cfg) {
   localStorage.setItem(LS_KEY, JSON.stringify(cfg));
 }
 
+function hasReadConfig(cfg = config) {
+  return Boolean(cfg.owner && cfg.repo) && (cfg.platform === 'github' || Boolean(cfg.token));
+}
+
+function canWrite(cfg = config) {
+  return Boolean(cfg.owner && cfg.repo && cfg.token);
+}
+
+function requireWriteAccess() {
+  if (canWrite()) return true;
+  toast('当前为只读模式，上传或删除需要有效 Token', false);
+  // 鍙妯″紡
+  return false;
+}
+
 function fillConfigUI() {
   cfgPlatform.value = config.platform || 'github';
   cfgOwner.value = config.owner || 'Lidure';
   cfgRepo.value = config.repo || 'airi-gallery-images';
   cfgBranch.value = config.branch || 'main';
   cfgToken.value = config.token || '';
+  const builtin = cfgDefaultGallery.querySelector("option[value='builtin']");
+  cfgDefaultGallery.value = config.platform === builtin.dataset.platform
+    && config.owner === builtin.dataset.owner
+    && config.repo === builtin.dataset.repo
+    && (config.branch || 'main') === builtin.dataset.branch ? 'builtin' : 'custom';
 }
 
 // ──────────────────────────────────────────────
@@ -805,23 +834,24 @@ function authHeaders() {
   if (config.platform === 'gitee') {
     return { 'Content-Type': 'application/json' };
   }
-  return {
-    'Authorization': `token ${config.token}`,
-    'Accept': 'application/vnd.github.v3+json',
-  };
+  const headers = { 'Accept': 'application/vnd.github.v3+json' };
+  if (config.token) headers.Authorization = `token ${config.token}`;
+  return headers;
 }
 
-function authParams() {
+function authParams(url) {
   if (config.platform === 'gitee') {
-    return { access_token: config.token };
+    if (config.token) url.searchParams.set('access_token', config.token);
   }
-  return {};
 }
 
 async function ghRequest(method, path, { body = null, params = {} } = {}) {
+  if (WRITE_METHODS.has(method) && !canWrite()) {
+    requireWriteAccess();
+    throw new Error('写入需要有效 Token');
+  }
   const url = new URL(apiBase() + path);
-  const ap = authParams();
-  for (const [k, v] of Object.entries(ap)) url.searchParams.set(k, v);
+  authParams(url);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   const opts = { method, headers: authHeaders() };
@@ -938,6 +968,7 @@ async function getFileContent(path) {
 }
 
 async function putFile(path, contentB64, message) {
+  if (!requireWriteAccess()) return;
   const branch = config.branch || 'main';
   const existingSha = state.shaCache[path];
   const body = { message, content: contentB64 };
@@ -966,6 +997,7 @@ async function putFile(path, contentB64, message) {
 }
 
 async function deleteFile(path, message) {
+  if (!requireWriteAccess()) return;
   const branch = config.branch || 'main';
   const sha = state.shaCache[path];
   if (!sha) {
@@ -1032,12 +1064,12 @@ function updateStatus(connected, extra = '') {
   state.connected = connected;
   statusBar.className = 'status-bar ' + (connected ? 'connected' : 'disconnected');
   statusText.textContent = connected ? `已连接 ${config.platform}/${config.owner}/${config.repo}` : '未连接';
-  statusStats.textContent = extra;
+  statusStats.textContent = connected && !canWrite() ? `${extra} · 只读模式` : extra;
 }
 
 function showMainUI(show) {
   welcomeCard.style.display = show ? 'none' : 'block';
-  uploadCard.style.display = show ? 'block' : 'none';
+  uploadCard.style.display = show && canWrite() ? 'block' : 'none';
   browseCard.style.display = show ? 'block' : 'none';
 }
 
@@ -1045,7 +1077,8 @@ function showMainUI(show) {
 // Sync: fetch tree & render
 // ──────────────────────────────────────────────
 async function syncFromRemote() {
-  if (!config.token || !config.owner || !config.repo) return;
+  if (!hasReadConfig()) return;
+  if (config.platform !== 'github' && !config.token) return;
   syncBtn.classList.add('spinning');
   try {
     const tree = await getTree();
@@ -1158,7 +1191,7 @@ async function loadCategoryImages() {
     };
 
     div.appendChild(badge);
-    div.appendChild(del);
+    if (canWrite()) div.appendChild(del);
 
     // Load image via Contents API with concurrency pool & retry
     imagePool(() => withRetry(async () => {
@@ -1175,12 +1208,12 @@ async function loadCategoryImages() {
       img.src = blobUrl; img.loading = 'lazy';
       div.appendChild(img);
       div.appendChild(badge);
-      div.appendChild(del);
+      if (canWrite()) div.appendChild(del);
     })).catch((err) => {
       console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
       div.innerHTML = '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--red);font-size:12px;flex-direction:column;gap:2px"><span>加载失败</span><span style="font-size:10px;opacity:0.7">点击重试</span></div>';
       div.appendChild(badge);
-      div.appendChild(del);
+      if (canWrite()) div.appendChild(del);
     });
 
     div.onclick = async () => {
@@ -1434,6 +1467,15 @@ settingsBtn.onclick = () => {
   if (settingsPanel.classList.contains('show')) fillConfigUI();
 };
 
+cfgDefaultGallery.onchange = () => {
+  const selected = cfgDefaultGallery.selectedOptions[0];
+  if (selected.value !== 'builtin') return;
+  cfgPlatform.value = selected.dataset.platform;
+  cfgOwner.value = selected.dataset.owner;
+  cfgRepo.value = selected.dataset.repo;
+  cfgBranch.value = selected.dataset.branch;
+};
+
 saveCfgBtn.onclick = () => {
   const cfg = {
     platform: cfgPlatform.value,
@@ -1442,11 +1484,17 @@ saveCfgBtn.onclick = () => {
     branch: cfgBranch.value.trim() || 'main',
     token: cfgToken.value.trim(),
   };
-  if (!cfg.owner || !cfg.repo || !cfg.token) {
+  if (!hasReadConfig(cfg)) {
+    if (!cfg.owner || !cfg.repo) {
+      toast('请填写仓库所有者和名称', false); return;
+    }
+    toast('Gitee 读取需要填写 Token', false); return;
+  }
+  if (cfg.platform !== 'github' && !cfg.token) {
     toast('请填写完整配置', false); return;
   }
   saveConfig(cfg);
-  toast('配置已保存');
+  toast(cfg.token ? '配置已保存' : '配置已保存：只读模式');
   settingsPanel.classList.remove('show');
   // Reset state and reconnect
   state.shaCache = {};
@@ -1465,8 +1513,8 @@ testCfgBtn.onclick = async () => {
     branch: cfgBranch.value.trim() || 'main',
     token: cfgToken.value.trim(),
   };
-  if (!cfg.owner || !cfg.repo || !cfg.token) {
-    toast('请填写完整配置', false); return;
+  if (!hasReadConfig(cfg)) {
+    toast(cfg.owner && cfg.repo ? 'Gitee 读取需要填写 Token' : '请填写仓库所有者和名称', false); return;
   }
   testCfgBtn.disabled = true;
   testCfgBtn.textContent = '测试中...';
@@ -1475,7 +1523,9 @@ testCfgBtn.onclick = async () => {
   try {
     const tree = await getTree();
     const imgCount = tree.filter(e => e.path.startsWith('gallery/') && IMAGE_SUFFIXES.has(e.path.substring(e.path.lastIndexOf('.')))).length;
-    toast(`连接成功！仓库中有 ${tree.length} 个文件，其中 ${imgCount} 张图库图片`);
+    toast(cfg.token
+      ? `认证读写连接成功！仓库中有 ${tree.length} 个文件，其中 ${imgCount} 张图库图片`
+      : `匿名公开读取成功（只读模式）！仓库中有 ${tree.length} 个文件，其中 ${imgCount} 张图库图片`);
   } catch (e) {
     toast('连接失败: ' + e.message, false);
   } finally {
@@ -1486,7 +1536,8 @@ testCfgBtn.onclick = async () => {
 };
 
 syncBtn.onclick = async () => {
-  if (!config.token) { toast('请先配置仓库信息', false); settingsPanel.classList.add('show'); return; }
+  if (!config.owner || !config.repo) { toast('请先配置仓库信息', false); settingsPanel.classList.add('show'); return; }
+  if (!hasReadConfig()) { toast('请先配置可读取的仓库信息', false); settingsPanel.classList.add('show'); return; }
   state.imageCache = {};
   await syncFromRemote();
   if (state.connected) toast('同步完成');
@@ -1524,7 +1575,12 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // Init
 // ──────────────────────────────────────────────
 (async function init() {
-  if (config.token && config.owner && config.repo) {
+  if (config.owner && config.repo) {
+    if (!hasReadConfig()) {
+      showMainUI(false);
+      settingsPanel.classList.add('show');
+      return;
+    }
     showMainUI(true);
     await syncFromRemote();
   } else {
