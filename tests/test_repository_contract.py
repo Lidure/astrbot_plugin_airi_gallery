@@ -227,6 +227,7 @@ def test_cloud_page_allows_sync_and_initialization_without_github_token():
 def test_cloud_page_distinguishes_anonymous_rate_limits_from_auth_failures():
     html = cloud_page()
 
+    assert "const rateLimited = !resp.ok &&" in html
     assert "x-ratelimit-remaining" in html
     assert "config.token" in html
     assert "rate limit" in html.lower()

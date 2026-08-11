@@ -874,9 +874,9 @@ async function ghRequest(method, path, { body = null, params = {} } = {}) {
     throw err;
   };
 
-  const rateLimited = resp.status === 429
+  const rateLimited = !resp.ok && (resp.status === 429
     || resp.headers.get('x-ratelimit-remaining') === '0'
-    || /rate limit/i.test(data?.message || '');
+    || /rate limit/i.test(data?.message || ''));
   if (rateLimited) {
     throwRequestError('API 请求频率超限，请稍后重试');
   }
