@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.2-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.3-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -45,7 +45,7 @@
 | ☁️ **Git 远程同步** | 图片自动同步到 GitHub / Gitee 仓库，支持定时拉取与批量推送 |
 | 🖥️ **云端管理页** | 独立 Cloudflare Pages SPA，暗色模式、紧凑分页，无需 Bot 在线即可管理图片 |
 | 📤 **公开上传** | 通过 `upload_token` 密钥控制外部上传权限，支持网页端直接传图 |
-| 🧬 **内容去重** | 上传、云同步和手动清理都会按图片内容哈希去重，减少重复图片 |
+| 🧬 **双重内容去重** | Git 同步开启时，QQ / 本地 Web / API 上传必须同时通过本地 SHA-256 与远程 Git blob SHA 查重，任一命中或远程状态不可确认都不会放行 |
 | 🔢 **全局编号** | 本地插件和云端页面都按全局最大编号续号，跨分类排序更一致 |
 | ⚡ **哈希索引缓存** | 本地保存图片哈希索引，重启后无需重新读取几千张图片计算哈希 |
 | 🔄 **立即同步** | `/立即同步` 手动从远程拉取新增图片，不必等待定时同步 |
@@ -332,6 +332,13 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.3
+
+- **查重一致性** Git 同步开启时，QQ、本地 Web 与 API 上传会在写入前同时检查本地内容哈希和远程 Git blob SHA；任一侧命中重复都会跳过。
+- **故障保护** 无法读取远程文件树时保守拒绝本次上传，不再在远程状态未知时盲目写入。
+- **编号安全** 新上传编号同时参考本地与远程的全局最大编号，避免本地同步滞后时撞上 GitHub 已占用编号。
+- **上传时序** 双检通过后等待远程推送完成再返回结果；远程写入失败会回滚本地候选文件，降低两端再次产生状态差异的机会。
+
 ### v2.11.2
 
 - **安全** 改善路径拼接

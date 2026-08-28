@@ -62,8 +62,11 @@ try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
         RemoteDeleteReport,
+        collect_remote_category_blob_shas,
+        evaluate_upload_dedup,
         git_blob_sha,
         merge_hash_entry,
+        remote_gallery_max_index,
         normalize_hash_index,
         present_remote_delete_report,
         read_bool_flag,
@@ -78,8 +81,11 @@ except ImportError:
     from gallery_safety import (
         HASH_INDEX_VERSION,
         RemoteDeleteReport,
+        collect_remote_category_blob_shas,
+        evaluate_upload_dedup,
         git_blob_sha,
         merge_hash_entry,
+        remote_gallery_max_index,
         normalize_hash_index,
         present_remote_delete_report,
         read_bool_flag,
@@ -100,7 +106,7 @@ VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
 REMOTE_DELETE_CONFIRM_TTL = 300
 REMOTE_DELETE_PREVIEW_LIMIT = 20
-CURRENT_PLUGIN_VERSION = "v2.11.2"
+CURRENT_PLUGIN_VERSION = "v2.11.3"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -1144,6 +1150,15 @@ class Main(Star):
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
+            remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+                self._prepare_remote_upload_guard, category
+            )
+            if not remote_checked:
+                return jsonify({
+                    "ok": False,
+                    "error": "远程查重失败，为避免重复，本次未上传",
+                }), 503
+
             uploaded: list[str] = []
             skipped_duplicate = 0
             for img in images:
@@ -1155,16 +1170,30 @@ class Main(Star):
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
                 image_bytes = b64mod.b64decode(data_b64)
-                target = self._store_unique_image(category_dir, category, ext, image_bytes)
+                target = self._store_unique_image(
+                    category_dir,
+                    category,
+                    ext,
+                    image_bytes,
+                    remote_blob_shas=remote_blob_shas,
+                    remote_checked=remote_checked,
+                    min_index=remote_max_index + 1,
+                )
                 if target is None:
                     skipped_duplicate += 1
                     continue
-                uploaded.append(target.name)
-                # Git 远程推送
                 if self._git_sync_enabled:
-                    asyncio.get_event_loop().run_in_executor(
-                        None, self._git_push_file, str(target)
-                    )
+                    pushed = await asyncio.to_thread(self._git_push_file, str(target))
+                    if not pushed:
+                        self._rollback_stored_image(target, category)
+                        remote_blob_shas.discard(git_blob_sha(image_bytes))
+                        return jsonify({
+                            "ok": False,
+                            "error": "远程上传失败，本地写入已回滚",
+                            "count": len(uploaded),
+                            "files": uploaded,
+                        }), 502
+                uploaded.append(target.name)
             resp = {"ok": True, "count": len(uploaded), "files": uploaded}
             if skipped_duplicate:
                 resp["skipped"] = skipped_duplicate
@@ -1265,6 +1294,15 @@ class Main(Star):
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
+            remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+                self._prepare_remote_upload_guard, category
+            )
+            if not remote_checked:
+                return jsonify({
+                    "ok": False,
+                    "error": "远程查重失败，为避免重复，本次未上传",
+                }), 503
+
             uploaded: list[str] = []
             skipped_duplicate = 0
             for img in images:
@@ -1276,16 +1314,30 @@ class Main(Star):
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
                 image_bytes = b64mod.b64decode(data_b64)
-                target = self._store_unique_image(category_dir, category, ext, image_bytes)
+                target = self._store_unique_image(
+                    category_dir,
+                    category,
+                    ext,
+                    image_bytes,
+                    remote_blob_shas=remote_blob_shas,
+                    remote_checked=remote_checked,
+                    min_index=remote_max_index + 1,
+                )
                 if target is None:
                     skipped_duplicate += 1
                     continue
-                uploaded.append(target.name)
-                # Git 远程推送
                 if self._git_sync_enabled:
-                    asyncio.get_event_loop().run_in_executor(
-                        None, self._git_push_file, str(target)
-                    )
+                    pushed = await asyncio.to_thread(self._git_push_file, str(target))
+                    if not pushed:
+                        self._rollback_stored_image(target, category)
+                        remote_blob_shas.discard(git_blob_sha(image_bytes))
+                        return jsonify({
+                            "ok": False,
+                            "error": "远程上传失败，本地写入已回滚",
+                            "count": len(uploaded),
+                            "files": uploaded,
+                        }), 502
+                uploaded.append(target.name)
             resp = {"ok": True, "count": len(uploaded), "files": uploaded}
             if skipped_duplicate:
                 resp["skipped"] = skipped_duplicate
@@ -1658,6 +1710,21 @@ class Main(Star):
                 })
         return result
 
+    def _prepare_remote_upload_guard(
+        self, category: str
+    ) -> tuple[bool, set[str], int]:
+        """Snapshot remote duplicate state before admitting a Git-backed upload."""
+        if not self._git_sync_enabled:
+            return True, set(), 0
+        tree = self._git_list_tree()
+        if tree is None:
+            return False, set(), 0
+        return (
+            True,
+            collect_remote_category_blob_shas(tree, category, IMAGE_SUFFIXES),
+            remote_gallery_max_index(tree, IMAGE_SUFFIXES),
+        )
+
     def _git_get_file(self, path: str) -> bytes | None:
         """下载远程仓库中单个文件的内容，同时更新 SHA 缓存。"""
         base = self._git_api_base()
@@ -1713,7 +1780,9 @@ class Main(Star):
             return sha
         return None
 
-    def _git_put_file(self, path: str, content: bytes, message: str) -> tuple[bool, str | None]:
+    def _git_put_file(
+        self, path: str, content: bytes, message: str, *, create_only: bool = False
+    ) -> tuple[bool, str | None]:
         """创建或更新远程仓库中的文件。
 
         如果 self._sha_cache 中已有该路径的 SHA，视为更新；否则视为创建。
@@ -1726,6 +1795,7 @@ class Main(Star):
         content_b64 = b64mod.b64encode(content).decode("ascii")
 
         url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+        had_known_sha = bool(self._sha_cache.get(path))
 
         if self._git_platform() == "gitee":
             # Gitee: POST 创建，PUT 更新
@@ -1766,6 +1836,9 @@ class Main(Star):
             # SHA 冲突 → 精准获取该文件的最新 SHA 后重试一次
             logger.info(f"[Git Sync] SHA 冲突，获取最新 SHA 后重试: {path}")
             fresh_sha = self._git_fetch_file_sha(path)
+            if create_only and fresh_sha and not had_known_sha:
+                logger.warning(f"[Git Sync] 新上传编号已被远程占用，拒绝覆盖: {path}")
+                return remote_put_result(False, None)
             # 重试
             if self._git_platform() == "gitee":
                 if fresh_sha:
@@ -2144,22 +2217,26 @@ class Main(Star):
             self._sync_lock.release()
         return result
 
-    def _git_push_file(self, local_abs_path: str) -> None:
-        """将本地文件推送到远程仓库。"""
+    def _git_push_file(self, local_abs_path: str) -> bool:
+        """Push one newly admitted local image without overwriting a raced cloud path."""
         if not self._git_sync_enabled:
-            return
+            return False
         git_path = self._to_git_path(local_abs_path)
         if not git_path:
-            return
+            return False
         try:
             content = Path(local_abs_path).read_bytes()
-            uploaded, remote_sha = self._git_put_file(git_path, content, f"Upload {git_path}")
+            uploaded, remote_sha = self._git_put_file(
+                git_path, content, f"Upload {git_path}", create_only=True
+            )
             if uploaded:
                 if remote_sha:
                     self._remember_verified_remote_content(git_path, content, remote_sha)
                 logger.info(f"[Git Sync] 已推送到远程: {git_path}")
+                return True
         except Exception as exc:
             logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
+        return False
 
     def _git_delete_remote_file(self, local_abs_path: str) -> None:
         """将本地文件的对应远程文件删除。"""
@@ -2943,24 +3020,47 @@ class Main(Star):
         category: str,
         ext: str,
         image_bytes: bytes,
+        *,
+        remote_blob_shas: set[str] | None = None,
+        remote_checked: bool = True,
+        min_index: int = 1,
     ) -> Path | None:
-        """Atomically store an image with the next global index, unless it is a duplicate."""
-        digest = self._bytes_hash(image_bytes)
+        """Store only after local and, when required, remote duplicate checks pass."""
         with self._gallery_write_lock:
             category_hashes = self._category_hashes(category)
-            if digest in category_hashes:
+            decision = evaluate_upload_dedup(
+                image_bytes,
+                local_hashes=category_hashes,
+                remote_blob_shas=remote_blob_shas or set(),
+                remote_checked=remote_checked,
+            )
+            if not decision.allowed:
                 return None
 
-            index = self._next_index()
+            index = max(self._next_index(), max(1, int(min_index)))
             target_path = category_dir / f"{index}{ext}"
             while target_path.exists():
                 index += 1
                 target_path = category_dir / f"{index}{ext}"
 
             target_path.write_bytes(image_bytes)
-            category_hashes.add(digest)
-            self._remember_file_hash(target_path, digest, category=category)
+            category_hashes.add(decision.content_hash)
+            if remote_blob_shas is not None:
+                remote_blob_shas.add(decision.blob_sha)
+            self._remember_file_hash(
+                target_path, decision.content_hash, category=category
+            )
             return target_path
+
+    def _rollback_stored_image(self, path: Path, category: str) -> None:
+        """Remove a local candidate when its required remote push did not complete."""
+        with self._gallery_write_lock:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning(f"回滚上传文件失败 {path}: {exc}")
+            self._invalidate_category_hash_cache(category)
+            self._forget_file_hash(path)
 
     async def _dedupe_gallery(self, category: str | None = None) -> tuple[int, list[str]]:
         """删除重复内容，保留每个分类中首次出现的图片。"""
@@ -3268,31 +3368,68 @@ class Main(Star):
             all_images = all_images[:UPLOAD_BATCH_MAX]
 
         category_name = category_dir.name
+        remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+            self._prepare_remote_upload_guard, category_name
+        )
+        if not remote_checked:
+            await event.send(
+                event.plain_result(
+                    "远程查重失败，为避免本地和 GitHub 查重状态不一致，本次没有放行上传。"
+                )
+            )
+            return
+
         uploaded: list[str] = []
         skipped_duplicate = 0
+        remote_push_failed = False
         for source_path, image_bytes in all_images:
             suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
             if suffix == ".gif":
                 suffix = ".jpg"
-            target_path = self._store_unique_image(category_dir, category_name, suffix, image_bytes)
+            target_path = self._store_unique_image(
+                category_dir,
+                category_name,
+                suffix,
+                image_bytes,
+                remote_blob_shas=remote_blob_shas,
+                remote_checked=remote_checked,
+                min_index=remote_max_index + 1,
+            )
             if target_path is None:
                 skipped_duplicate += 1
                 continue
-            uploaded.append(target_path.name)
-            # Git 远程推送（异步，不阻塞上传响应）
             if self._git_sync_enabled:
-                asyncio.get_event_loop().run_in_executor(
-                    None, self._git_push_file, str(target_path)
+                pushed = await asyncio.to_thread(self._git_push_file, str(target_path))
+                if not pushed:
+                    self._rollback_stored_image(target_path, category_name)
+                    remote_blob_shas.discard(git_blob_sha(image_bytes))
+                    remote_push_failed = True
+                    break
+            uploaded.append(target_path.name)
+
+        if remote_push_failed and not uploaded:
+            await event.send(
+                event.plain_result(
+                    "远程上传失败，本地写入已回滚，本次没有放行任何图片。"
                 )
+            )
+            return
 
         if len(uploaded) == 1:
-            await event.send(event.plain_result(f"已上传到【{category}】：{uploaded[0]}"))
+            msg = f"已上传到【{category}】：{uploaded[0]}"
+            if skipped_duplicate:
+                msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
+            if remote_push_failed:
+                msg += "（后续远程上传失败，失败图片已回滚并停止本批次）"
+            await event.send(event.plain_result(msg))
         elif uploaded:
             msg = f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"
             if skipped_duplicate:
                 msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
             if limited_by_batch_size:
                 msg += f"（单次最多处理 {UPLOAD_BATCH_MAX} 张，其余已跳过）"
+            if remote_push_failed:
+                msg += "（后续远程上传失败，失败图片已回滚并停止本批次）"
             await event.send(event.plain_result(msg))
         else:
             msg = "没有新上传的图片，重复的图片已被跳过。"
