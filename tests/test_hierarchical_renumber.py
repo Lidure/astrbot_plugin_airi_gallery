@@ -106,7 +106,8 @@ def test_large_category_tree_mutations_are_chunked_without_version_bump():
     assert "current_tree_sha = base_tree_sha" in helper
     assert "for entries in (deletes, upserts)" in helper
     assert "GITHUB_TREE_MUTATION_CHUNK_SIZE" in helper
-    assert "self._git_create_github_tree(current_tree_sha, chunk)" in helper
+    assert "self._git_create_github_tree(" in helper
+    assert "context=context" in helper
     assert "self._git_apply_category_tree_delta(" in renumber
     assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source

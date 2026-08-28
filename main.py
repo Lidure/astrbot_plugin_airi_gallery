@@ -2246,10 +2246,37 @@ class Main(Star):
         sha = str(data.get("sha", "")).strip()
         return sha or None
 
+    def _git_verify_github_tree_exists(self, tree_sha: str) -> bool:
+        """404 后只读验证 base tree，区分临时写端异常与真实资源缺失。"""
+        if self._git_platform() != "github" or not tree_sha:
+            return False
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/trees/{tree_sha}"
+        status, data = self._git_request(
+            "GET", url, timeout=30, disable_on_auth_failure=False
+        )
+        verified = (
+            status == 200
+            and bool(data)
+            and str(data.get("sha", "")).strip() == tree_sha
+        )
+        if not verified:
+            logger.warning(
+                "[Git Sync] GitHub base tree 验证失败 "
+                f"(HTTP {status}) base_tree={tree_sha[:12]} body={data}"
+            )
+        return verified
+
     def _git_create_github_tree(
-        self, base_tree_sha: str | None, entries: list[dict]
+        self,
+        base_tree_sha: str | None,
+        entries: list[dict],
+        *,
+        context: str = "",
     ) -> str | None:
-        """创建 GitHub tree；临时网关/网络故障会有限重试。"""
+        """创建 GitHub tree；临时网关/网络故障及已验证的偶发 404 会有限重试。"""
         base = self._git_api_base()
         owner = self._git_owner()
         repo = self._git_repo()
@@ -2259,16 +2286,22 @@ class Main(Star):
             body["base_tree"] = base_tree_sha
 
         last_status = 0
+        last_data: dict | None = None
         for attempt in range(1, GITHUB_TREE_CREATE_MAX_ATTEMPTS + 1):
             status, data = self._git_request("POST", url, json_body=body, timeout=60)
             last_status = status
+            last_data = data
             if status == 201 and data:
                 sha = str(data.get("sha", "")).strip()
                 if sha:
                     return sha
 
+            verified_404 = False
+            if status == 404 and base_tree_sha:
+                verified_404 = self._git_verify_github_tree_exists(base_tree_sha)
+
             if (
-                status not in GITHUB_TREE_CREATE_RETRY_STATUSES
+                (status not in GITHUB_TREE_CREATE_RETRY_STATUSES and not verified_404)
                 or attempt >= GITHUB_TREE_CREATE_MAX_ATTEMPTS
             ):
                 break
@@ -2277,11 +2310,19 @@ class Main(Star):
             logger.warning(
                 "[Git Sync] 创建 GitHub tree 暂时失败 "
                 f"(HTTP {status})，{delay:.1f}s 后重试 "
-                f"({attempt}/{GITHUB_TREE_CREATE_MAX_ATTEMPTS})"
+                f"({attempt}/{GITHUB_TREE_CREATE_MAX_ATTEMPTS}) "
+                f"context={context or '-'} "
+                f"base_tree={(base_tree_sha or '-')[:12]} "
+                f"entries={len(entries)} body={data}"
             )
             time.sleep(delay)
 
-        logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {last_status})")
+        logger.warning(
+            "[Git Sync] 创建 GitHub tree 失败 "
+            f"(HTTP {last_status}) context={context or '-'} "
+            f"base_tree={(base_tree_sha or '-')[:12]} "
+            f"entries={len(entries)} body={last_data}"
+        )
         return None
 
     def _git_create_github_tree_incrementally(self, entries: list[dict]) -> str | None:
@@ -2298,16 +2339,31 @@ class Main(Star):
 
     def _git_apply_category_tree_delta(
         self,
+        category: str,
         base_tree_sha: str,
         deletes: tuple[dict[str, object], ...],
         upserts: tuple[dict[str, object], ...],
     ) -> str | None:
         """在现有分类 tree 上分块删除旧路径，再分块写入最终路径。"""
         current_tree_sha = base_tree_sha
+        phase_name = "delete"
         for entries in (deletes, upserts):
-            for start in range(0, len(entries), GITHUB_TREE_MUTATION_CHUNK_SIZE):
+            if entries is upserts:
+                phase_name = "upsert"
+            total_batches = (
+                len(entries) + GITHUB_TREE_MUTATION_CHUNK_SIZE - 1
+            ) // GITHUB_TREE_MUTATION_CHUNK_SIZE
+            for batch_index, start in enumerate(
+                range(0, len(entries), GITHUB_TREE_MUTATION_CHUNK_SIZE), start=1
+            ):
                 chunk = list(entries[start : start + GITHUB_TREE_MUTATION_CHUNK_SIZE])
-                current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)
+                context = (
+                    f"category={category} phase={phase_name} "
+                    f"batch={batch_index}/{total_batches}"
+                )
+                current_tree_sha = self._git_create_github_tree(
+                    current_tree_sha, chunk, context=context
+                )
                 if not current_tree_sha:
                     return None
         return current_tree_sha
@@ -4169,7 +4225,7 @@ class Main(Star):
             except ValueError as exc:
                 return failure("layout", str(exc))
             category_tree_sha = self._git_apply_category_tree_delta(
-                category_base_tree_sha, deletes, upserts
+                category, category_base_tree_sha, deletes, upserts
             )
             if not category_tree_sha:
                 return failure("category_tree", f"创建分类 {category} 的最终 tree 失败")
