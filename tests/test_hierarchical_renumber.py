@@ -65,3 +65,11 @@ def test_main_renumber_uses_hierarchical_category_trees_and_reports_stage():
     assert '"type": "tree"' in block
     assert "stage" in block
     assert "source_paths - final_targets" not in block
+
+
+def test_fixed_github_tree_snapshot_preserves_type_and_mode_metadata():
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = source.split("    def _git_list_tree_at", 1)[1].split("\n    def ", 1)[0]
+
+    assert '"type": entry.get("type", "")' in block
+    assert '"mode": entry.get("mode", "")' in block
