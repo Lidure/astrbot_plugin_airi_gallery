@@ -25,17 +25,18 @@ jobs:
           text = path.read_text(encoding='utf-8')
           text = text.replace('Version-v2.11.7-pink', 'Version-v2.11.8-pink', 1)
           marker = '## 🚀 更新日志\n### v2.11.7\n'
-          insert = '''## 🚀 更新日志
-          ### v2.11.8
-
-          - 修复 `/导入图库` 的固定 GitHub tree 快照在整理数据时丢失 `type` / `mode`，导致图片被误报 `renumber category entry is incomplete` 的问题。
-          - 固定快照现在保留 GitHub recursive tree 中的 `blob` 与 `tree` 条目及其 `path` / `sha` / `size` / `type` / `mode`，确保分层重编号既能读取图片元数据，也能取得 `gallery` 与分类目录 tree SHA。
-          - 该修复仅补全不可变 HEAD/tree 快照元数据，不放宽原有固定 HEAD、失败回滚与单次非强制 ref 更新安全策略。
-
-          ### v2.11.7
-'''
-          # YAML block indentation affects here-doc source, normalize accidental leading spaces.
-          insert = '\n'.join(line[10:] if line.startswith('          ') else line for line in insert.splitlines()) + '\n'
+          lines = [
+              '## 🚀 更新日志',
+              '### v2.11.8',
+              '',
+              '- 修复 `/导入图库` 的固定 GitHub tree 快照在整理数据时丢失 `type` / `mode`，导致图片被误报 `renumber category entry is incomplete` 的问题。',
+              '- 固定快照现在保留 GitHub recursive tree 中的 `blob` 与 `tree` 条目及其 `path` / `sha` / `size` / `type` / `mode`，确保分层重编号既能读取图片元数据，也能取得 `gallery` 与分类目录 tree SHA。',
+              '- 该修复仅补全不可变 HEAD/tree 快照元数据，不放宽原有固定 HEAD、失败回滚与单次非强制 ref 更新安全策略。',
+              '',
+              '### v2.11.7',
+              '',
+          ]
+          insert = '\n'.join(lines)
           if marker not in text:
               raise SystemExit('README changelog marker not found')
           text = text.replace(marker, insert, 1)
