@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.3-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.4-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -37,7 +37,7 @@
 | 🪄 **轻量触发** | 使用 `看看<分类>`、`看看123`、`看全部<分类>` 快速取图 |
 | 🎨 **图片化输出** | 帮助说明、分类列表和昵称映射都以海报图片输出 |
 | 🔐 **权限控制** | 支持可选管理员与白名单控制，保护创建、上传、删除等操作 |
-| 🧹 **自动整理** | 启动或导入时自动重排编号，保持图库结构整洁 |
+| 🧹 **双端一致整理** | `/导入图库` 使用同一份全局 1..N 映射整理本地与 GitHub；远程状态不明时不单独改本地编号 |
 | 🔗 **合并转发** | 多图查看支持合并转发模式，告别刷屏 |
 | 🤖 **LLM 工具** | 接入 LLM Function Calling，让 AI 在对话中自动发表情包 |
 | 🏷️ **分类昵称** | 为分类设置多个别名，「看看爱莉」等同于「看看airi」 |
@@ -45,7 +45,7 @@
 | ☁️ **Git 远程同步** | 图片自动同步到 GitHub / Gitee 仓库，支持定时拉取与批量推送 |
 | 🖥️ **云端管理页** | 独立 Cloudflare Pages SPA，暗色模式、紧凑分页，无需 Bot 在线即可管理图片 |
 | 📤 **公开上传** | 通过 `upload_token` 密钥控制外部上传权限，支持网页端直接传图 |
-| 🧬 **双重内容去重** | Git 同步开启时，QQ / 本地 Web / API 上传必须同时通过本地 SHA-256 与远程 Git blob SHA 查重，任一命中或远程状态不可确认都不会放行 |
+| 🧬 **分层统一查重** | 每张候选图的精确指纹与 64-bit dHash 各计算一次并复用：完全重复直接拦截并提示原图序号/图片，相似图片显示候选并允许明确强制上传 |
 | 🔢 **全局编号** | 本地插件和云端页面都按全局最大编号续号，跨分类排序更一致 |
 | ⚡ **哈希索引缓存** | 本地保存图片哈希索引，重启后无需重新读取几千张图片计算哈希 |
 | 🔄 **立即同步** | `/立即同步` 手动从远程拉取新增图片，不必等待定时同步 |
@@ -309,11 +309,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/airi_gallery` / `/画廊帮助` / `/图库帮助` | 全员 | 查看帮助海报 |
 | `/画廊检查` | 按权限配置 | 只读检查配置、权限、远程连接和插件更新 |
 | `/创建<分类>` | 管理员 | 创建新分类 |
-| `/上传<分类>` | 管理员 | 回复图片、多图或合并转发聊天记录后上传到指定分类 |
+| `/上传<分类>` | 管理员 | 回复图片、多图或合并转发聊天记录后上传；完全重复直接拦截，相似图会给出序号/预览 |
+| `/强制上传` | 管理员 | 5 分钟内确认最近一张仅因感知相似被拦下的图片；不能绕过完全重复 |
 | `/删除123` | 管理员 | 删除指定编号图片 |
 | `/去重图库` | 管理员 | 清理全部分类中的重复图片 |
 | `/去重图库 <分类>` / `/去重 <分类>` | 管理员 | 清理指定分类中的重复图片 |
-| `/导入图库` | 管理员 | 重排图库编号 |
+| `/导入图库` | 管理员 | 用同一映射把本地与 GitHub 全图库重排为连续的 1..N；Git 不可用时不执行单端重排 |
 | `/立即同步` / `/同步远程` | 管理员 | 立即从远程仓库拉取新增图片到本地 |
 | `/推送` | 管理员 | 快速推送本地新增或变更图片，已存在则跳过 |
 | `/取消推送` | 管理员 | 取消正在进行的批量推送 |
@@ -326,12 +327,22 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | 位置 | 说明 |
 | :--- | :--- |
 | `data/plugin_data/astrbot_plugin_airi_gallery/gallery/` | 默认图库目录 |
-| `data/plugin_data/astrbot_plugin_airi_gallery/hash_index.json` | 本地图片哈希索引缓存，用于加速重启后的去重和同步 |
+| `data/plugin_data/astrbot_plugin_airi_gallery/hash_index.json` | 本地精确哈希、远程基线与感知哈希缓存 |
+| `gallery/gallery_index.json`（远程仓库） | QQ/本地 Web 与 Cloud 共用的轻量感知哈希索引，不需要每次上传重新下载整库计算 |
 | `gallery/分类名/1.png` | 示例：某个分类下的数字编号图片 |
 
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.4
+
+- **感知查重** 增加 64-bit dHash 相似检测；每张待上传图片只生成一次候选感知指纹并复用到本地/远程比对，避免同一种算法重复计算。
+- **重复提示** 完全重复会直接拦截并返回已存在图片的全局序号与图片提示；完全重复不能被“强制上传”绕过。
+- **相似确认** 仅感知相似时最多展示 3 个最相近候选及相似度；QQ 可在 5 分钟内使用 `/强制上传`，Cloud 页面可点“仍然上传”。
+- **共享索引** 新增远程 `gallery/gallery_index.json` 感知索引；旧图库只在索引缺失时补算一次，后续上传直接读取小索引。
+- **连续编号** `/导入图库` 现在生成唯一的全局 1..N 重编号映射，并以两阶段本地改名 + GitHub 单次树提交应用到两端；远程不可确认时不会只修改本地。
+- **索引迁移** 本地 `hash_index.json` 升级为 v3，保留 v2 已验证 Git SHA 基线，并在纯改名时迁移已有指纹而不是重新计算。
+
 ### v2.11.3
 
 - **查重一致性** Git 同步开启时，QQ、本地 Web 与 API 上传会在写入前同时检查本地内容哈希和远程 Git blob SHA；任一侧命中重复都会跳过。
