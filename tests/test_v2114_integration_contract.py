@@ -51,6 +51,14 @@ def test_exact_duplicate_is_checked_before_forceable_similarity():
     assert exact_pos < similar_pos < forced_pos
 
 
+def test_active_local_dedup_ignores_stale_hash_index_paths():
+    source = Path("main.py").read_text(encoding="utf-8")
+
+    assert "for record in indexed_images_from_hash_index(snapshot):" in source
+    assert "local_path = resolve_gallery_local_path(self.gallery_root.parent, record.path)" in source
+    assert "local_path is not None and local_path.exists() and _is_image_file(local_path)" in source
+
+
 def test_import_gallery_uses_one_global_mapping_for_local_and_github():
     source = Path("main.py").read_text(encoding="utf-8")
 
