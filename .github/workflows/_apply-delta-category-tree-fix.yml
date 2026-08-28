@@ -1,0 +1,37 @@
+name: Apply delta category tree fix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/_apply-delta-category-tree-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/delta-large-category-tree
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply production patch
+        run: python .github/scripts/apply_delta_category_tree_fix.py
+      - name: Verify focused regression
+        run: |
+          python -m pip install -r requirements.txt pytest pyyaml quart
+          python -m pytest tests/test_hierarchical_renumber.py -v
+          python -m py_compile main.py gallery_safety.py
+      - name: Remove temporary patch files and commit
+        run: |
+          rm .github/scripts/apply_delta_category_tree_fix.py
+          rm .github/workflows/_apply-delta-category-tree-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.py gallery_safety.py tests/test_hierarchical_renumber.py .github/scripts/apply_delta_category_tree_fix.py .github/workflows/_apply-delta-category-tree-fix.yml
+          git commit -m 'fix: mutate large category trees from existing base'
+          git push origin HEAD:fix/delta-large-category-tree
