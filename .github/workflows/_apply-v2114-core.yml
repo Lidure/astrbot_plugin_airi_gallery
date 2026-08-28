@@ -1,0 +1,338 @@
+name: Apply v2.11.4 core helpers
+
+on:
+  push:
+    branches: [fix/perceptual-dedup-and-renumber]
+    paths:
+      - '.github/workflows/_apply-v2114-core.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/perceptual-dedup-and-renumber
+      - name: Add perceptual dedup and renumber helpers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('gallery_safety.py')
+          source = path.read_text(encoding='utf-8')
+          anchor = '\n\ndef read_bool_flag(obj: object, attribute: str) -> bool:\n'
+          if anchor not in source:
+              raise SystemExit('read_bool_flag anchor missing')
+          if 'class ImageFingerprint:' in source:
+              raise SystemExit('helpers already present')
+
+          block = r'''
+
+@dataclass(frozen=True)
+class ImageFingerprint:
+    content_hash: str
+    blob_sha: str
+    perceptual_hash: str
+
+
+@dataclass(frozen=True)
+class IndexedImage:
+    path: str
+    content_hash: str = ""
+    blob_sha: str = ""
+    perceptual_hash: str = ""
+
+    @property
+    def number(self) -> int | None:
+        path = _safe_gallery_relative_path(self.path)
+        if path is None or len(path.parts) != 3 or not path.stem.isdigit():
+            return None
+        return int(path.stem)
+
+
+@dataclass(frozen=True)
+class UploadMatch:
+    path: str
+    number: int | None
+    similarity: float
+    distance: int
+
+
+@dataclass(frozen=True)
+class IndexedUploadDecision:
+    allowed: bool
+    reason: str
+    fingerprint: ImageFingerprint
+    exact_match: UploadMatch | None = None
+    similar_matches: tuple[UploadMatch, ...] = ()
+    remote_checked: bool = True
+
+
+@dataclass(frozen=True)
+class RenameStep:
+    source: str
+    target: str
+
+
+def hamming_distance_hex(left: str, right: str) -> int:
+    """Return the bit distance between two equal-width hexadecimal hashes."""
+    left = str(left).strip().lower()
+    right = str(right).strip().lower()
+    if len(left) != len(right) or not left or len(left) != 16:
+        raise ValueError("perceptual hashes must be 16 hexadecimal characters")
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except ValueError as exc:
+        raise ValueError("perceptual hashes must be hexadecimal") from exc
+
+
+def perceptual_hash_from_bytes(content: bytes) -> str:
+    """Compute one deterministic 64-bit dHash from decoded pixels.
+
+    Nearest-neighbour resize and a white alpha background are intentional so the
+    browser implementation can produce the same fingerprint without depending on
+    platform-specific interpolation.
+    """
+    from io import BytesIO
+    from PIL import Image, ImageOps
+
+    with Image.open(BytesIO(content)) as opened:
+        image = ImageOps.exif_transpose(opened).convert("RGBA")
+        background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        background.alpha_composite(image)
+        small = background.convert("RGB").resize((9, 8), Image.Resampling.NEAREST)
+        pixels = list(small.getdata())
+
+    bits = 0
+    for y in range(8):
+        row = pixels[y * 9 : (y + 1) * 9]
+        grays = [(299 * r + 587 * g + 114 * b) // 1000 for r, g, b in row]
+        for x in range(8):
+            bits = (bits << 1) | int(grays[x] > grays[x + 1])
+    return f"{bits:016x}"
+
+
+def compute_image_fingerprint(content: bytes) -> ImageFingerprint:
+    """Compute each upload fingerprint exactly once for downstream checks."""
+    return ImageFingerprint(
+        content_hash=hashlib.sha256(content).hexdigest(),
+        blob_sha=git_blob_sha(content),
+        perceptual_hash=perceptual_hash_from_bytes(content),
+    )
+
+
+def _match_from_record(record: IndexedImage, *, distance: int) -> UploadMatch:
+    return UploadMatch(
+        path=record.path,
+        number=record.number,
+        similarity=max(0.0, 1.0 - distance / 64.0),
+        distance=distance,
+    )
+
+
+def _merge_indexed_records(
+    local_records: Iterable[IndexedImage],
+    remote_records: Iterable[IndexedImage],
+) -> tuple[IndexedImage, ...]:
+    merged: dict[str, IndexedImage] = {}
+    for record in (*tuple(local_records), *tuple(remote_records)):
+        previous = merged.get(record.path)
+        if previous is None:
+            merged[record.path] = record
+            continue
+        merged[record.path] = IndexedImage(
+            path=record.path,
+            content_hash=record.content_hash or previous.content_hash,
+            blob_sha=record.blob_sha or previous.blob_sha,
+            perceptual_hash=record.perceptual_hash or previous.perceptual_hash,
+        )
+    return tuple(merged.values())
+
+
+def evaluate_indexed_upload(
+    fingerprint: ImageFingerprint,
+    *,
+    local_records: Iterable[IndexedImage],
+    remote_records: Iterable[IndexedImage],
+    remote_checked: bool,
+    perceptual_max_distance: int = 6,
+    force_similar: bool = False,
+    similar_limit: int = 3,
+) -> IndexedUploadDecision:
+    """Evaluate one precomputed fingerprint against local and remote indexes.
+
+    Exact duplicates are never bypassable. Perceptual matches can be explicitly
+    forced by the caller, while an unavailable required remote state fails closed.
+    """
+    records = _merge_indexed_records(local_records, remote_records)
+    exact: IndexedImage | None = None
+    for record in records:
+        if record.content_hash and record.content_hash == fingerprint.content_hash:
+            exact = record
+            break
+        if record.blob_sha and record.blob_sha == fingerprint.blob_sha:
+            exact = record
+            break
+    if exact is not None:
+        return IndexedUploadDecision(
+            allowed=False,
+            reason="exact_duplicate",
+            fingerprint=fingerprint,
+            exact_match=_match_from_record(exact, distance=0),
+            remote_checked=remote_checked,
+        )
+
+    if not remote_checked:
+        return IndexedUploadDecision(
+            allowed=False,
+            reason="remote_unavailable",
+            fingerprint=fingerprint,
+            remote_checked=False,
+        )
+
+    candidates: list[UploadMatch] = []
+    for record in records:
+        if not record.perceptual_hash:
+            continue
+        try:
+            distance = hamming_distance_hex(
+                fingerprint.perceptual_hash, record.perceptual_hash
+            )
+        except ValueError:
+            continue
+        if distance <= perceptual_max_distance:
+            candidates.append(_match_from_record(record, distance=distance))
+    candidates.sort(
+        key=lambda match: (
+            match.distance,
+            match.number if match.number is not None else 2**63,
+            match.path,
+        )
+    )
+    matches = tuple(candidates[: max(0, similar_limit)])
+    if matches and not force_similar:
+        return IndexedUploadDecision(
+            allowed=False,
+            reason="similar",
+            fingerprint=fingerprint,
+            similar_matches=matches,
+            remote_checked=True,
+        )
+    return IndexedUploadDecision(
+        allowed=True,
+        reason="forced_similar" if matches else "clean",
+        fingerprint=fingerprint,
+        similar_matches=matches,
+        remote_checked=True,
+    )
+
+
+def indexed_images_from_hash_index(
+    hash_index: Mapping[str, object],
+) -> tuple[IndexedImage, ...]:
+    records: list[IndexedImage] = []
+    for path, raw in hash_index.items():
+        if not isinstance(raw, Mapping):
+            continue
+        records.append(
+            IndexedImage(
+                path=str(path),
+                content_hash=str(raw.get("hash", "")).strip(),
+                blob_sha=str(raw.get("git_blob_sha", "")).strip(),
+                perceptual_hash=str(raw.get("perceptual_hash", "")).strip(),
+            )
+        )
+    return tuple(records)
+
+
+def normalize_perceptual_manifest(payload: object) -> dict[str, str]:
+    if not isinstance(payload, Mapping):
+        return {}
+    files = payload.get("files", {})
+    if not isinstance(files, Mapping):
+        return {}
+    normalized: dict[str, str] = {}
+    for path, raw in files.items():
+        if not isinstance(raw, Mapping):
+            continue
+        phash = str(raw.get("perceptual_hash", "")).strip().lower()
+        if len(phash) != 16:
+            continue
+        try:
+            int(phash, 16)
+        except ValueError:
+            continue
+        normalized[str(path)] = phash
+    return normalized
+
+
+def indexed_images_from_remote_tree(
+    tree: Iterable[Mapping[str, object]],
+    perceptual_manifest: Mapping[str, str],
+    supported_suffixes: set[str],
+) -> tuple[IndexedImage, ...]:
+    records: list[IndexedImage] = []
+    for entry in tree:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        path = _safe_gallery_relative_path(raw_path)
+        if (
+            path is None
+            or len(path.parts) != 3
+            or path.suffix.lower() not in supported_suffixes
+        ):
+            continue
+        records.append(
+            IndexedImage(
+                path=raw_path,
+                blob_sha=str(entry.get("sha", "")).strip(),
+                perceptual_hash=str(perceptual_manifest.get(raw_path, "")).strip(),
+            )
+        )
+    return tuple(records)
+
+
+def build_global_renumber_plan(
+    paths: Iterable[str], supported_suffixes: set[str]
+) -> tuple[RenameStep, ...]:
+    """Build one deterministic global 1..N mapping shared by local and remote."""
+    accepted: list[PurePosixPath] = []
+    for raw in paths:
+        path = _safe_gallery_relative_path(str(raw))
+        if (
+            path is None
+            or len(path.parts) != 3
+            or path.suffix.lower() not in supported_suffixes
+        ):
+            continue
+        accepted.append(path)
+
+    def sort_key(path: PurePosixPath) -> tuple[object, ...]:
+        if path.stem.isdigit():
+            return (0, int(path.stem), path.as_posix())
+        return (1, path.as_posix())
+
+    accepted.sort(key=sort_key)
+    return tuple(
+        RenameStep(
+            source=path.as_posix(),
+            target=(path.parent / f"{index}{path.suffix}").as_posix(),
+        )
+        for index, path in enumerate(accepted, start=1)
+    )
+'''
+          source = source.replace(anchor, block + anchor, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+      - name: Commit helper implementation
+        run: |
+          rm .github/workflows/_apply-v2114-core.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gallery_safety.py .github/workflows/_apply-v2114-core.yml
+          git commit -m "feat: add perceptual dedup and renumber helpers"
+          git push origin HEAD:fix/perceptual-dedup-and-renumber
