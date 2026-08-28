@@ -61,7 +61,7 @@ def test_main_renumber_uses_hierarchical_category_trees_and_reports_stage():
     )[0]
 
     assert "build_renumbered_category_entries" in block
-    assert "base_tree_sha=None" in block
+    assert "_git_create_github_tree_incrementally" in block
     assert '"type": "tree"' in block
     assert "stage" in block
     assert "source_paths - final_targets" not in block
