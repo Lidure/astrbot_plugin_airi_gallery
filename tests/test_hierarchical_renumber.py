@@ -110,3 +110,46 @@ def test_large_category_tree_is_built_incrementally_without_version_bump():
     assert "self._git_create_github_tree_incrementally(list(category_entries))" in renumber
     assert "base_tree_sha=None, entries=list(category_entries)" not in renumber
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+
+
+def test_category_tree_delta_only_mutates_changed_direct_children():
+    tree = [
+        _entry("gallery/airi", "airi-tree", mode="040000", type_="tree"),
+        _entry("gallery/airi/1.jpg", "blob-1"),
+        _entry("gallery/airi/2.jpg", "blob-2"),
+        _entry("gallery/airi/note.txt", "note"),
+        _entry("gallery/airi/meta", "meta-tree", mode="040000", type_="tree"),
+    ]
+    final_entries = (
+        {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": "blob-2"},
+        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-1"},
+        {"path": "meta", "mode": "040000", "type": "tree", "sha": "meta-tree"},
+        {"path": "note.txt", "mode": "100644", "type": "blob", "sha": "note"},
+    )
+
+    deletes, upserts = gallery_safety.build_category_tree_delta_entries(
+        tree, "airi", final_entries
+    )
+
+    assert deletes == (
+        {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": None},
+        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": None},
+    )
+    assert upserts == (
+        {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": "blob-2"},
+        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-1"},
+    )
+
+
+def test_large_categories_mutate_existing_tree_instead_of_rebuilding_from_empty():
+    source = Path("main.py").read_text(encoding="utf-8")
+    renumber = source.split("    def _github_commit_renumber", 1)[1].split(
+        "    def _renumber_gallery_consistently_sync", 1
+    )[0]
+
+    assert "build_category_tree_delta_entries" in source
+    assert "_git_apply_category_tree_delta" in source
+    assert 'tree_shas.get(f"gallery/{category}", "")' in renumber
+    assert "self._git_apply_category_tree_delta(" in renumber
+    assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
