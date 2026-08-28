@@ -74,3 +74,15 @@ def test_fixed_github_tree_snapshot_preserves_full_git_layout_metadata():
     assert '"type": entry.get("type", "")' in block
     assert '"mode": entry.get("mode", "")' in block
     assert 'if entry.get("type") == "blob":' not in block
+
+
+def test_github_tree_creation_retries_transient_gateway_failures_without_version_bump():
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = source.split("    def _git_create_github_tree", 1)[1].split("\n    def ", 1)[0]
+
+    assert "GITHUB_TREE_CREATE_MAX_ATTEMPTS = 3" in source
+    assert "GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}" in source
+    assert "for attempt in range(1, GITHUB_TREE_CREATE_MAX_ATTEMPTS + 1)" in block
+    assert "status not in GITHUB_TREE_CREATE_RETRY_STATUSES" in block
+    assert "time.sleep(" in block
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
