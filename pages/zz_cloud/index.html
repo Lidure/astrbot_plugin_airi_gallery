@@ -694,6 +694,7 @@ let state = {
   treeFetched: false,
   imageCache: {},         // path -> blob URL
   galleryIndex: null,      // gallery_index.json perceptual hashes, lazy-loaded
+  pendingDeletedPaths: new Set(), // successful deletes hidden until remote tree confirms absence
 };
 
 // ──────────────────────────────────────────────
@@ -1290,8 +1291,15 @@ async function syncFromRemote() {
   try {
     const tree = await getTree();
     state.treeFetched = true;
-    state.shaCache = Object.fromEntries(tree.map(entry => [entry.path, entry.sha]));
-    state.categories = parseCategories(tree);
+
+    const remotePaths = new Set(tree.map(entry => entry.path));
+    for (const path of [...state.pendingDeletedPaths]) {
+      if (!remotePaths.has(path)) state.pendingDeletedPaths.delete(path);
+    }
+    const visibleTree = tree.filter(entry => !state.pendingDeletedPaths.has(entry.path));
+
+    state.shaCache = Object.fromEntries(visibleTree.map(entry => [entry.path, entry.sha]));
+    state.categories = parseCategories(visibleTree);
     const totalImages = state.categories.reduce((s, c) => s + c.files.length, 0);
     updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
     renderTabs();
@@ -1346,6 +1354,37 @@ function renderOptions() {
   }
 }
 
+// A successful Git DELETE should be reflected in the UI immediately.
+// Keep a tombstone until a later tree fetch confirms the path is actually gone,
+// so a briefly stale branch tree cannot make the deleted image reappear.
+async function hideDeletedPathImmediately(path) {
+  const cachedUrl = state.imageCache[path];
+  if (cachedUrl) {
+    try { URL.revokeObjectURL(cachedUrl); } catch {}
+    delete state.imageCache[path];
+  }
+  delete state.shaCache[path];
+
+  state.categories = state.categories
+    .map(cat => ({ ...cat, files: cat.files.filter(file => file.path !== path) }))
+    .filter(cat => cat.files.length > 0);
+
+  if (!state.categories.some(cat => cat.name === state.currentCat)) {
+    state.currentCat = state.categories[0]?.name || '';
+    state.currentPage = 1;
+  }
+
+  const current = state.categories.find(cat => cat.name === state.currentCat);
+  const maxPage = Math.max(1, Math.ceil((current?.files.length || 0) / state.perPage));
+  state.currentPage = Math.min(state.currentPage, maxPage);
+
+  const totalImages = state.categories.reduce((sum, cat) => sum + cat.files.length, 0);
+  updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
+  renderTabs();
+  renderOptions();
+  await loadCategoryImages();
+}
+
 // ──────────────────────────────────────────────
 // UI: Grid (load images for current page)
 // ──────────────────────────────────────────────
@@ -1392,6 +1431,8 @@ async function loadCategoryImages() {
       if (!yes) return;
       try {
         await deleteFile(file.path, `Delete ${fileName}`);
+        state.pendingDeletedPaths.add(file.path);
+        await hideDeletedPathImmediately(file.path);
         if (state.galleryIndex && Object.prototype.hasOwnProperty.call(state.galleryIndex, file.path)) {
           delete state.galleryIndex[file.path];
           await saveGalleryIndex(state.galleryIndex);
@@ -1781,6 +1822,7 @@ saveCfgBtn.onclick = () => {
   state.categories = [];
   state.currentCat = '';
   state.galleryIndex = null;
+  state.pendingDeletedPaths.clear();
   state.treeFetched = false;
   syncFromRemote();
 };
