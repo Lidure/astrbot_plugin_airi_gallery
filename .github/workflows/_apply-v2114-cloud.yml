@@ -1,0 +1,35 @@
+name: Apply v2.11.4 cloud dedup
+
+on:
+  push:
+    branches:
+      - "fix/perceptual-dedup-and-renumber"
+    paths:
+      - ".github/workflows/_apply-v2114-cloud.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: "fix/perceptual-dedup-and-renumber"
+      - name: Apply cloud patch
+        run: python .github/scripts/apply_v2114_cloud.py
+      - name: Validate cloud contract
+        run: |
+          grep -q "gallery_index.json" pages/zz_cloud/index.html
+          grep -q "perceptualHash" pages/zz_cloud/index.html
+          grep -q "仍然上传" pages/zz_cloud/index.html
+          grep -q "相似图片" pages/zz_cloud/index.html
+      - name: Commit cloud integration
+        run: |
+          rm .github/scripts/apply_v2114_cloud.py .github/workflows/_apply-v2114-cloud.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pages/zz_cloud/index.html .github/scripts/apply_v2114_cloud.py .github/workflows/_apply-v2114-cloud.yml
+          git commit -m "feat: add cloud perceptual duplicate review"
+          git push origin HEAD:fix/perceptual-dedup-and-renumber
