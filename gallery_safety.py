@@ -86,6 +86,28 @@ class RenameStep:
     target: str
 
 
+@dataclass(frozen=True)
+class GalleryPathDifference:
+    local_only: tuple[str, ...]
+    remote_only: tuple[str, ...]
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.local_only and not self.remote_only
+
+
+def compare_gallery_paths(
+    local_paths: Iterable[str], remote_paths: Iterable[str]
+) -> GalleryPathDifference:
+    """Compare exact repository-relative gallery image paths on both sides."""
+    local = {str(path).replace("\\", "/") for path in local_paths if str(path).strip()}
+    remote = {str(path).replace("\\", "/") for path in remote_paths if str(path).strip()}
+    return GalleryPathDifference(
+        local_only=tuple(sorted(local - remote)),
+        remote_only=tuple(sorted(remote - local)),
+    )
+
+
 def hamming_distance_hex(left: str, right: str) -> int:
     """Return the bit distance between two equal-width hexadecimal hashes."""
     left = str(left).strip().lower()
@@ -531,6 +553,19 @@ def verified_remote_sha(entry: object) -> str | None:
     git_sha = str(entry.get("git_blob_sha", "")).strip()
     remote_sha = str(entry.get("remote_sha", "")).strip()
     return remote_sha if git_sha and git_sha == remote_sha else None
+
+
+def matches_verified_remote_content(
+    content: bytes, entry: object, *, cached_sha: str | None = None
+) -> bool:
+    """Only treat a local file as disposable cache when its bytes still match a proven remote blob."""
+    current_sha = git_blob_sha(content)
+    proven_shas = {
+        sha
+        for sha in (verified_remote_sha(entry), str(cached_sha or "").strip() or None)
+        if sha
+    }
+    return current_sha in proven_shas
 
 
 def _safe_gallery_relative_path(git_path: str) -> PurePosixPath | None:
