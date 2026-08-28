@@ -70,6 +70,7 @@ try:
         RemoteDeleteReport,
         UploadMatch,
         build_global_renumber_plan,
+        build_renumbered_category_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
@@ -104,6 +105,7 @@ except ImportError:
         RemoteDeleteReport,
         UploadMatch,
         build_global_renumber_plan,
+        build_renumbered_category_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
@@ -141,7 +143,7 @@ SIMILAR_UPLOAD_CONFIRM_TTL = 300
 PERCEPTUAL_MAX_DISTANCE = 6
 GALLERY_INDEX_PATH = "gallery/gallery_index.json"
 GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
-CURRENT_PLUGIN_VERSION = "v2.11.6"
+CURRENT_PLUGIN_VERSION = "v2.11.7"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -2233,14 +2235,18 @@ class Main(Star):
         sha = str(data.get("sha", "")).strip()
         return sha or None
 
-    def _git_create_github_tree(self, base_tree_sha: str, entries: list[dict]) -> str | None:
-        """基于当前 tree 创建包含一批文件变更的新 tree。"""
+    def _git_create_github_tree(
+        self, base_tree_sha: str | None, entries: list[dict]
+    ) -> str | None:
+        """创建 GitHub tree；base_tree_sha=None 时从给定直接子项构造完整 tree。"""
         base = self._git_api_base()
         owner = self._git_owner()
         repo = self._git_repo()
         url = f"{base}/repos/{owner}/{repo}/git/trees"
-        body = {"base_tree": base_tree_sha, "tree": entries}
-        status, data = self._git_request("POST", url, json_body=body)
+        body: dict[str, object] = {"tree": entries}
+        if base_tree_sha:
+            body["base_tree"] = base_tree_sha
+        status, data = self._git_request("POST", url, json_body=body, timeout=60)
         if status != 201 or not data:
             logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {status})")
             return None
@@ -4061,50 +4067,90 @@ class Main(Star):
         *,
         expected_head_sha: str,
         base_tree_sha: str,
-    ) -> bool:
-        """Commit one renumber plan only against the HEAD/tree it was planned from."""
+    ) -> dict[str, object]:
+        """Commit a renumber plan with hierarchical trees and one final atomic ref move."""
+        def failure(stage: str, detail: str) -> dict[str, object]:
+            logger.warning(f"[Gallery] GitHub 重编号失败 [{stage}]: {detail}")
+            return {"ok": False, "stage": stage, "error": detail}
+
         if self._git_platform() != "github":
-            return False
+            return failure("platform", "当前远端不是 GitHub")
         current_head = self._git_get_head_commit_and_tree()
         if not current_head or current_head[0] != expected_head_sha:
-            logger.warning("[Gallery] 重编号期间 GitHub 已发生变化，拒绝基于新 HEAD 继续提交。")
-            return False
+            return failure("head_changed", "重编号期间 GitHub HEAD 已发生变化")
 
-        blobs = {
-            str(entry.get("path", "")): str(entry.get("sha", ""))
+        try:
+            category_layouts = build_renumbered_category_entries(tree, plan)
+        except ValueError as exc:
+            return failure("layout", str(exc))
+
+        tree_shas = {
+            str(entry.get("path", "")): str(entry.get("sha", "")).strip()
             for entry in tree
-            if str(entry.get("sha", ""))
+            if str(entry.get("type", "")) == "tree"
+            and str(entry.get("sha", "")).strip()
         }
-        final_targets = {step.target for step in plan}
-        source_paths = {step.source for step in plan}
-        entries: list[dict] = []
-        for step in plan:
-            blob_sha = blobs.get(step.source)
-            if not blob_sha:
-                logger.warning(f"[Gallery] 远程重编号缺少 blob SHA：{step.source}")
-                return False
-            entries.append({"path": step.target, "mode": "100644", "type": "blob", "sha": blob_sha})
-        for old_path in sorted(source_paths - final_targets):
-            entries.append({"path": old_path, "mode": "100644", "type": "blob", "sha": None})
+        gallery_base_tree_sha = tree_shas.get("gallery", "")
+        if not gallery_base_tree_sha:
+            return failure("layout", "远程 tree 中缺少 gallery 目录 SHA")
+
         manifest_sha = self._git_create_github_blob(manifest_payload)
         if not manifest_sha:
-            return False
-        entries.append({"path": GALLERY_INDEX_PATH, "mode": "100644", "type": "blob", "sha": manifest_sha})
+            return failure("manifest_blob", "创建 gallery/gallery_index.json blob 失败")
 
-        tree_sha = self._git_create_github_tree(base_tree_sha, entries)
-        if not tree_sha:
-            return False
+        gallery_entries: list[dict] = []
+        for category, category_entries in category_layouts.items():
+            category_tree_sha = self._git_create_github_tree(
+                base_tree_sha=None, entries=list(category_entries)
+            )
+            if not category_tree_sha:
+                return failure("category_tree", f"创建分类 {category} 的最终 tree 失败")
+            gallery_entries.append(
+                {"path": category, "mode": "040000", "type": "tree", "sha": category_tree_sha}
+            )
+
+        gallery_entries.append(
+            {
+                "path": Path(GALLERY_INDEX_PATH).name,
+                "mode": "100644",
+                "type": "blob",
+                "sha": manifest_sha,
+            }
+        )
+        gallery_tree_sha = self._git_create_github_tree(
+            gallery_base_tree_sha, gallery_entries
+        )
+        if not gallery_tree_sha:
+            return failure("gallery_tree", "创建 gallery 汇总 tree 失败")
+
+        root_tree_sha = self._git_create_github_tree(
+            base_tree_sha,
+            [
+                {
+                    "path": "gallery",
+                    "mode": "040000",
+                    "type": "tree",
+                    "sha": gallery_tree_sha,
+                }
+            ],
+        )
+        if not root_tree_sha:
+            return failure("root_tree", "创建仓库根 tree 失败")
+
         commit_sha = self._git_create_github_commit(
             f"Renumber {len(plan)} gallery images",
-            tree_sha,
+            root_tree_sha,
             expected_head_sha,
         )
         if not commit_sha:
-            return False
-        if self._git_update_github_ref(commit_sha):
-            return True
-        logger.warning("[Gallery] GitHub HEAD 在重编号提交期间发生变化，非快进更新已被拒绝。")
-        return False
+            return failure("commit", "创建 GitHub commit 失败")
+
+        latest_head = self._git_get_head_commit_and_tree()
+        if not latest_head or latest_head[0] != expected_head_sha:
+            return failure("head_changed", "提交对象创建后 GitHub HEAD 已发生变化")
+        if not self._git_update_github_ref(commit_sha):
+            return failure("ref_update", "更新 GitHub 分支引用失败或非快进更新被拒绝")
+        return {"ok": True, "stage": "complete", "commit_sha": commit_sha}
 
     def _renumber_gallery_consistently_sync(self) -> dict:
         self.gallery_root.mkdir(parents=True, exist_ok=True)
@@ -4183,21 +4229,26 @@ class Main(Star):
                 }
 
             staged = self._stage_local_renumber(plan)
-            if not self._github_commit_renumber(
+            commit_result = self._github_commit_renumber(
                 plan,
                 tree,
                 manifest_payload,
                 expected_head_sha=expected_head_sha,
                 base_tree_sha=base_tree_sha,
-            ):
+            )
+            if not commit_result.get("ok"):
                 self._rollback_local_renumber(staged)
-                latest_head = self._git_get_head_commit_and_tree()
-                if latest_head and latest_head[0] != expected_head_sha:
+                stage = str(commit_result.get("stage") or "unknown")
+                detail = str(commit_result.get("error") or "未知错误")
+                if stage == "head_changed":
                     return {
                         "ok": False,
                         "error": "重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。",
                     }
-                return {"ok": False, "error": "GitHub 重编号提交失败，本地临时改名已回滚。"}
+                return {
+                    "ok": False,
+                    "error": f"GitHub 重编号提交失败（{stage}）：{detail}；本地临时改名已回滚。",
+                }
             try:
                 self._finish_local_renumber(staged)
             except Exception as exc:

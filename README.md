@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.6-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.7-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -334,6 +334,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.7
+
+- 修复大图库执行 `/导入图库` 时 GitHub 重编号提交可能失败的问题：按分类构造最终 tree，再逐层更新 `gallery` / 根 tree，避免一次提交巨量“新增 + 删除”路径。
+- 保持固定 HEAD 与单次 ref 更新，远端重编号仍然是原子提交；任一步失败继续回滚本地临时改名。
+- 重编号失败现在会提示具体阶段（分类 tree、gallery tree、根 tree、commit、ref 等），便于直接定位。
+
 ### v2.11.6
 
 - 修复 `/立即同步` 只依赖进程内 `_sha_cache` 判断远端删除，导致重启或旧索引后本地残留无法清理、`/导入图库` 永久提示双端集合不一致的问题。

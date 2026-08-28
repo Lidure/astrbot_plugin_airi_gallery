@@ -357,6 +357,90 @@ def build_global_renumber_plan(
     )
 
 
+def build_renumbered_category_entries(
+    tree: Iterable[Mapping[str, object]],
+    plan: Iterable[RenameStep],
+) -> dict[str, tuple[dict[str, str], ...]]:
+    """Build compact final immediate-child trees for categories changed by renumbering.
+
+    Each returned entry uses a filename relative to its category tree. Old image names
+    are omitted entirely, so GitHub does not need one giant add/delete root-tree payload.
+    Non-image direct children are preserved.
+    """
+    mapping: dict[str, str] = {}
+    changed_categories: set[str] = set()
+    for step in plan:
+        source = _safe_gallery_relative_path(str(step.source))
+        target = _safe_gallery_relative_path(str(step.target))
+        if source is None or target is None or len(source.parts) != 3 or len(target.parts) != 3:
+            raise ValueError("renumber paths must be direct gallery/category/files")
+        if source.parts[1] != target.parts[1]:
+            raise ValueError("renumber category must remain unchanged")
+        source_key = source.as_posix()
+        target_key = target.as_posix()
+        mapping[source_key] = target_key
+        if source_key != target_key:
+            changed_categories.add(source.parts[1])
+
+    if not changed_categories:
+        return {}
+
+    layouts: dict[str, list[dict[str, str]]] = {
+        category: [] for category in changed_categories
+    }
+    seen_names: dict[str, set[str]] = {category: set() for category in changed_categories}
+    seen_sources: set[str] = set()
+
+    for entry in tree:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        path = _safe_gallery_relative_path(raw_path)
+        if path is None or len(path.parts) != 3:
+            continue
+        category = path.parts[1]
+        if category not in changed_categories:
+            continue
+
+        source_key = path.as_posix()
+        target_key = mapping.get(source_key, source_key)
+        target = _safe_gallery_relative_path(target_key)
+        if target is None or len(target.parts) != 3 or target.parts[1] != category:
+            raise ValueError("renumber category layout contains an invalid target")
+        if source_key in mapping:
+            seen_sources.add(source_key)
+
+        sha = str(entry.get("sha", "")).strip()
+        entry_type = str(entry.get("type", "")).strip()
+        mode = str(entry.get("mode", "")).strip()
+        if not sha or entry_type not in {"blob", "tree"}:
+            raise ValueError(f"renumber category entry is incomplete: {source_key}")
+        if not mode:
+            mode = "040000" if entry_type == "tree" else "100644"
+
+        final_name = target.parts[2]
+        if final_name in seen_names[category]:
+            raise ValueError(f"renumber category target collision: {category}/{final_name}")
+        seen_names[category].add(final_name)
+        layouts[category].append(
+            {"path": final_name, "mode": mode, "type": entry_type, "sha": sha}
+        )
+
+    required_sources = {
+        source
+        for source in mapping
+        if source.split("/", 2)[1] in changed_categories
+    }
+    missing = sorted(required_sources - seen_sources)
+    if missing:
+        raise ValueError(f"renumber category source is missing from remote tree: {missing[0]}")
+
+    return {
+        category: tuple(sorted(entries, key=lambda item: item["path"]))
+        for category, entries in sorted(layouts.items())
+    }
+
+
 def read_bool_flag(obj: object, attribute: str) -> bool:
     try:
         value = getattr(obj, attribute, False)
