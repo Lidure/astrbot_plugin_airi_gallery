@@ -1,0 +1,36 @@
+name: Apply v2.11.4 local WebUI
+
+on:
+  push:
+    branches:
+      - "fix/perceptual-dedup-and-renumber"
+    paths:
+      - ".github/workflows/_apply-v2114-local-webui.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: "fix/perceptual-dedup-and-renumber"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Apply patch
+        run: python .github/scripts/apply_v2114_local_webui.py
+      - name: Syntax checks
+        run: |
+          python -m py_compile gallery_safety.py main.py
+          node --check pages/gallery/app.js
+      - name: Commit local WebUI integration
+        run: |
+          rm .github/scripts/apply_v2114_local_webui.py .github/workflows/_apply-v2114-local-webui.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gallery_safety.py main.py pages/gallery/app.js tests/test_gallery_safety.py .github/scripts/apply_v2114_local_webui.py .github/workflows/_apply-v2114-local-webui.yml
+          git commit -m "feat: add local WebUI similarity confirmation"
+          git push origin HEAD:fix/perceptual-dedup-and-renumber
