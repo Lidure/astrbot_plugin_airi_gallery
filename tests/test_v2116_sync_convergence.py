@@ -15,6 +15,19 @@ def test_path_difference_reports_both_sides_deterministically():
     assert not diff.is_clean
 
 
+def test_remote_deleted_cleanup_requires_current_local_bytes_to_match_verified_remote_sha():
+    assert hasattr(gallery_safety, "matches_verified_remote_content")
+    original = b"remote-original"
+    changed = b"locally-modified"
+    sha = gallery_safety.git_blob_sha(original)
+    verified_entry = {"git_blob_sha": sha, "remote_sha": sha}
+
+    assert gallery_safety.matches_verified_remote_content(original, verified_entry)
+    assert not gallery_safety.matches_verified_remote_content(changed, verified_entry)
+    assert gallery_safety.matches_verified_remote_content(original, {}, cached_sha=sha)
+    assert not gallery_safety.matches_verified_remote_content(changed, {}, cached_sha=sha)
+
+
 def test_sync_uses_real_disk_paths_and_converges_to_remote_paths():
     source = Path("main.py").read_text(encoding="utf-8")
     sync = source.split("    def _git_sync_from_remote", 1)[1].split(
@@ -24,6 +37,7 @@ def test_sync_uses_real_disk_paths_and_converges_to_remote_paths():
     assert "compare_gallery_paths" in sync
     assert "self._iter_image_files()" in sync
     assert "path_diff.local_only" in sync
+    assert "matches_verified_remote_content" in sync
     assert "local_path.unlink()" in sync
     # Pull-sync is a remote-authoritative mirror. A remote path must not be
     # skipped merely because identical bytes exist under a different local path.
