@@ -35,3 +35,4 @@ jobs:
           git add main.py tests/test_hierarchical_renumber.py .github/scripts/apply_incremental_category_tree_fix.py .github/workflows/_apply-incremental-category-tree-fix.yml
           git commit -m 'fix: build large category trees incrementally'
           git push origin HEAD:fix/incremental-large-category-tree
+# rerun after aligning legacy hierarchical test
