@@ -8,12 +8,14 @@ def _main_source() -> str:
 def test_tree_404_is_only_retryable_after_base_tree_verification():
     source = _main_source()
     create_block = source.split("    def _git_create_github_tree", 1)[1].split("\n    def ", 1)[0]
+    verify_block = source.split("    def _git_verify_github_tree_exists", 1)[1].split("\n    def ", 1)[0]
 
     assert "def _git_verify_github_tree_exists" in source
     assert "status == 404" in create_block
     assert "base_tree_sha" in create_block
     assert "self._git_verify_github_tree_exists(base_tree_sha)" in create_block
     assert "verified_404" in create_block
+    assert "disable_on_auth_failure=False" in verify_block
     assert "404" not in next(
         line for line in source.splitlines()
         if line.startswith("GITHUB_TREE_CREATE_RETRY_STATUSES = ")
