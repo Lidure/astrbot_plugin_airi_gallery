@@ -71,6 +71,7 @@ try:
         UploadMatch,
         build_global_renumber_plan,
         build_renumbered_category_entries,
+        build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
@@ -106,6 +107,7 @@ except ImportError:
         UploadMatch,
         build_global_renumber_plan,
         build_renumbered_category_entries,
+        build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
@@ -147,6 +149,7 @@ GITHUB_TREE_CREATE_MAX_ATTEMPTS = 3
 GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
+GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
 CURRENT_PLUGIN_VERSION = "v2.11.8"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
@@ -2293,6 +2296,22 @@ class Main(Star):
             return current_tree_sha
         return self._git_create_github_tree(None, [])
 
+    def _git_apply_category_tree_delta(
+        self,
+        base_tree_sha: str,
+        deletes: tuple[dict[str, object], ...],
+        upserts: tuple[dict[str, object], ...],
+    ) -> str | None:
+        """在现有分类 tree 上分块删除旧路径，再分块写入最终路径。"""
+        current_tree_sha = base_tree_sha
+        for entries in (deletes, upserts):
+            for start in range(0, len(entries), GITHUB_TREE_MUTATION_CHUNK_SIZE):
+                chunk = list(entries[start : start + GITHUB_TREE_MUTATION_CHUNK_SIZE])
+                current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)
+                if not current_tree_sha:
+                    return None
+        return current_tree_sha
+
     def _git_create_github_commit(self, message: str, tree_sha: str, parent_sha: str) -> str | None:
         """创建 GitHub commit，返回 commit SHA。"""
         base = self._git_api_base()
@@ -4140,7 +4159,18 @@ class Main(Star):
 
         gallery_entries: list[dict] = []
         for category, category_entries in category_layouts.items():
-            category_tree_sha = self._git_create_github_tree_incrementally(list(category_entries))
+            category_base_tree_sha = tree_shas.get(f"gallery/{category}", "")
+            if not category_base_tree_sha:
+                return failure("layout", f"远程 tree 中缺少分类 {category} 的目录 SHA")
+            try:
+                deletes, upserts = build_category_tree_delta_entries(
+                    tree, category, category_entries
+                )
+            except ValueError as exc:
+                return failure("layout", str(exc))
+            category_tree_sha = self._git_apply_category_tree_delta(
+                category_base_tree_sha, deletes, upserts
+            )
             if not category_tree_sha:
                 return failure("category_tree", f"创建分类 {category} 的最终 tree 失败")
             gallery_entries.append(
