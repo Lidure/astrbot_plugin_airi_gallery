@@ -146,6 +146,7 @@ GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
 GITHUB_TREE_CREATE_MAX_ATTEMPTS = 3
 GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
+GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 CURRENT_PLUGIN_VERSION = "v2.11.8"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
@@ -2280,6 +2281,18 @@ class Main(Star):
         logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {last_status})")
         return None
 
+    def _git_create_github_tree_incrementally(self, entries: list[dict]) -> str | None:
+        """从空 tree 开始分块追加直接子项，避免大分类单次 tree 请求超时。"""
+        current_tree_sha: str | None = None
+        for start in range(0, len(entries), GITHUB_TREE_CREATE_CHUNK_SIZE):
+            chunk = entries[start : start + GITHUB_TREE_CREATE_CHUNK_SIZE]
+            current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)
+            if not current_tree_sha:
+                return None
+        if current_tree_sha:
+            return current_tree_sha
+        return self._git_create_github_tree(None, [])
+
     def _git_create_github_commit(self, message: str, tree_sha: str, parent_sha: str) -> str | None:
         """创建 GitHub commit，返回 commit SHA。"""
         base = self._git_api_base()
@@ -4127,9 +4140,7 @@ class Main(Star):
 
         gallery_entries: list[dict] = []
         for category, category_entries in category_layouts.items():
-            category_tree_sha = self._git_create_github_tree(
-                base_tree_sha=None, entries=list(category_entries)
-            )
+            category_tree_sha = self._git_create_github_tree_incrementally(list(category_entries))
             if not category_tree_sha:
                 return failure("category_tree", f"创建分类 {category} 的最终 tree 失败")
             gallery_entries.append(
