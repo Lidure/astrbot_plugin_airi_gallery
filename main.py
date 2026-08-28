@@ -1864,6 +1864,31 @@ class Main(Star):
                 })
         return result
 
+    def _git_list_tree_at(self, tree_sha: str) -> list[dict] | None:
+        """Read one immutable GitHub tree snapshot by SHA for destructive operations."""
+        if self._git_platform() != "github" or not str(tree_sha).strip():
+            return None
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/trees/{str(tree_sha).strip()}"
+        status, data = self._git_request("GET", url, params={"recursive": "1"})
+        if status != 200 or not data:
+            logger.warning(f"[Gallery] 获取固定 GitHub tree 失败 (HTTP {status})")
+            return None
+        if data.get("truncated"):
+            logger.warning("[Gallery] 固定 GitHub tree 被截断，为避免误重编号，本次中止。")
+            return None
+        result = []
+        for entry in data.get("tree", []):
+            if entry.get("type") == "blob":
+                result.append({
+                    "path": entry["path"],
+                    "sha": entry.get("sha", ""),
+                    "size": entry.get("size", 0),
+                })
+        return result
+
     def _ensure_perceptual_index(self) -> None:
         """Fill missing perceptual hashes once and persist them in hash_index.json."""
         changed = False
@@ -3948,9 +3973,18 @@ class Main(Star):
         plan: tuple[RenameStep, ...],
         tree: list[dict],
         manifest_payload: bytes,
+        *,
+        expected_head_sha: str,
+        base_tree_sha: str,
     ) -> bool:
+        """Commit one renumber plan only against the HEAD/tree it was planned from."""
         if self._git_platform() != "github":
             return False
+        current_head = self._git_get_head_commit_and_tree()
+        if not current_head or current_head[0] != expected_head_sha:
+            logger.warning("[Gallery] 重编号期间 GitHub 已发生变化，拒绝基于新 HEAD 继续提交。")
+            return False
+
         blobs = {
             str(entry.get("path", "")): str(entry.get("sha", ""))
             for entry in tree
@@ -3972,23 +4006,19 @@ class Main(Star):
             return False
         entries.append({"path": GALLERY_INDEX_PATH, "mode": "100644", "type": "blob", "sha": manifest_sha})
 
-        for attempt in range(2):
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return False
-            parent_sha, base_tree_sha = head
-            tree_sha = self._git_create_github_tree(base_tree_sha, entries)
-            if not tree_sha:
-                return False
-            commit_sha = self._git_create_github_commit(
-                f"Renumber {len(plan)} gallery images",
-                tree_sha,
-                parent_sha,
-            )
-            if commit_sha and self._git_update_github_ref(commit_sha):
-                return True
-            if attempt == 0:
-                logger.info("[Gallery] 重编号 ref 冲突，刷新 HEAD 后重试一次。")
+        tree_sha = self._git_create_github_tree(base_tree_sha, entries)
+        if not tree_sha:
+            return False
+        commit_sha = self._git_create_github_commit(
+            f"Renumber {len(plan)} gallery images",
+            tree_sha,
+            expected_head_sha,
+        )
+        if not commit_sha:
+            return False
+        if self._git_update_github_ref(commit_sha):
+            return True
+        logger.warning("[Gallery] GitHub HEAD 在重编号提交期间发生变化，非快进更新已被拒绝。")
         return False
 
     def _renumber_gallery_consistently_sync(self) -> dict:
@@ -4012,7 +4042,11 @@ class Main(Star):
         if not self._sync_lock.acquire(blocking=False):
             return {"ok": False, "error": "已有同步任务正在运行，本次未执行重编号。"}
         try:
-            tree = self._git_list_tree()
+            head = self._git_get_head_commit_and_tree()
+            if not head:
+                return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
+            expected_head_sha, base_tree_sha = head
+            tree = self._git_list_tree_at(base_tree_sha)
             if tree is None:
                 return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
             remote_paths = sorted(
@@ -4050,9 +4084,28 @@ class Main(Star):
                 sort_keys=True,
             ).encode("utf-8")
 
+            current_head = self._git_get_head_commit_and_tree()
+            if not current_head or current_head[0] != expected_head_sha:
+                return {
+                    "ok": False,
+                    "error": "重编号期间 GitHub 已发生变化，本次没有改写任何本地编号，请重新执行 /导入图库。",
+                }
+
             staged = self._stage_local_renumber(plan)
-            if not self._github_commit_renumber(plan, tree, manifest_payload):
+            if not self._github_commit_renumber(
+                plan,
+                tree,
+                manifest_payload,
+                expected_head_sha=expected_head_sha,
+                base_tree_sha=base_tree_sha,
+            ):
                 self._rollback_local_renumber(staged)
+                latest_head = self._git_get_head_commit_and_tree()
+                if latest_head and latest_head[0] != expected_head_sha:
+                    return {
+                        "ok": False,
+                        "error": "重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。",
+                    }
                 return {"ok": False, "error": "GitHub 重编号提交失败，本地临时改名已回滚。"}
             try:
                 self._finish_local_renumber(staged)
