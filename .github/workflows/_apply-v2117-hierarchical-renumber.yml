@@ -1,0 +1,96 @@
+name: Apply v2.11.7 hierarchical renumber fix
+
+on:
+  push:
+    branches:
+      - fix/hierarchical-renumber-commit
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/hierarchical-renumber-commit
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply implementation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          safety_path = Path('gallery_safety.py')
+          safety = safety_path.read_text(encoding='utf-8')
+          marker = '\n\ndef read_bool_flag(obj: object, attribute: str) -> bool:\n'
+          helper = '''\n\ndef build_renumbered_category_entries(\n    tree: Iterable[Mapping[str, object]],\n    plan: Iterable[RenameStep],\n) -> dict[str, tuple[dict[str, str], ...]]:\n    \"\"\"Build compact final immediate-child trees for categories changed by renumbering.\n\n    Each returned entry uses a filename relative to its category tree. Old image names\n    are omitted entirely, so GitHub does not need one giant add/delete root-tree payload.\n    Non-image direct children are preserved.\n    \"\"\"\n    mapping: dict[str, str] = {}\n    changed_categories: set[str] = set()\n    for step in plan:\n        source = _safe_gallery_relative_path(str(step.source))\n        target = _safe_gallery_relative_path(str(step.target))\n        if source is None or target is None or len(source.parts) != 3 or len(target.parts) != 3:\n            raise ValueError(\"renumber paths must be direct gallery/category/files\")\n        if source.parts[1] != target.parts[1]:\n            raise ValueError(\"renumber category must remain unchanged\")\n        source_key = source.as_posix()\n        target_key = target.as_posix()\n        mapping[source_key] = target_key\n        if source_key != target_key:\n            changed_categories.add(source.parts[1])\n\n    if not changed_categories:\n        return {}\n\n    layouts: dict[str, list[dict[str, str]]] = {\n        category: [] for category in changed_categories\n    }\n    seen_names: dict[str, set[str]] = {category: set() for category in changed_categories}\n    seen_sources: set[str] = set()\n\n    for entry in tree:\n        raw_path = entry.get(\"path\")\n        if not isinstance(raw_path, str):\n            continue\n        path = _safe_gallery_relative_path(raw_path)\n        if path is None or len(path.parts) != 3:\n            continue\n        category = path.parts[1]\n        if category not in changed_categories:\n            continue\n\n        source_key = path.as_posix()\n        target_key = mapping.get(source_key, source_key)\n        target = _safe_gallery_relative_path(target_key)\n        if target is None or len(target.parts) != 3 or target.parts[1] != category:\n            raise ValueError(\"renumber category layout contains an invalid target\")\n        if source_key in mapping:\n            seen_sources.add(source_key)\n\n        sha = str(entry.get(\"sha\", \"\")).strip()\n        entry_type = str(entry.get(\"type\", \"\")).strip()\n        mode = str(entry.get(\"mode\", \"\")).strip()\n        if not sha or entry_type not in {\"blob\", \"tree\"}:\n            raise ValueError(f\"renumber category entry is incomplete: {source_key}\")\n        if not mode:\n            mode = \"040000\" if entry_type == \"tree\" else \"100644\"\n\n        final_name = target.parts[2]\n        if final_name in seen_names[category]:\n            raise ValueError(f\"renumber category target collision: {category}/{final_name}\")\n        seen_names[category].add(final_name)\n        layouts[category].append(\n            {\"path\": final_name, \"mode\": mode, \"type\": entry_type, \"sha\": sha}\n        )\n\n    required_sources = {\n        source\n        for source, target in mapping.items()\n        if source.split(\"/\", 2)[1] in changed_categories\n    }\n    missing = sorted(required_sources - seen_sources)\n    if missing:\n        raise ValueError(f\"renumber category source is missing from remote tree: {missing[0]}\")\n\n    return {\n        category: tuple(sorted(entries, key=lambda item: item[\"path\"]))\n        for category, entries in sorted(layouts.items())\n    }\n'''
+          safety = replace_once(safety, marker, helper + marker, 'gallery_safety helper insertion')
+          safety_path.write_text(safety, encoding='utf-8')
+
+          main_path = Path('main.py')
+          main = main_path.read_text(encoding='utf-8')
+          main = main.replace('        build_global_renumber_plan,\n', '        build_global_renumber_plan,\n        build_renumbered_category_entries,\n')
+          if main.count('build_renumbered_category_entries,') != 2:
+              raise SystemExit('main imports: expected two helper imports')
+          main = replace_once(main, 'CURRENT_PLUGIN_VERSION = "v2.11.6"', 'CURRENT_PLUGIN_VERSION = "v2.11.7"', 'main version')
+
+          old_tree = '''    def _git_create_github_tree(self, base_tree_sha: str, entries: list[dict]) -> str | None:\n        \"\"\"基于当前 tree 创建包含一批文件变更的新 tree。\"\"\"\n        base = self._git_api_base()\n        owner = self._git_owner()\n        repo = self._git_repo()\n        url = f\"{base}/repos/{owner}/{repo}/git/trees\"\n        body = {\"base_tree\": base_tree_sha, \"tree\": entries}\n        status, data = self._git_request(\"POST\", url, json_body=body)\n        if status != 201 or not data:\n            logger.warning(f\"[Git Sync] 创建 GitHub tree 失败 (HTTP {status})\")\n            return None\n        sha = str(data.get(\"sha\", \"\")).strip()\n        return sha or None\n'''
+          new_tree = '''    def _git_create_github_tree(\n        self, base_tree_sha: str | None, entries: list[dict]\n    ) -> str | None:\n        \"\"\"创建 GitHub tree；base_tree_sha=None 时从给定直接子项构造完整 tree。\"\"\"\n        base = self._git_api_base()\n        owner = self._git_owner()\n        repo = self._git_repo()\n        url = f\"{base}/repos/{owner}/{repo}/git/trees\"\n        body: dict[str, object] = {\"tree\": entries}\n        if base_tree_sha:\n            body[\"base_tree\"] = base_tree_sha\n        status, data = self._git_request(\"POST\", url, json_body=body, timeout=60)\n        if status != 201 or not data:\n            logger.warning(f\"[Git Sync] 创建 GitHub tree 失败 (HTTP {status})\")\n            return None\n        sha = str(data.get(\"sha\", \"\")).strip()\n        return sha or None\n'''
+          main = replace_once(main, old_tree, new_tree, 'tree helper')
+
+          start = main.index('    def _github_commit_renumber(')
+          end = main.index('    def _renumber_gallery_consistently_sync', start)
+          new_commit = '''    def _github_commit_renumber(\n        self,\n        plan: tuple[RenameStep, ...],\n        tree: list[dict],\n        manifest_payload: bytes,\n        *,\n        expected_head_sha: str,\n        base_tree_sha: str,\n    ) -> dict[str, object]:\n        \"\"\"Commit a renumber plan with hierarchical trees and one final atomic ref move.\"\"\"\n        def failure(stage: str, detail: str) -> dict[str, object]:\n            logger.warning(f\"[Gallery] GitHub 重编号失败 [{stage}]: {detail}\")\n            return {\"ok\": False, \"stage\": stage, \"error\": detail}\n\n        if self._git_platform() != \"github\":\n            return failure(\"platform\", \"当前远端不是 GitHub\")\n        current_head = self._git_get_head_commit_and_tree()\n        if not current_head or current_head[0] != expected_head_sha:\n            return failure(\"head_changed\", \"重编号期间 GitHub HEAD 已发生变化\")\n\n        try:\n            category_layouts = build_renumbered_category_entries(tree, plan)\n        except ValueError as exc:\n            return failure(\"layout\", str(exc))\n\n        tree_shas = {\n            str(entry.get(\"path\", \"\")): str(entry.get(\"sha\", \"\")).strip()\n            for entry in tree\n            if str(entry.get(\"type\", \"\")) == \"tree\" and str(entry.get(\"sha\", \"\")).strip()\n        }\n        gallery_base_tree_sha = tree_shas.get(\"gallery\", \"\")\n        if not gallery_base_tree_sha:\n            return failure(\"layout\", \"远程 tree 中缺少 gallery 目录 SHA\")\n\n        manifest_sha = self._git_create_github_blob(manifest_payload)\n        if not manifest_sha:\n            return failure(\"manifest_blob\", \"创建 gallery/gallery_index.json blob 失败\")\n\n        gallery_entries: list[dict] = []\n        for category, category_entries in category_layouts.items():\n            category_tree_sha = self._git_create_github_tree(\n                base_tree_sha=None, entries=list(category_entries)\n            )\n            if not category_tree_sha:\n                return failure(\"category_tree\", f\"创建分类 {category} 的最终 tree 失败\")\n            gallery_entries.append(\n                {\"path\": category, \"mode\": \"040000\", \"type\": \"tree\", \"sha\": category_tree_sha}\n            )\n\n        gallery_entries.append(\n            {\"path\": Path(GALLERY_INDEX_PATH).name, \"mode\": \"100644\", \"type\": \"blob\", \"sha\": manifest_sha}\n        )\n        gallery_tree_sha = self._git_create_github_tree(\n            gallery_base_tree_sha, gallery_entries\n        )\n        if not gallery_tree_sha:\n            return failure(\"gallery_tree\", \"创建 gallery 汇总 tree 失败\")\n\n        root_tree_sha = self._git_create_github_tree(\n            base_tree_sha,\n            [{\"path\": \"gallery\", \"mode\": \"040000\", \"type\": \"tree\", \"sha\": gallery_tree_sha}],\n        )\n        if not root_tree_sha:\n            return failure(\"root_tree\", \"创建仓库根 tree 失败\")\n\n        commit_sha = self._git_create_github_commit(\n            f\"Renumber {len(plan)} gallery images\",\n            root_tree_sha,\n            expected_head_sha,\n        )\n        if not commit_sha:\n            return failure(\"commit\", \"创建 GitHub commit 失败\")\n\n        latest_head = self._git_get_head_commit_and_tree()\n        if not latest_head or latest_head[0] != expected_head_sha:\n            return failure(\"head_changed\", \"提交对象创建后 GitHub HEAD 已发生变化\")\n        if not self._git_update_github_ref(commit_sha):\n            return failure(\"ref_update\", \"更新 GitHub 分支引用失败或非快进更新被拒绝\")\n        return {\"ok\": True, \"stage\": \"complete\", \"commit_sha\": commit_sha}\n\n'''
+          main = main[:start] + new_commit + main[end:]
+
+          caller_start = main.index('            staged = self._stage_local_renumber(plan)', main.index('    def _renumber_gallery_consistently_sync'))
+          caller_end = main.index('            try:\n                self._finish_local_renumber(staged)', caller_start)
+          caller = '''            staged = self._stage_local_renumber(plan)\n            commit_result = self._github_commit_renumber(\n                plan,\n                tree,\n                manifest_payload,\n                expected_head_sha=expected_head_sha,\n                base_tree_sha=base_tree_sha,\n            )\n            if not commit_result.get(\"ok\"):\n                self._rollback_local_renumber(staged)\n                stage = str(commit_result.get(\"stage\") or \"unknown\")\n                detail = str(commit_result.get(\"error\") or \"未知错误\")\n                if stage == \"head_changed\":\n                    return {\n                        \"ok\": False,\n                        \"error\": \"重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。\",\n                    }\n                return {\n                    \"ok\": False,\n                    \"error\": f\"GitHub 重编号提交失败（{stage}）：{detail}；本地临时改名已回滚。\",\n                }\n'''
+          main = main[:caller_start] + caller + main[caller_end:]
+          main_path.write_text(main, encoding='utf-8')
+
+          metadata_path = Path('metadata.yaml')
+          metadata = metadata_path.read_text(encoding='utf-8')
+          metadata = replace_once(metadata, 'version: v2.11.6', 'version: v2.11.7', 'metadata version')
+          metadata_path.write_text(metadata, encoding='utf-8')
+
+          contract_path = Path('tests/test_repository_contract.py')
+          contract = contract_path.read_text(encoding='utf-8')
+          contract = contract.replace('test_release_version_is_2_11_6_everywhere', 'test_release_version_is_2_11_7_everywhere')
+          contract = contract.replace('v2.11.6', 'v2.11.7')
+          contract_path.write_text(contract, encoding='utf-8')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          readme = replace_once(readme, 'Version-v2.11.6-pink', 'Version-v2.11.7-pink', 'README badge')
+          changelog_marker = '### v2.11.6\n'
+          new_changelog = '''### v2.11.7\n\n- 修复大图库执行 `/导入图库` 时 GitHub 重编号提交可能失败的问题：按分类构造最终 tree，再逐层更新 `gallery` / 根 tree，避免一次提交巨量“新增 + 删除”路径。\n- 保持固定 HEAD 与单次 ref 更新，远端重编号仍然是原子提交；任一步失败继续回滚本地临时改名。\n- 重编号失败现在会提示具体阶段（分类 tree、gallery tree、根 tree、commit、ref 等），便于直接定位。\n\n'''
+          readme = replace_once(readme, changelog_marker, new_changelog + changelog_marker, 'README changelog')
+          readme_path.write_text(readme, encoding='utf-8')
+          PY
+      - name: Verify focused regression
+        run: |
+          python -m pip install -r requirements.txt pytest pyyaml quart
+          python -m pytest tests/test_hierarchical_renumber.py tests/test_repository_contract.py -v
+          python -m py_compile main.py gallery_safety.py
+      - name: Remove temporary workflow
+        run: rm .github/workflows/_apply-v2117-hierarchical-renumber.yml
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: build hierarchical trees for gallery renumber'
+          git push origin HEAD:fix/hierarchical-renumber-commit
