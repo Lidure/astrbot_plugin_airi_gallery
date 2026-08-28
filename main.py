@@ -2344,12 +2344,12 @@ class Main(Star):
         deletes: tuple[dict[str, object], ...],
         upserts: tuple[dict[str, object], ...],
     ) -> str | None:
-        """在现有分类 tree 上分块删除旧路径，再分块写入最终路径。"""
+        """在现有分类 tree 上先写入最终路径，再分块删除真正废弃的旧路径。"""
         current_tree_sha = base_tree_sha
-        phase_name = "delete"
-        for entries in (deletes, upserts):
-            if entries is upserts:
-                phase_name = "upsert"
+        phase_name = "upsert"
+        for entries in (upserts, deletes):
+            if entries is deletes:
+                phase_name = "delete"
             total_batches = (
                 len(entries) + GITHUB_TREE_MUTATION_CHUNK_SIZE - 1
             ) // GITHUB_TREE_MUTATION_CHUNK_SIZE
