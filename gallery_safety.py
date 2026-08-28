@@ -441,6 +441,75 @@ def build_renumbered_category_entries(
     }
 
 
+def build_category_tree_delta_entries(
+    tree: Iterable[Mapping[str, object]],
+    category: str,
+    final_entries: Iterable[Mapping[str, object]],
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+    """Return delete/upsert mutations needed to reach one category's final tree.
+
+    Unchanged direct children are omitted so large categories can reuse their existing
+    Git tree instead of being rebuilt from an empty tree.
+    """
+    category = str(category).strip()
+    if not category or "/" in category:
+        raise ValueError("category tree delta requires one direct category name")
+
+    original: dict[str, dict[str, object]] = {}
+    for entry in tree:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        path = _safe_gallery_relative_path(raw_path)
+        if path is None or len(path.parts) != 3 or path.parts[1] != category:
+            continue
+        sha = str(entry.get("sha", "")).strip()
+        entry_type = str(entry.get("type", "")).strip()
+        mode = str(entry.get("mode", "")).strip()
+        if not sha or entry_type not in {"blob", "tree"}:
+            raise ValueError(f"category tree entry is incomplete: {path.as_posix()}")
+        if not mode:
+            mode = "040000" if entry_type == "tree" else "100644"
+        original[path.parts[2]] = {
+            "path": path.parts[2],
+            "mode": mode,
+            "type": entry_type,
+            "sha": sha,
+        }
+
+    final: dict[str, dict[str, object]] = {}
+    for entry in final_entries:
+        name = str(entry.get("path", "")).strip()
+        sha = str(entry.get("sha", "")).strip()
+        entry_type = str(entry.get("type", "")).strip()
+        mode = str(entry.get("mode", "")).strip()
+        if not name or "/" in name or not sha or entry_type not in {"blob", "tree"}:
+            raise ValueError(f"category final tree entry is incomplete: {category}/{name}")
+        if not mode:
+            mode = "040000" if entry_type == "tree" else "100644"
+        final[name] = {"path": name, "mode": mode, "type": entry_type, "sha": sha}
+
+    deletes: list[dict[str, object]] = []
+    upserts: list[dict[str, object]] = []
+    for name in sorted(set(original) | set(final)):
+        before = original.get(name)
+        after = final.get(name)
+        if before == after:
+            continue
+        if before is not None:
+            deletes.append(
+                {
+                    "path": name,
+                    "mode": before["mode"],
+                    "type": before["type"],
+                    "sha": None,
+                }
+            )
+        if after is not None:
+            upserts.append(dict(after))
+    return tuple(deletes), tuple(upserts)
+
+
 def read_bool_flag(obj: object, attribute: str) -> bool:
     try:
         value = getattr(obj, attribute, False)

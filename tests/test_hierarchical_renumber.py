@@ -61,7 +61,7 @@ def test_main_renumber_uses_hierarchical_category_trees_and_reports_stage():
     )[0]
 
     assert "build_renumbered_category_entries" in block
-    assert "_git_create_github_tree_incrementally" in block
+    assert "_git_apply_category_tree_delta" in block
     assert '"type": "tree"' in block
     assert "stage" in block
     assert "source_paths - final_targets" not in block
@@ -95,20 +95,20 @@ def test_github_tree_creation_retries_transient_gateway_failures_without_version
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
 
 
-def test_large_category_tree_is_built_incrementally_without_version_bump():
+def test_large_category_tree_mutations_are_chunked_without_version_bump():
     source = Path("main.py").read_text(encoding="utf-8")
-    helper = source.split("    def _git_create_github_tree_incrementally", 1)[1].split("\n    def ", 1)[0]
+    helper = source.split("    def _git_apply_category_tree_delta", 1)[1].split("\n    def ", 1)[0]
     renumber = source.split("    def _github_commit_renumber", 1)[1].split(
         "    def _renumber_gallery_consistently_sync", 1
     )[0]
 
-    assert "GITHUB_TREE_CREATE_CHUNK_SIZE = 250" in source
-    assert "current_tree_sha: str | None = None" in helper
-    assert "for start in range(0, len(entries), GITHUB_TREE_CREATE_CHUNK_SIZE)" in helper
-    assert "entries[start : start + GITHUB_TREE_CREATE_CHUNK_SIZE]" in helper
-    assert "current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)" in helper
-    assert "self._git_create_github_tree_incrementally(list(category_entries))" in renumber
-    assert "base_tree_sha=None, entries=list(category_entries)" not in renumber
+    assert "GITHUB_TREE_MUTATION_CHUNK_SIZE = 100" in source
+    assert "current_tree_sha = base_tree_sha" in helper
+    assert "for entries in (deletes, upserts)" in helper
+    assert "GITHUB_TREE_MUTATION_CHUNK_SIZE" in helper
+    assert "self._git_create_github_tree(current_tree_sha, chunk)" in helper
+    assert "self._git_apply_category_tree_delta(" in renumber
+    assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
 
 
