@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.4-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.5-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -334,6 +334,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.5
+
+- **云端删除即时刷新** Cloud 管理页在 GitHub 删除成功后会立刻从当前分类、分页和图片缓存中移除该图片，不再等待下一次远程 tree 刷新才消失。
+- **防旧 Tree 复活** 删除成功的路径会暂存为本地 tombstone；GitHub/Cloudflare 短暂返回旧分支 tree 时仍会过滤该路径，直到远端明确确认文件已经不存在。
+- **状态清理** 切换仓库配置时会清除待删除 tombstone，避免不同仓库之间互相影响。
+
 ### v2.11.4
 
 - **感知查重** 增加 64-bit dHash 相似检测；每张待上传图片只生成一次候选感知指纹并复用到本地/远程比对，避免同一种算法重复计算。

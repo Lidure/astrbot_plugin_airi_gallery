@@ -82,6 +82,17 @@ def test_github_renumber_is_bound_to_one_head_snapshot():
     assert "重编号 ref 冲突，刷新 HEAD 后重试一次。" not in source
 
 
+def test_cloud_delete_hides_path_immediately_and_stale_tree_cannot_revive_it():
+    cloud = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+
+    assert "pendingDeletedPaths" in cloud
+    assert "hideDeletedPathImmediately(file.path)" in cloud
+    assert "state.pendingDeletedPaths.add(file.path)" in cloud
+    assert "state.pendingDeletedPaths.has(entry.path)" in cloud
+    assert "state.pendingDeletedPaths.delete(path)" in cloud
+    assert "await syncFromRemote()" in cloud
+
+
 def test_temporary_patch_artifacts_are_not_shipped():
     scripts = Path(".github/scripts")
     if scripts.exists():
