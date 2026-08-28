@@ -108,8 +108,7 @@ def collect_remote_category_blob_shas(
             path is None
             or len(path.parts) != 3
             or path.parts[1] != category
-            or path.suffix != path.suffix.lower()
-            or path.suffix not in supported_suffixes
+            or path.suffix.lower() not in supported_suffixes
         ):
             continue
         raw_sha = entry.get("sha")
@@ -133,8 +132,7 @@ def remote_gallery_max_index(
         if (
             path is None
             or len(path.parts) != 3
-            or path.suffix != path.suffix.lower()
-            or path.suffix not in supported_suffixes
+            or path.suffix.lower() not in supported_suffixes
             or not path.stem.isdigit()
         ):
             continue
