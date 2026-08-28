@@ -217,3 +217,54 @@ def test_cloud_page_omits_anonymous_auth_and_rejects_unauthenticated_writes():
     assert "if (WRITE_METHODS.has(method) && !canWrite())" in html
     assert "requireWriteAccess()" in html
     assert "鍙妯″紡" in html
+
+
+def test_cloud_page_allows_sync_and_initialization_without_github_token():
+    html = cloud_page()
+
+    assert "if (!hasReadConfig()) return" in html
+    assert "if (!hasReadConfig())" in html
+    assert "if (config.owner && config.repo)" in html
+    assert "if (!config.token)" not in html.split("syncBtn.onclick", 1)[1].split("//", 1)[0]
+
+
+def test_cloud_page_distinguishes_anonymous_rate_limits_from_auth_failures():
+    html = cloud_page()
+
+    assert "const rateLimited = !resp.ok &&" in html
+    assert "x-ratelimit-remaining" in html
+    assert "config.token" in html
+    assert "rate limit" in html.lower()
+    assert "if (rateLimited)" in html
+
+
+def test_cloud_page_marks_default_gallery_selector_custom_after_manual_edits():
+    html = cloud_page()
+
+    assert "cfgDefaultGallery.value = 'custom'" in html
+    assert "cfgOwner.addEventListener('input'" in html
+    assert "cfgRepo.addEventListener('input'" in html
+    assert "cfgBranch.addEventListener('input'" in html
+
+
+def test_cloud_page_uses_same_origin_proxy_for_builtin_gallery_images():
+    html = cloud_page()
+    worker = cloud_worker()
+
+    assert "function useImageProxy" in html
+    assert "__gallery-image/" in html
+    assert "file.sha" in html
+    assert "img.loading = 'lazy'" in html
+    assert "img.decoding = 'async'" in html
+    assert "raw.githubusercontent.com/Lidure/airi-gallery-images/main/" in worker
+    assert "cacheEverything: true" in worker
+    assert "cacheTtl" in worker
+    assert "env.ASSETS.fetch(request)" in worker
+
+
+def test_cloud_worker_is_configured_alongside_static_assets():
+    config = json.loads(Path("pages/zz_cloud/wrangler.jsonc").read_text(encoding="utf-8"))
+
+    assert config["main"] == "./worker.js"
+    assert config["assets"]["directory"] == "."
+    assert config["assets"]["binding"] == "ASSETS"
