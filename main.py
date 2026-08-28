@@ -143,6 +143,9 @@ SIMILAR_UPLOAD_CONFIRM_TTL = 300
 PERCEPTUAL_MAX_DISTANCE = 6
 GALLERY_INDEX_PATH = "gallery/gallery_index.json"
 GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
+GITHUB_TREE_CREATE_MAX_ATTEMPTS = 3
+GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
+GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 CURRENT_PLUGIN_VERSION = "v2.11.8"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
@@ -2242,7 +2245,7 @@ class Main(Star):
     def _git_create_github_tree(
         self, base_tree_sha: str | None, entries: list[dict]
     ) -> str | None:
-        """创建 GitHub tree；base_tree_sha=None 时从给定直接子项构造完整 tree。"""
+        """创建 GitHub tree；临时网关/网络故障会有限重试。"""
         base = self._git_api_base()
         owner = self._git_owner()
         repo = self._git_repo()
@@ -2250,12 +2253,32 @@ class Main(Star):
         body: dict[str, object] = {"tree": entries}
         if base_tree_sha:
             body["base_tree"] = base_tree_sha
-        status, data = self._git_request("POST", url, json_body=body, timeout=60)
-        if status != 201 or not data:
-            logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {status})")
-            return None
-        sha = str(data.get("sha", "")).strip()
-        return sha or None
+
+        last_status = 0
+        for attempt in range(1, GITHUB_TREE_CREATE_MAX_ATTEMPTS + 1):
+            status, data = self._git_request("POST", url, json_body=body, timeout=60)
+            last_status = status
+            if status == 201 and data:
+                sha = str(data.get("sha", "")).strip()
+                if sha:
+                    return sha
+
+            if (
+                status not in GITHUB_TREE_CREATE_RETRY_STATUSES
+                or attempt >= GITHUB_TREE_CREATE_MAX_ATTEMPTS
+            ):
+                break
+
+            delay = GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+            logger.warning(
+                "[Git Sync] 创建 GitHub tree 暂时失败 "
+                f"(HTTP {status})，{delay:.1f}s 后重试 "
+                f"({attempt}/{GITHUB_TREE_CREATE_MAX_ATTEMPTS})"
+            )
+            time.sleep(delay)
+
+        logger.warning(f"[Git Sync] 创建 GitHub tree 失败 (HTTP {last_status})")
+        return None
 
     def _git_create_github_commit(self, message: str, tree_sha: str, parent_sha: str) -> str | None:
         """创建 GitHub commit，返回 commit SHA。"""
