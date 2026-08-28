@@ -143,7 +143,7 @@ SIMILAR_UPLOAD_CONFIRM_TTL = 300
 PERCEPTUAL_MAX_DISTANCE = 6
 GALLERY_INDEX_PATH = "gallery/gallery_index.json"
 GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
-CURRENT_PLUGIN_VERSION = "v2.11.7"
+CURRENT_PLUGIN_VERSION = "v2.11.8"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -1877,12 +1877,16 @@ class Main(Star):
             return None
         result = []
         for entry in data.get("tree", []):
-            if entry.get("type") == "blob":
-                result.append({
-                    "path": entry["path"],
-                    "sha": entry.get("sha", ""),
-                    "size": entry.get("size", 0),
-                })
+            entry_type = str(entry.get("type", "")).strip()
+            if entry_type not in {"blob", "tree"}:
+                continue
+            result.append({
+                "path": entry["path"],
+                "sha": entry.get("sha", ""),
+                "size": entry.get("size", 0),
+                "type": entry.get("type", ""),
+                "mode": entry.get("mode", ""),
+            })
         return result
 
     def _ensure_perceptual_index(self) -> None:

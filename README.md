@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.7-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.8-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -334,6 +334,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.8
+
+- 修复 `/导入图库` 的固定 GitHub tree 快照在整理数据时丢失 `type` / `mode`，导致图片被误报 `renumber category entry is incomplete` 的问题。
+- 固定快照现在保留 GitHub recursive tree 中的 `blob` 与 `tree` 条目及其 `path` / `sha` / `size` / `type` / `mode`，确保分层重编号既能读取图片元数据，也能取得 `gallery` 与分类目录 tree SHA。
+- 该修复仅补全不可变 HEAD/tree 快照元数据，不放宽原有固定 HEAD、失败回滚与单次非强制 ref 更新安全策略。
+
 ### v2.11.7
 
 - 修复大图库执行 `/导入图库` 时 GitHub 重编号提交可能失败的问题：按分类构造最终 tree，再逐层更新 `gallery` / 根 tree，避免一次提交巨量“新增 + 删除”路径。
