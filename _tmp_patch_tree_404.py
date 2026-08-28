@@ -26,3 +26,14 @@ if old_call not in source:
 source = source.replace(old_call, new_call, 1)
 
 path.write_text(source, encoding="utf-8")
+
+test_path = Path("tests/test_hierarchical_renumber.py")
+test_source = test_path.read_text(encoding="utf-8")
+old_assert = '    assert "self._git_create_github_tree(current_tree_sha, chunk)" in helper\n'
+new_assert = (
+    '    assert "self._git_create_github_tree(" in helper\n'
+    '    assert "context=context" in helper\n'
+)
+if old_assert not in test_source:
+    raise SystemExit("stale tree-call assertion not found")
+test_path.write_text(test_source.replace(old_assert, new_assert, 1), encoding="utf-8")
