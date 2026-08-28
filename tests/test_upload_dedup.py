@@ -107,4 +107,6 @@ def test_main_upload_paths_use_dual_remote_guard_when_git_sync_is_enabled():
     assert "evaluate_upload_dedup" in source
     assert "remote_gallery_max_index" in source
     assert "远程查重失败" in source
+    assert "create_only=True" in source
+    assert "_rollback_stored_image" in source
     assert "run_in_executor(\n                    None, self._git_push_file" not in source

@@ -29,6 +29,17 @@ class RemoteDeletePresentation:
     message: str
 
 
+@dataclass(frozen=True)
+class UploadDedupDecision:
+    allowed: bool
+    content_hash: str
+    blob_sha: str
+    local_duplicate: bool = False
+    remote_duplicate: bool = False
+    remote_checked: bool = True
+    reason: str = "clean"
+
+
 def read_bool_flag(obj: object, attribute: str) -> bool:
     try:
         value = getattr(obj, attribute, False)
@@ -46,6 +57,89 @@ def read_bool_flag(obj: object, attribute: str) -> bool:
 def git_blob_sha(content: bytes) -> str:
     header = f"blob {len(content)}\0".encode("ascii")
     return hashlib.sha1(header + content).hexdigest()
+
+
+def evaluate_upload_dedup(
+    content: bytes,
+    *,
+    local_hashes: Iterable[str],
+    remote_blob_shas: Iterable[str],
+    remote_checked: bool,
+) -> UploadDedupDecision:
+    """Require both local content and remote Git checks to be clean."""
+    content_hash = hashlib.sha256(content).hexdigest()
+    blob_sha = git_blob_sha(content)
+    local_duplicate = content_hash in local_hashes
+    remote_duplicate = blob_sha in remote_blob_shas
+
+    if local_duplicate:
+        reason = "local_duplicate"
+    elif not remote_checked:
+        reason = "remote_unavailable"
+    elif remote_duplicate:
+        reason = "remote_duplicate"
+    else:
+        reason = "clean"
+
+    return UploadDedupDecision(
+        allowed=reason == "clean",
+        content_hash=content_hash,
+        blob_sha=blob_sha,
+        local_duplicate=local_duplicate,
+        remote_duplicate=remote_duplicate,
+        remote_checked=remote_checked,
+        reason=reason,
+    )
+
+
+def collect_remote_category_blob_shas(
+    tree: Iterable[Mapping[str, object]],
+    category: str,
+    supported_suffixes: set[str],
+) -> set[str]:
+    """Collect exact-content Git blob SHAs for direct images in one category."""
+    shas: set[str] = set()
+    for entry in tree:
+        path_value = entry.get("path")
+        if not isinstance(path_value, str):
+            continue
+        path = _safe_gallery_relative_path(path_value)
+        if (
+            path is None
+            or len(path.parts) != 3
+            or path.parts[1] != category
+            or path.suffix != path.suffix.lower()
+            or path.suffix not in supported_suffixes
+        ):
+            continue
+        raw_sha = entry.get("sha")
+        sha = raw_sha.strip() if isinstance(raw_sha, str) else ""
+        if sha:
+            shas.add(sha)
+    return shas
+
+
+def remote_gallery_max_index(
+    tree: Iterable[Mapping[str, object]],
+    supported_suffixes: set[str],
+) -> int:
+    """Return the largest direct numeric image index across remote categories."""
+    maximum = 0
+    for entry in tree:
+        path_value = entry.get("path")
+        if not isinstance(path_value, str):
+            continue
+        path = _safe_gallery_relative_path(path_value)
+        if (
+            path is None
+            or len(path.parts) != 3
+            or path.suffix != path.suffix.lower()
+            or path.suffix not in supported_suffixes
+            or not path.stem.isdigit()
+        ):
+            continue
+        maximum = max(maximum, int(path.stem))
+    return maximum
 
 
 def remote_put_result(success: bool, remote_sha: object) -> tuple[bool, str | None]:
