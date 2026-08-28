@@ -83,6 +83,7 @@ def test_remote_category_sha_collection_uses_only_matching_safe_images():
 
     assert collect_remote_category_blob_shas(tree, "airi", SUFFIXES) == {
         "blob-1",
+        "uppercase-extension",
         "blob-3",
     }
 
@@ -91,13 +92,14 @@ def test_remote_max_index_covers_all_categories_for_global_numbering():
     tree = [
         {"path": "gallery/airi/9.png", "sha": "a"},
         {"path": "gallery/miku/42.jpg", "sha": "b"},
+        {"path": "gallery/airi/84.WEBP", "sha": "uppercase"},
         {"path": "gallery/airi/not-number.webp", "sha": "c"},
         {"path": "gallery/airi/sub/100.png", "sha": "nested"},
         {"path": "gallery/../miku/101.png", "sha": "unsafe"},
         {"path": "README.md", "sha": "readme"},
     ]
 
-    assert remote_gallery_max_index(tree, SUFFIXES) == 42
+    assert remote_gallery_max_index(tree, SUFFIXES) == 84
 
 
 def test_main_upload_paths_use_dual_remote_guard_when_git_sync_is_enabled():
