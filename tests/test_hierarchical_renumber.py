@@ -103,6 +103,7 @@ def test_large_category_tree_is_built_incrementally_without_version_bump():
     )[0]
 
     assert "GITHUB_TREE_CREATE_CHUNK_SIZE = 250" in source
+    assert "current_tree_sha: str | None = None" in helper
     assert "for start in range(0, len(entries), GITHUB_TREE_CREATE_CHUNK_SIZE)" in helper
     assert "entries[start : start + GITHUB_TREE_CREATE_CHUNK_SIZE]" in helper
     assert "current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)" in helper
