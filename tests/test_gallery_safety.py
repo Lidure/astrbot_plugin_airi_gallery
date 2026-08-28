@@ -200,6 +200,21 @@ def test_v2_remote_baseline_migrates_to_v3_without_fabricating_perceptual_hash()
         assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
 
 
+def test_unknown_future_index_version_does_not_trust_advanced_fields():
+    files = normalize_hash_index({
+        "version": 4,
+        "files": {
+            "gallery/airi/1.png": {
+                "hash": "sha256-old",
+                "git_blob_sha": "matching-blob",
+                "remote_sha": "matching-blob",
+                "perceptual_hash": "0123456789abcdef",
+            }
+        },
+    })
+    assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
+
+
 def test_v3_preserves_valid_perceptual_hash_and_remote_baseline():
     files = normalize_hash_index({
         "version": 3,

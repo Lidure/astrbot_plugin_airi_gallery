@@ -491,8 +491,8 @@ def normalize_hash_index(payload: object) -> dict[str, dict[str, object]]:
         return {}
     version = payload.get("version")
     version_number = version if type(version) is int else 1
-    preserve_remote = version_number >= 2
-    preserve_perceptual = version_number >= 3
+    preserve_remote = version_number in (2, HASH_INDEX_VERSION)
+    preserve_perceptual = version_number == HASH_INDEX_VERSION
     normalized: dict[str, dict[str, object]] = {}
     for path, raw_entry in raw_files.items():
         if not isinstance(raw_entry, dict) or not raw_entry.get("hash"):

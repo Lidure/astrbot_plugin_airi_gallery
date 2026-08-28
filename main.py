@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -433,6 +434,8 @@ class Main(Star):
         self._remote_delete_preview_lock = threading.RLock()
         self._pending_similar_uploads: dict[str, dict] = {}
         self._pending_similar_upload_lock = threading.RLock()
+        self._pending_api_similar_uploads: dict[str, dict] = {}
+        self._pending_api_similar_upload_lock = threading.RLock()
         self._load_hash_index()
 
         if self.llm_tool_enabled:
@@ -1164,6 +1167,99 @@ class Main(Star):
                 result.append({"name": p.name, "data": "", "ct": ""})
         return jsonify({"images": result, "total": total, "page": page, "per_page": per_page, "category": category})
 
+    def _cache_api_similar_upload(
+        self,
+        *,
+        category: str,
+        suffix: str,
+        image_bytes: bytes,
+        fingerprint: ImageFingerprint,
+    ) -> str:
+        token = secrets.token_urlsafe(24)
+        with self._pending_api_similar_upload_lock:
+            now = time.time()
+            expired = [
+                key
+                for key, value in self._pending_api_similar_uploads.items()
+                if now - float(value.get("created_at", 0)) > SIMILAR_UPLOAD_CONFIRM_TTL
+            ]
+            for key in expired:
+                self._pending_api_similar_uploads.pop(key, None)
+            self._pending_api_similar_uploads[token] = {
+                "created_at": now,
+                "category": category,
+                "suffix": suffix,
+                "image_bytes": image_bytes,
+                "fingerprint": fingerprint,
+            }
+        return token
+
+    def _get_api_similar_upload(self, token: str) -> dict | None:
+        if not token:
+            return None
+        with self._pending_api_similar_upload_lock:
+            pending = self._pending_api_similar_uploads.get(token)
+            if pending is None:
+                return None
+            if time.time() - float(pending.get("created_at", 0)) > SIMILAR_UPLOAD_CONFIRM_TTL:
+                self._pending_api_similar_uploads.pop(token, None)
+                return None
+            return dict(pending)
+
+    def _forget_api_similar_upload(self, token: str) -> None:
+        with self._pending_api_similar_upload_lock:
+            self._pending_api_similar_uploads.pop(token, None)
+
+    async def _force_api_similar_upload(
+        self, category: str, force_token: str
+    ) -> tuple[dict, int]:
+        pending = self._get_api_similar_upload(force_token)
+        if pending is None:
+            return {"ok": False, "error": "相似图片确认已过期，请重新选择图片上传"}, 410
+        if str(pending.get("category", "")) != category:
+            return {"ok": False, "error": "相似图片确认与当前分类不匹配"}, 400
+        category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+        if category_dir is None:
+            return {"ok": False, "error": "invalid category"}, 400
+        category_dir.mkdir(parents=True, exist_ok=True)
+
+        remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
+            self._prepare_remote_upload_guard, category
+        )
+        if not remote_checked:
+            return {"ok": False, "error": "远程查重失败，本次强制上传未执行"}, 503
+
+        target, decision = self._store_unique_image(
+            category_dir,
+            category,
+            str(pending["suffix"]),
+            bytes(pending["image_bytes"]),
+            remote_records=remote_records,
+            remote_checked=True,
+            min_index=remote_max_index + 1,
+            force_similar=True,
+            fingerprint=pending["fingerprint"],
+        )
+        if target is None:
+            self._forget_api_similar_upload(force_token)
+            return {
+                "ok": True,
+                "count": 0,
+                "files": [],
+                "rejected": [self._upload_decision_json(decision)],
+            }, 200
+
+        if self._git_sync_enabled:
+            pushed = await asyncio.to_thread(self._git_push_file, str(target))
+            manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+            if not manifest_ok:
+                if pushed:
+                    await asyncio.to_thread(self._git_delete_remote_file, str(target))
+                self._rollback_stored_image(target, category)
+                return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
+        self._forget_api_similar_upload(force_token)
+        return {"ok": True, "count": 1, "files": [target.name], "rejected": []}, 200
+
     @staticmethod
     def _upload_decision_json(decision: IndexedUploadDecision) -> dict:
         def match_json(match: UploadMatch) -> dict:
@@ -1187,12 +1283,15 @@ class Main(Star):
             data = await request.get_json()
             category = str(data.get("category", "")).strip()
             images = data.get("images", [])
-            force_similar = data.get("force_similar") is True
+            force_token = str(data.get("force_token", "")).strip()
             if not category:
                 return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            if force_token:
+                payload, status = await self._force_api_similar_upload(category, force_token)
+                return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
-            category = _sanitize_component(category)
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1223,12 +1322,19 @@ class Main(Star):
                     remote_records=remote_records,
                     remote_checked=True,
                     min_index=remote_max_index + 1,
-                    force_similar=force_similar,
+                    force_similar=False,
                     fingerprint=fingerprint,
                 )
                 if target is None:
                     detail = self._upload_decision_json(decision)
                     detail["name"] = name
+                    if decision.reason == "similar":
+                        detail["force_token"] = self._cache_api_similar_upload(
+                            category=category,
+                            suffix=ext,
+                            image_bytes=image_bytes,
+                            fingerprint=fingerprint,
+                        )
                     rejected.append(detail)
                     continue
                 if self._git_sync_enabled:
@@ -1325,12 +1431,15 @@ class Main(Star):
                 return jsonify({"ok": False, "error": "密钥错误"}), 403
             category = str(data.get("category", "")).strip()
             images = data.get("images", [])
-            force_similar = data.get("force_similar") is True
+            force_token = str(data.get("force_token", "")).strip()
             if not category:
                 return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            if force_token:
+                payload, status = await self._force_api_similar_upload(category, force_token)
+                return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
-            category = _sanitize_component(category)
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1361,12 +1470,19 @@ class Main(Star):
                     remote_records=remote_records,
                     remote_checked=True,
                     min_index=remote_max_index + 1,
-                    force_similar=force_similar,
+                    force_similar=False,
                     fingerprint=fingerprint,
                 )
                 if target is None:
                     detail = self._upload_decision_json(decision)
                     detail["name"] = name
+                    if decision.reason == "similar":
+                        detail["force_token"] = self._cache_api_similar_upload(
+                            category=category,
+                            suffix=ext,
+                            image_bytes=image_bytes,
+                            fingerprint=fingerprint,
+                        )
                     rejected.append(detail)
                     continue
                 if self._git_sync_enabled:
