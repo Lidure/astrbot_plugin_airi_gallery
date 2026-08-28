@@ -78,6 +78,7 @@ try:
         git_blob_sha,
         indexed_images_from_hash_index,
         indexed_images_from_remote_tree,
+        matches_verified_remote_content,
         merge_hash_entry,
         remote_gallery_max_index,
         normalize_hash_index,
@@ -111,6 +112,7 @@ except ImportError:
         git_blob_sha,
         indexed_images_from_hash_index,
         indexed_images_from_remote_tree,
+        matches_verified_remote_content,
         merge_hash_entry,
         remote_gallery_max_index,
         normalize_hash_index,
@@ -2557,14 +2559,23 @@ class Main(Star):
             for stale_path in path_diff.local_only:
                 with self._hash_index_lock:
                     indexed = self._hash_index.get(stale_path)
-                was_verified_remote = (
-                    verified_remote_sha(indexed) is not None
-                    or bool(self._sha_cache.get(stale_path))
-                )
-                if not was_verified_remote:
+                cached_sha = self._sha_cache.get(stale_path)
+                if verified_remote_sha(indexed) is None and not cached_sha:
                     continue
                 local_path = resolve_gallery_local_path(self.gallery_root.parent, stale_path)
                 if local_path is None or not local_path.exists():
+                    continue
+                try:
+                    local_content = local_path.read_bytes()
+                except OSError as exc:
+                    logger.warning(f"[Git Sync] 无法核对本地残留内容 {stale_path}: {exc}")
+                    continue
+                if not matches_verified_remote_content(
+                    local_content, indexed, cached_sha=cached_sha
+                ):
+                    logger.info(
+                        f"[Git Sync] 仅本地文件内容已改变，为避免误删予以保留: {stale_path}"
+                    )
                     continue
                 try:
                     local_path.unlink()

@@ -555,6 +555,19 @@ def verified_remote_sha(entry: object) -> str | None:
     return remote_sha if git_sha and git_sha == remote_sha else None
 
 
+def matches_verified_remote_content(
+    content: bytes, entry: object, *, cached_sha: str | None = None
+) -> bool:
+    """Only treat a local file as disposable cache when its bytes still match a proven remote blob."""
+    current_sha = git_blob_sha(content)
+    proven_shas = {
+        sha
+        for sha in (verified_remote_sha(entry), str(cached_sha or "").strip() or None)
+        if sha
+    }
+    return current_sha in proven_shas
+
+
 def _safe_gallery_relative_path(git_path: str) -> PurePosixPath | None:
     if "\\" in git_path:
         return None
