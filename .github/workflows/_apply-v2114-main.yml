@@ -1,0 +1,34 @@
+name: Apply v2.11.4 main integration
+
+on:
+  push:
+    branches:
+      - "fix/perceptual-dedup-and-renumber"
+    paths:
+      - ".github/workflows/_apply-v2114-main.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: "fix/perceptual-dedup-and-renumber"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Apply integration patch
+        run: python .github/scripts/apply_v2114_main.py
+      - name: Syntax check helpers
+        run: python -m py_compile gallery_safety.py main.py
+      - name: Commit integration
+        run: |
+          rm .github/scripts/apply_v2114_main.py .github/workflows/_apply-v2114-main.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gallery_safety.py main.py .github/scripts/apply_v2114_main.py .github/workflows/_apply-v2114-main.yml
+          git commit -m "feat: integrate perceptual dedup and consistent renumbering"
+          git push origin HEAD:fix/perceptual-dedup-and-renumber
