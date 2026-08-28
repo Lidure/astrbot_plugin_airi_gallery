@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.5-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.6-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -48,7 +48,7 @@
 | 🧬 **分层统一查重** | 每张候选图的精确指纹与 64-bit dHash 各计算一次并复用：完全重复直接拦截并提示原图序号/图片，相似图片显示候选并允许明确强制上传 |
 | 🔢 **全局编号** | 本地插件和云端页面都按全局最大编号续号，跨分类排序更一致 |
 | ⚡ **哈希索引缓存** | 本地保存图片哈希索引，重启后无需重新读取几千张图片计算哈希 |
-| 🔄 **立即同步** | `/立即同步` 手动从远程拉取新增图片，不必等待定时同步 |
+| 🔄 **立即同步** | `/立即同步` 对比本地磁盘与 GitHub 真实图片路径：补齐远端路径、清理可验证的远端删除残留，并明确列出仍存在的仅本地/仅 GitHub 项 |
 | ⏹️ **推送控制** | `/推送` 批量同步本地图片，`/取消推送` 随时中断 |
 
 ## 📦 文件说明
@@ -334,6 +334,14 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.6
+
+- 修复 `/立即同步` 只依赖进程内 `_sha_cache` 判断远端删除，导致重启或旧索引后本地残留无法清理、`/导入图库` 永久提示双端集合不一致的问题。
+- `/立即同步` 现在直接比较本地磁盘与 GitHub 的真实图片路径集合；对有远端验证历史的本地残留会安全移除，未知的仅本地图片不会误删，并会明确列出路径。
+- 远端路径即使与本地其他图片内容完全相同，也会按原路径落盘，避免“跳过重复”造成路径集合永远无法一致。
+- 同步完成消息会明确显示仍存在的“仅本地 / 仅 GitHub”项；仅本地要保留可执行 `/推送到远程`，不需要则删除本地文件。
+- `/导入图库` 的双端一致性拦截现在会直接列出具体差异路径，不再只提示重复执行 `/立即同步`。
+
 ### v2.11.5
 
 - **云端删除即时刷新** Cloud 管理页在 GitHub 删除成功后会立刻从当前分类、分页和图片缓存中移除该图片，不再等待下一次远程 tree 刷新才消失。

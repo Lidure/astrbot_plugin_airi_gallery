@@ -62,6 +62,7 @@ except ImportError:
 try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
+        GalleryPathDifference,
         ImageFingerprint,
         IndexedImage,
         IndexedUploadDecision,
@@ -69,6 +70,7 @@ try:
         RemoteDeleteReport,
         UploadMatch,
         build_global_renumber_plan,
+        compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
         evaluate_indexed_upload,
@@ -93,6 +95,7 @@ try:
 except ImportError:
     from gallery_safety import (
         HASH_INDEX_VERSION,
+        GalleryPathDifference,
         ImageFingerprint,
         IndexedImage,
         IndexedUploadDecision,
@@ -100,6 +103,7 @@ except ImportError:
         RemoteDeleteReport,
         UploadMatch,
         build_global_renumber_plan,
+        compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
         evaluate_indexed_upload,
@@ -135,7 +139,7 @@ SIMILAR_UPLOAD_CONFIRM_TTL = 300
 PERCEPTUAL_MAX_DISTANCE = 6
 GALLERY_INDEX_PATH = "gallery/gallery_index.json"
 GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
-CURRENT_PLUGIN_VERSION = "v2.11.5"
+CURRENT_PLUGIN_VERSION = "v2.11.6"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -581,13 +585,7 @@ class Main(Star):
                     if result.get("busy"):
                         await event.send(event.plain_result("已有同步任务正在进行，本次已跳过。"))
                     else:
-                        await event.send(
-                            event.plain_result(
-                                f"同步完成：新增 {result.get('synced', 0)} 张，"
-                                f"移除 {result.get('removed', 0)} 张，"
-                                f"跳过重复 {result.get('duplicates', 0)} 张。"
-                            )
-                        )
+                        await event.send(event.plain_result(self._format_sync_report(result)))
             elif kind == "cancel_push":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -828,13 +826,7 @@ class Main(Star):
         if result.get("busy"):
             await event.send(event.plain_result("已有同步任务正在进行，本次已跳过。"))
             return
-        await event.send(
-            event.plain_result(
-                f"同步完成：新增 {result.get('synced', 0)} 张，"
-                f"移除 {result.get('removed', 0)} 张，"
-                f"跳过重复 {result.get('duplicates', 0)} 张。"
-            )
-        )
+        await event.send(event.plain_result(self._format_sync_report(result)))
 
     @filter.command("同步远程")
     async def cmd_sync_from_remote_alias(self, event: AstrMessageEvent):
@@ -2433,15 +2425,60 @@ class Main(Star):
         except ValueError:
             return None
 
-    def _git_sync_from_remote(self) -> dict[str, int | bool]:
-        """从远程仓库拉取所有图片到本地缓存。线程安全。"""
-        result: dict[str, int | bool] = {
+    @staticmethod
+    def _format_gallery_path_difference(
+        diff: GalleryPathDifference, limit: int = 5
+    ) -> str:
+        parts: list[str] = []
+        if diff.local_only:
+            preview = "、".join(diff.local_only[:limit])
+            suffix = f" 等 {len(diff.local_only)} 项" if len(diff.local_only) > limit else ""
+            parts.append(f"仅本地：{preview}{suffix}")
+        if diff.remote_only:
+            preview = "、".join(diff.remote_only[:limit])
+            suffix = f" 等 {len(diff.remote_only)} 项" if len(diff.remote_only) > limit else ""
+            parts.append(f"仅 GitHub：{preview}{suffix}")
+        return "；".join(parts) if parts else "两端图片路径一致"
+
+    @classmethod
+    def _format_sync_report(cls, result: dict) -> str:
+        if result.get("busy"):
+            return "已有同步任务正在进行，本次已跳过。"
+        if result.get("failed"):
+            return str(result.get("error") or "同步失败：远程图库状态无法确认。")
+
+        synced = int(result.get("synced", 0) or 0)
+        removed = int(result.get("removed", 0) or 0)
+        local_only = tuple(result.get("remaining_local_only") or ())
+        remote_only = tuple(result.get("remaining_remote_only") or ())
+        base = f"同步完成：新增 {synced} 张，移除 {removed} 张。"
+        if not local_only and not remote_only:
+            return base + "\n本地与 GitHub 图片路径已一致。"
+
+        diff = GalleryPathDifference(local_only=local_only, remote_only=remote_only)
+        details = cls._format_gallery_path_difference(diff)
+        return (
+            base
+            + "\n同步后仍未完全一致："
+            + details
+            + "\n仅本地项目会保留以避免误删；要保留请执行 /推送到远程，不需要则删除本地文件后再次 /立即同步。"
+            + "仅 GitHub 项目表示本次下载未完成，可再次执行 /立即同步。"
+        )
+
+    def _git_sync_from_remote(self) -> dict[str, object]:
+        """从远程仓库拉取图片，并让本地缓存尽量收敛到远端真实路径集合。"""
+        result: dict[str, object] = {
             "synced": 0,
             "removed": 0,
             "duplicates": 0,
             "busy": False,
+            "failed": False,
+            "remaining_local_only": (),
+            "remaining_remote_only": (),
         }
         if not self._git_sync_enabled:
+            result["failed"] = True
+            result["error"] = "同步失败：Git 远程同步未启用。"
             return result
         if not self._sync_lock.acquire(blocking=False):
             logger.debug("[Git Sync] 已有同步任务进行中，跳过本次。")
@@ -2450,25 +2487,24 @@ class Main(Star):
         try:
             tree = self._git_list_tree()
             if tree is None:
+                result["failed"] = True
+                result["error"] = "同步失败：远程图库状态无法确认。"
                 return result
 
-            # 只关注 gallery/ 下的图片文件
+            # 与 /导入图库 使用同一个规范：只认可 gallery/分类/图片 三层图片路径。
             remote_images: dict[str, dict] = {}
             for entry in tree:
-                p = entry["path"]
-                if not p.startswith("gallery/"):
-                    continue
-                suffix = Path(p).suffix.lower()
-                if suffix not in IMAGE_SUFFIXES:
-                    continue
-                remote_images[p] = entry
+                git_path = str(entry.get("path", ""))
+                if (
+                    self._is_remote_gallery_image(git_path)
+                    and len(Path(git_path).parts) == 3
+                ):
+                    remote_images[git_path] = entry
 
-            category_hash_cache: dict[str, set[str]] = {}
             synced = 0
             for git_path, info in remote_images.items():
-                # 转换为本地路径
                 local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
-                remote_sha = info.get("sha", "")
+                remote_sha = str(info.get("sha", ""))
                 parts = Path(git_path).parts
                 category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
 
@@ -2492,48 +2528,86 @@ class Main(Star):
                     local_path.parent.mkdir(parents=True, exist_ok=True)
 
                 content = self._git_get_file(git_path)
-                if content is not None:
-                    category_hashes = category_hash_cache.get(category)
-                    if category_hashes is None:
-                        category_hashes = self._category_hashes(category, save=False)
-                        category_hash_cache[category] = category_hashes
-                    digest = self._bytes_hash(content)
-                    if digest in category_hashes:
-                        self._sha_cache[git_path] = remote_sha
-                        result["duplicates"] = int(result["duplicates"]) + 1
-                        logger.info(f"[Git Sync] 检测到同分类重复图片，已跳过: {git_path}")
-                        continue
-                    self._sha_cache[git_path] = remote_sha
-                    local_path.write_bytes(content)
-                    category_hashes.add(digest)
-                    self._remember_verified_remote_content(
-                        git_path, content, remote_sha, save=False
-                    )
-                    synced += 1
-                    result["synced"] = synced
+                if content is None:
+                    logger.warning(f"[Git Sync] 未能同步远端图片：{git_path}")
+                    continue
 
-            # 检测远程删除：SHA 缓存中有、但远程 tree 中没有的 gallery/ 文件
-            stale_paths = [
-                cached_path for cached_path in list(self._sha_cache.keys())
-                if cached_path.startswith("gallery/")
-                and cached_path not in remote_images
-            ]
-            for cached_path in stale_paths:
-                local_path = self.gallery_root.parent / cached_path.replace("/", os.sep)
-                if local_path.exists():
+                # 路径一致性优先：即使相同内容已存在于另一路径，也必须落盘
+                # GitHub 的这个具体路径，否则 /导入图库 永远无法确认双端一致。
+                self._sha_cache[git_path] = remote_sha
+                local_path.write_bytes(content)
+                self._invalidate_category_hash_cache(category)
+                self._remember_verified_remote_content(
+                    git_path, content, remote_sha, save=False
+                )
+                synced += 1
+                result["synced"] = synced
+
+            local_image_paths = {
+                path
+                for path in (
+                    self._to_git_path(str(item)) for item in self._iter_image_files()
+                )
+                if path
+            }
+            path_diff = compare_gallery_paths(local_image_paths, remote_images.keys())
+
+            # 不再只依赖进程内 _sha_cache。hash_index 中的双 SHA 验证记录
+            # 能证明该路径过去确实存在于远端，因此远端删除后可安全清理本地缓存。
+            for stale_path in path_diff.local_only:
+                with self._hash_index_lock:
+                    indexed = self._hash_index.get(stale_path)
+                was_verified_remote = (
+                    verified_remote_sha(indexed) is not None
+                    or bool(self._sha_cache.get(stale_path))
+                )
+                if not was_verified_remote:
+                    continue
+                local_path = resolve_gallery_local_path(self.gallery_root.parent, stale_path)
+                if local_path is None or not local_path.exists():
+                    continue
+                try:
                     local_path.unlink()
-                    logger.info(f"[Git Sync] 远程已删除，本地同步移除: {cached_path}")
-                    parts = Path(cached_path).parts
-                    if len(parts) >= 3:
-                        self._invalidate_category_hash_cache(parts[1])
-                    self._forget_file_hash(local_path, save=False)
-                    result["removed"] = int(result["removed"]) + 1
-                self._sha_cache.pop(cached_path, None)
+                except OSError as exc:
+                    logger.warning(f"[Git Sync] 清理远端已删除的本地缓存失败 {stale_path}: {exc}")
+                    continue
+                logger.info(f"[Git Sync] 远程已删除，本地同步移除: {stale_path}")
+                parts = Path(stale_path).parts
+                if len(parts) >= 3:
+                    self._invalidate_category_hash_cache(parts[1])
+                self._forget_file_hash(stale_path, save=False)
+                self._sha_cache.pop(stale_path, None)
+                result["removed"] = int(result["removed"]) + 1
+
+            # 清理已经不存在于本地/远端的进程内 SHA 残留。
+            for cached_path in list(self._sha_cache):
+                if cached_path.startswith("gallery/") and cached_path not in remote_images:
+                    local_path = resolve_gallery_local_path(self.gallery_root.parent, cached_path)
+                    if local_path is None or not local_path.exists():
+                        self._sha_cache.pop(cached_path, None)
+
+            final_local_paths = {
+                path
+                for path in (
+                    self._to_git_path(str(item)) for item in self._iter_image_files()
+                )
+                if path
+            }
+            remaining = compare_gallery_paths(final_local_paths, remote_images.keys())
+            result["remaining_local_only"] = remaining.local_only
+            result["remaining_remote_only"] = remaining.remote_only
 
             if synced:
                 logger.info(f"[Git Sync] 从远程同步了 {synced} 个文件。")
+            if not remaining.is_clean:
+                logger.warning(
+                    "[Git Sync] 同步后路径集合仍有差异："
+                    + self._format_gallery_path_difference(remaining)
+                )
         except Exception as exc:
             logger.error(f"[Git Sync] 同步异常: {exc}")
+            result["failed"] = True
+            result["error"] = f"同步失败：{type(exc).__name__}。请检查日志后重试。"
         finally:
             self._save_hash_index()
             self._sync_lock.release()
@@ -4060,10 +4134,16 @@ class Main(Star):
                 for path in (self._to_git_path(str(item)) for item in self._iter_image_files())
                 if path
             )
-            if local_paths != remote_paths:
+            path_diff = compare_gallery_paths(local_paths, remote_paths)
+            if not path_diff.is_clean:
+                details = self._format_gallery_path_difference(path_diff)
                 return {
                     "ok": False,
-                    "error": "本地与 GitHub 图片集合尚未一致，请先执行 /立即同步；本次没有改写任何编号。",
+                    "error": (
+                        "本地与 GitHub 图片集合尚未一致，本次没有改写任何编号。\n"
+                        + details
+                        + "\n请先执行 /立即同步；若同步后仍显示“仅本地”，要保留请执行 /推送到远程，不需要则删除对应本地文件。"
+                    ),
                 }
             plan = build_global_renumber_plan(remote_paths, IMAGE_SUFFIXES)
             mapping = {step.source: step.target for step in plan}
