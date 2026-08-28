@@ -64,11 +64,22 @@ def test_import_gallery_uses_one_global_mapping_for_local_and_github():
 
     assert "build_global_renumber_plan(remote_paths, IMAGE_SUFFIXES)" in source
     assert "_stage_local_renumber(plan)" in source
-    assert "_github_commit_renumber(plan, tree, manifest_payload)" in source
+    assert "_github_commit_renumber(" in source
     assert "_remap_hash_index(plan)" in source
     assert "本地与 GitHub 图片集合尚未一致" in source
     assert "远程图库状态无法确认" in source
     assert "本地与 GitHub 编号一致" in source
+
+
+def test_github_renumber_is_bound_to_one_head_snapshot():
+    source = Path("main.py").read_text(encoding="utf-8")
+
+    assert "def _git_list_tree_at(" in source
+    assert "expected_head_sha" in source
+    assert "base_tree_sha" in source
+    assert "_git_list_tree_at(base_tree_sha)" in source
+    assert "重编号期间 GitHub 已发生变化" in source
+    assert "重编号 ref 冲突，刷新 HEAD 后重试一次。" not in source
 
 
 def test_temporary_patch_artifacts_are_not_shipped():
