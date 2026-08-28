@@ -153,3 +153,6 @@ def test_large_categories_mutate_existing_tree_instead_of_rebuilding_from_empty(
     assert "self._git_apply_category_tree_delta(" in renumber
     assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+
+
+# Delta renumber must preserve unchanged direct children while only mutating changed paths.
