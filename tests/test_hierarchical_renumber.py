@@ -95,7 +95,7 @@ def test_github_tree_creation_retries_transient_gateway_failures_without_version
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
 
 
-def test_large_category_tree_mutations_are_chunked_without_version_bump():
+def test_large_category_tree_mutations_upsert_before_delete_without_version_bump():
     source = Path("main.py").read_text(encoding="utf-8")
     helper = source.split("    def _git_apply_category_tree_delta", 1)[1].split("\n    def ", 1)[0]
     renumber = source.split("    def _github_commit_renumber", 1)[1].split(
@@ -104,7 +104,9 @@ def test_large_category_tree_mutations_are_chunked_without_version_bump():
 
     assert "GITHUB_TREE_MUTATION_CHUNK_SIZE = 100" in source
     assert "current_tree_sha = base_tree_sha" in helper
-    assert "for entries in (deletes, upserts)" in helper
+    assert "for entries in (upserts, deletes)" in helper
+    assert 'phase_name = "upsert"' in helper
+    assert 'phase_name = "delete"' in helper
     assert "GITHUB_TREE_MUTATION_CHUNK_SIZE" in helper
     assert "self._git_create_github_tree(" in helper
     assert "context=context" in helper
@@ -113,17 +115,18 @@ def test_large_category_tree_mutations_are_chunked_without_version_bump():
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
 
 
-def test_category_tree_delta_only_mutates_changed_direct_children():
+def test_category_tree_delta_replaces_same_path_without_deleting_it_first():
     tree = [
         _entry("gallery/airi", "airi-tree", mode="040000", type_="tree"),
         _entry("gallery/airi/1.jpg", "blob-1"),
         _entry("gallery/airi/2.jpg", "blob-2"),
+        _entry("gallery/airi/3.jpg", "blob-3"),
         _entry("gallery/airi/note.txt", "note"),
         _entry("gallery/airi/meta", "meta-tree", mode="040000", type_="tree"),
     ]
     final_entries = (
         {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": "blob-2"},
-        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-1"},
+        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-3"},
         {"path": "meta", "mode": "040000", "type": "tree", "sha": "meta-tree"},
         {"path": "note.txt", "mode": "100644", "type": "blob", "sha": "note"},
     )
@@ -133,12 +136,11 @@ def test_category_tree_delta_only_mutates_changed_direct_children():
     )
 
     assert deletes == (
-        {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": None},
-        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": None},
+        {"path": "3.jpg", "mode": "100644", "type": "blob", "sha": None},
     )
     assert upserts == (
         {"path": "1.jpg", "mode": "100644", "type": "blob", "sha": "blob-2"},
-        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-1"},
+        {"path": "2.jpg", "mode": "100644", "type": "blob", "sha": "blob-3"},
     )
 
 
