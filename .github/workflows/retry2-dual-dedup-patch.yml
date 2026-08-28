@@ -1,0 +1,101 @@
+name: Retry dual dedup patch v2
+
+on:
+  push:
+    branches:
+      - fix/dual-dedup-upload
+    paths:
+      - .github/workflows/retry2-dual-dedup-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/dual-dedup-upload
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Make patch anchors scope-safe
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/patches/apply_dual_dedup_patch.py')
+          s = p.read_text(encoding='utf-8')
+
+          old_helper = '''def replace_function_block(text: str, name: str, next_name: str, transform) -> str:
+              start_marker = f"    async def {name}("
+              end_marker = f"    async def {next_name}("
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              block = text[start:end]
+              new_block = transform(block)
+              if new_block == block:
+                  raise RuntimeError(f"{name}: transform made no changes")
+              return text[:start] + new_block + text[end:]
+          '''
+          new_helper = '''def replace_function_block(text: str, name: str, next_name: str, transform) -> str:
+              start_marker = f"    async def {name}("
+              start = text.index(start_marker)
+              search_from = start + len(start_marker)
+              candidates = [
+                  pos for pos in (
+                      text.find("\\n    async def ", search_from),
+                      text.find("\\n    def ", search_from),
+                  ) if pos >= 0
+              ]
+              if not candidates:
+                  raise RuntimeError(f"{name}: next top-level method not found")
+              end = min(candidates) + 1
+              block = text[start:end]
+              new_block = transform(block)
+              if new_block == block:
+                  raise RuntimeError(f"{name}: transform made no changes")
+              return text[:start] + new_block + text[end:]
+          '''
+          if old_helper not in s:
+              raise SystemExit('replace_function_block helper not found')
+          s = s.replace(old_helper, new_helper, 1)
+
+          old_anchor = '''main = replace_once(
+              main,
+              ''' + "'''" + '''        url = f"{base}/repos/{owner}/{repo}/contents/{path}"\\n\\n        if self._git_platform() == "gitee":\\n''' + "'''" + ''',
+              ''' + "'''" + '''        url = f"{base}/repos/{owner}/{repo}/contents/{path}"\\n        had_known_sha = bool(self._sha_cache.get(path))\\n\\n        if self._git_platform() == "gitee":\\n''' + "'''" + ''',
+              "remember pre-put path state",
+          )'''
+          new_anchor = '''git_put_start = main.index("    def _git_put_file(")
+          git_put_end = main.index("    def _git_get_head_commit_and_tree(", git_put_start)
+          git_put_block = main[git_put_start:git_put_end]
+          git_put_block = replace_once(
+              git_put_block,
+              ''' + "'''" + '''        url = f"{base}/repos/{owner}/{repo}/contents/{path}"\\n\\n        if self._git_platform() == "gitee":\\n''' + "'''" + ''',
+              ''' + "'''" + '''        url = f"{base}/repos/{owner}/{repo}/contents/{path}"\\n        had_known_sha = bool(self._sha_cache.get(path))\\n\\n        if self._git_platform() == "gitee":\\n''' + "'''" + ''',
+              "remember pre-put path state",
+          )
+          main = main[:git_put_start] + git_put_block + main[git_put_end:]'''
+          if old_anchor not in s:
+              raise SystemExit('ambiguous-anchor block not found')
+          s = s.replace(old_anchor, new_anchor, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Apply patch
+        run: python .github/patches/apply_dual_dedup_patch.py
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Verify patch
+        run: python -m pytest tests -v
+      - name: Remove temporary patch machinery
+        run: rm .github/patches/apply_dual_dedup_patch.py .github/workflows/apply-dual-dedup-patch.yml .github/workflows/retry-dual-dedup-patch.yml .github/workflows/retry2-dual-dedup-patch.yml
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: require local and remote dedup before upload'
+          git push origin fix/dual-dedup-upload
