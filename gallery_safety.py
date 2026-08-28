@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 from collections.abc import Callable, Iterable, Mapping
 
 
-HASH_INDEX_VERSION: int = 2
+HASH_INDEX_VERSION: int = 3
 
 
 @dataclass(frozen=True)
@@ -454,6 +454,7 @@ def merge_hash_entry(
     category: str,
     git_blob_sha: str | None = None,
     remote_sha: str | None = None,
+    perceptual_hash: str | None = None,
 ) -> dict[str, object]:
     entry: dict[str, object] = {
         "hash": digest,
@@ -468,11 +469,15 @@ def merge_hash_entry(
         and previous.get("mtime_ns") == mtime_ns
     )
     if unchanged:
-        for key in ("git_blob_sha", "remote_sha"):
+        for key in ("git_blob_sha", "remote_sha", "perceptual_hash"):
             value = previous.get(key)
             if isinstance(value, str) and value.strip():
                 entry[key] = value.strip()
-    for key, value in (("git_blob_sha", git_blob_sha), ("remote_sha", remote_sha)):
+    for key, value in (
+        ("git_blob_sha", git_blob_sha),
+        ("remote_sha", remote_sha),
+        ("perceptual_hash", perceptual_hash),
+    ):
         if isinstance(value, str) and value.strip():
             entry[key] = value.strip()
     return entry
@@ -485,27 +490,37 @@ def normalize_hash_index(payload: object) -> dict[str, dict[str, object]]:
     if not isinstance(raw_files, dict):
         return {}
     version = payload.get("version")
-    is_v2 = type(version) is int and version == HASH_INDEX_VERSION
+    version_number = version if type(version) is int else 1
+    preserve_remote = version_number >= 2
+    preserve_perceptual = version_number >= 3
     normalized: dict[str, dict[str, object]] = {}
     for path, raw_entry in raw_files.items():
         if not isinstance(raw_entry, dict) or not raw_entry.get("hash"):
             continue
         entry = dict(raw_entry)
-        if not is_v2:
+        if not preserve_remote:
             entry.pop("git_blob_sha", None)
             entry.pop("remote_sha", None)
-            normalized[str(path)] = entry
-            continue
-        git_sha = str(entry.get("git_blob_sha", "")).strip()
-        remote_sha = str(entry.get("remote_sha", "")).strip()
-        if git_sha:
-            entry["git_blob_sha"] = git_sha
         else:
-            entry.pop("git_blob_sha", None)
-        if remote_sha:
-            entry["remote_sha"] = remote_sha
+            for key in ("git_blob_sha", "remote_sha"):
+                value = str(entry.get(key, "")).strip()
+                if value:
+                    entry[key] = value
+                else:
+                    entry.pop(key, None)
+        if preserve_perceptual:
+            phash = str(entry.get("perceptual_hash", "")).strip().lower()
+            if len(phash) == 16:
+                try:
+                    int(phash, 16)
+                except ValueError:
+                    entry.pop("perceptual_hash", None)
+                else:
+                    entry["perceptual_hash"] = phash
+            else:
+                entry.pop("perceptual_hash", None)
         else:
-            entry.pop("remote_sha", None)
+            entry.pop("perceptual_hash", None)
         normalized[str(path)] = entry
     return normalized
 
