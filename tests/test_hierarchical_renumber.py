@@ -93,3 +93,19 @@ def test_github_tree_creation_retries_transient_gateway_failures_without_version
     for permanent_status in (401, 403, 409, 422):
         assert str(permanent_status) not in retry_line
     assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+
+
+def test_large_category_tree_is_built_incrementally_without_version_bump():
+    source = Path("main.py").read_text(encoding="utf-8")
+    helper = source.split("    def _git_create_github_tree_incrementally", 1)[1].split("\n    def ", 1)[0]
+    renumber = source.split("    def _github_commit_renumber", 1)[1].split(
+        "    def _renumber_gallery_consistently_sync", 1
+    )[0]
+
+    assert "GITHUB_TREE_CREATE_CHUNK_SIZE = 250" in source
+    assert "for start in range(0, len(entries), GITHUB_TREE_CREATE_CHUNK_SIZE)" in helper
+    assert "entries[start : start + GITHUB_TREE_CREATE_CHUNK_SIZE]" in helper
+    assert "current_tree_sha = self._git_create_github_tree(current_tree_sha, chunk)" in helper
+    assert "self._git_create_github_tree_incrementally(list(category_entries))" in renumber
+    assert "base_tree_sha=None, entries=list(category_entries)" not in renumber
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
