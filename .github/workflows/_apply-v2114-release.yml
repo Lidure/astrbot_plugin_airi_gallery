@@ -1,0 +1,29 @@
+name: Apply v2.11.4 release contracts
+
+on:
+  push:
+    branches:
+      - "fix/perceptual-dedup-and-renumber"
+    paths:
+      - ".github/workflows/_apply-v2114-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: "fix/perceptual-dedup-and-renumber"
+      - name: Apply release patch
+        run: python .github/scripts/apply_v2114_release.py
+      - name: Commit release contracts
+        run: |
+          rm .github/scripts/apply_v2114_release.py .github/workflows/_apply-v2114-release.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md metadata.yaml tests/test_gallery_safety.py tests/test_repository_contract.py .github/scripts/apply_v2114_release.py .github/workflows/_apply-v2114-release.yml
+          git commit -m "docs: prepare v2.11.4 perceptual dedup release"
+          git push origin HEAD:fix/perceptual-dedup-and-renumber
