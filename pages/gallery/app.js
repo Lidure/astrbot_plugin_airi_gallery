@@ -388,6 +388,39 @@ function fileToBase64(file) {
   });
 }
 
+function parseGalleryMatchPath(path) {
+  const parts = String(path || "").split("/");
+  if (parts.length !== 3 || parts[0] !== "gallery") return null;
+  return { category: parts[1], name: parts[2] };
+}
+
+function matchText(match, includeSimilarity = true) {
+  if (!match) return "未知图片";
+  const number = match.number ? `#${match.number}` : String(match.path || "未知图片");
+  if (!includeSimilarity) return number;
+  const similarity = Number(match.similarity);
+  return Number.isFinite(similarity) ? `${number} ${(similarity * 100).toFixed(1)}%` : number;
+}
+
+async function showMatchPreview(match) {
+  const location = parseGalleryMatchPath(match?.path);
+  if (!location) return;
+  try {
+    const data = await apiGet("category_image", location);
+    const url = makeBlobUrl(data.data, data.content_type);
+    if (!url) return;
+    modalImage.src = url;
+    modalImage.alt = location.name;
+    mask.classList.add("show");
+  } catch (error) {
+    console.warn("[gallery] failed to load dedup preview", error);
+  }
+}
+
+async function encodeUploadFile(file) {
+  return { name: file.name, data: await fileToBase64(file) };
+}
+
 upBtn.addEventListener("click", async () => {
   const category = upInput.value.trim() || upSel.value;
   if (!category) { showMsg("请选择或输入分类", false); return; }
@@ -395,12 +428,52 @@ upBtn.addEventListener("click", async () => {
   upBtn.disabled = true;
   upBtn.textContent = "上传中...";
   try {
+    const byName = new Map(pendingFiles.map(file => [file.name, file]));
     const images = [];
-    for (const file of pendingFiles) images.push({ name: file.name, data: await fileToBase64(file) });
+    for (const file of pendingFiles) images.push(await encodeUploadFile(file));
     const result = await apiPost("upload", { category, images });
     if (result?.ok === false) throw new Error(result.error || "上传失败");
-    showMsg(`成功上传 ${result.count || images.length} 张到“${category}”`);
-    pendingFiles = [];
+
+    let uploaded = Number(result.count) || 0;
+    const keepNames = new Set();
+    const rejected = Array.isArray(result.rejected) ? result.rejected : [];
+
+    for (const item of rejected) {
+      if (item.reason === "exact_duplicate") {
+        await showMatchPreview(item.exact_match);
+        window.alert(`发现完全重复图片：${matchText(item.exact_match, false)}。\n这张图片已被拦截，不能强制上传。`);
+        continue;
+      }
+      if (item.reason !== "similar" || !item.force_token) {
+        if (item.name) keepNames.add(item.name);
+        continue;
+      }
+
+      const matches = Array.isArray(item.similar_matches) ? item.similar_matches : [];
+      if (matches.length) await showMatchPreview(matches[0]);
+      const labels = matches.map(match => matchText(match, true)).join("、") || "已有图片";
+      const force = window.confirm(`发现相似图片：${labels}\n\n确认不是同一张图并仍然上传吗？`);
+      if (!force) {
+        if (item.name) keepNames.add(item.name);
+        continue;
+      }
+
+      const forced = await apiPost("upload", { category, force_token: item.force_token });
+      if (forced?.ok === false) throw new Error(forced.error || "强制上传失败");
+      uploaded += Number(forced.count) || 0;
+      const forcedRejected = Array.isArray(forced.rejected) ? forced.rejected : [];
+      if (forcedRejected.length) {
+        const exact = forcedRejected.find(entry => entry.reason === "exact_duplicate");
+        if (exact) {
+          await showMatchPreview(exact.exact_match);
+          window.alert(`强制上传前发现完全重复图片：${matchText(exact.exact_match, false)}。\n完全重复不能绕过。`);
+        } else if (item.name) {
+          keepNames.add(item.name);
+        }
+      }
+    }
+
+    pendingFiles = pendingFiles.filter(file => keepNames.has(file.name));
     renderPreview();
     clearImageCache();
     await loadCats();
@@ -410,6 +483,7 @@ upBtn.addEventListener("click", async () => {
       renderTabs();
       await loadImgs();
     }
+    showMsg(`成功上传 ${uploaded} 张到“${category}”${pendingFiles.length ? `，${pendingFiles.length} 张相似图片已保留` : ""}`);
   } catch (error) {
     showMsg(error.message || "上传失败", false);
   } finally {

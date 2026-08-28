@@ -58,17 +58,17 @@ def test_config_schema_is_valid_json():
     assert isinstance(schema, dict)
 
 
-def test_release_version_is_2_11_3_everywhere():
+def test_release_version_is_2_11_4_everywhere():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
     readme = Path("README.md").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.3"
-    assert badge == "v2.11.3"
-    assert changelog == "v2.11.3"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.3"' in main_source
+    assert metadata["version"] == "v2.11.4"
+    assert badge == "v2.11.4"
+    assert changelog == "v2.11.4"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.4"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():

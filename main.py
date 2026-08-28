@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -61,13 +62,25 @@ except ImportError:
 try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
+        ImageFingerprint,
+        IndexedImage,
+        IndexedUploadDecision,
+        RenameStep,
         RemoteDeleteReport,
+        UploadMatch,
+        build_global_renumber_plan,
         collect_remote_category_blob_shas,
+        compute_image_fingerprint,
+        evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
+        indexed_images_from_hash_index,
+        indexed_images_from_remote_tree,
         merge_hash_entry,
         remote_gallery_max_index,
         normalize_hash_index,
+        normalize_perceptual_manifest,
+        perceptual_hash_from_bytes,
         present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
@@ -80,13 +93,25 @@ try:
 except ImportError:
     from gallery_safety import (
         HASH_INDEX_VERSION,
+        ImageFingerprint,
+        IndexedImage,
+        IndexedUploadDecision,
+        RenameStep,
         RemoteDeleteReport,
+        UploadMatch,
+        build_global_renumber_plan,
         collect_remote_category_blob_shas,
+        compute_image_fingerprint,
+        evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
+        indexed_images_from_hash_index,
+        indexed_images_from_remote_tree,
         merge_hash_entry,
         remote_gallery_max_index,
         normalize_hash_index,
+        normalize_perceptual_manifest,
+        perceptual_hash_from_bytes,
         present_remote_delete_report,
         read_bool_flag,
         remote_put_result,
@@ -106,7 +131,11 @@ VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
 REMOTE_DELETE_CONFIRM_TTL = 300
 REMOTE_DELETE_PREVIEW_LIMIT = 20
-CURRENT_PLUGIN_VERSION = "v2.11.3"
+SIMILAR_UPLOAD_CONFIRM_TTL = 300
+PERCEPTUAL_MAX_DISTANCE = 6
+GALLERY_INDEX_PATH = "gallery/gallery_index.json"
+GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
+CURRENT_PLUGIN_VERSION = "v2.11.4"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -403,6 +432,10 @@ class Main(Star):
         )
         self._remote_delete_previews: dict[str, dict] = {}
         self._remote_delete_preview_lock = threading.RLock()
+        self._pending_similar_uploads: dict[str, dict] = {}
+        self._pending_similar_upload_lock = threading.RLock()
+        self._pending_api_similar_uploads: dict[str, dict] = {}
+        self._pending_api_similar_upload_lock = threading.RLock()
         self._load_hash_index()
 
         if self.llm_tool_enabled:
@@ -464,9 +497,7 @@ class Main(Star):
         )
 
     async def initialize(self):
-        """初始化时整理一次图库，确保编号是可用的数字序列。"""
-        await self._normalize_gallery_tree()
-        # Git 远程同步初始化
+        """初始化图库；Git 模式先同步，不在单端擅自改写编号。"""
         if coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self._validate_git_config()
             if self._git_sync_enabled:
@@ -474,6 +505,8 @@ class Main(Star):
                     target=self._git_startup_sync, daemon=True
                 ).start()
                 self._start_sync_timer()
+        else:
+            await self._normalize_gallery_tree()
         self._diagnostic_task = asyncio.create_task(self._run_startup_diagnostics())
 
     async def terminate(self):
@@ -519,10 +552,8 @@ class Main(Star):
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
                 else:
-                    renamed_count = await self._normalize_gallery_tree()
-                    await event.send(
-                        event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。")
-                    )
+                    report = await self._renumber_gallery_consistently()
+                    await event.send(event.plain_result(self._format_renumber_report(report)))
             elif kind == "push_to_remote":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -596,6 +627,8 @@ class Main(Star):
                     await self._handle_create_category(event, str(payload))
             elif kind == "upload":
                 await self._handle_upload(event, str(payload))
+            elif kind == "force_similar_upload":
+                await self._handle_force_similar_upload(event)
             elif kind == "dedupe_gallery":
                 removed, details = await self._dedupe_gallery(str(payload) if payload else None)
                 if payload:
@@ -673,6 +706,11 @@ class Main(Star):
             else:
                 await self._handle_create_category(event, str(action[1]))
 
+    @filter.command("强制上传")
+    async def cmd_force_upload(self, event: AstrMessageEvent):
+        """仅绕过最近一次感知相似提示；完全重复仍然禁止上传。"""
+        await self._handle_force_similar_upload(event)
+
     @filter.command("上传")
     async def cmd_upload(self, event: AstrMessageEvent):
         """注册 `/上传` 命令显示在命令列表并处理上传逻辑。"""
@@ -734,8 +772,8 @@ class Main(Star):
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
             return
-        renamed_count = await self._normalize_gallery_tree()
-        await event.send(event.plain_result(f"已重新整理图库，重命名 {renamed_count} 个文件。"))
+        report = await self._renumber_gallery_consistently()
+        await event.send(event.plain_result(self._format_renumber_report(report)))
 
     @filter.command("去重图库")
     async def cmd_dedupe_gallery(self, event: AstrMessageEvent):
@@ -1129,75 +1167,187 @@ class Main(Star):
                 result.append({"name": p.name, "data": "", "ct": ""})
         return jsonify({"images": result, "total": total, "page": page, "per_page": per_page, "category": category})
 
+    def _cache_api_similar_upload(
+        self,
+        *,
+        category: str,
+        suffix: str,
+        image_bytes: bytes,
+        fingerprint: ImageFingerprint,
+    ) -> str:
+        token = secrets.token_urlsafe(24)
+        with self._pending_api_similar_upload_lock:
+            now = time.time()
+            expired = [
+                key
+                for key, value in self._pending_api_similar_uploads.items()
+                if now - float(value.get("created_at", 0)) > SIMILAR_UPLOAD_CONFIRM_TTL
+            ]
+            for key in expired:
+                self._pending_api_similar_uploads.pop(key, None)
+            self._pending_api_similar_uploads[token] = {
+                "created_at": now,
+                "category": category,
+                "suffix": suffix,
+                "image_bytes": image_bytes,
+                "fingerprint": fingerprint,
+            }
+        return token
+
+    def _get_api_similar_upload(self, token: str) -> dict | None:
+        if not token:
+            return None
+        with self._pending_api_similar_upload_lock:
+            pending = self._pending_api_similar_uploads.get(token)
+            if pending is None:
+                return None
+            if time.time() - float(pending.get("created_at", 0)) > SIMILAR_UPLOAD_CONFIRM_TTL:
+                self._pending_api_similar_uploads.pop(token, None)
+                return None
+            return dict(pending)
+
+    def _forget_api_similar_upload(self, token: str) -> None:
+        with self._pending_api_similar_upload_lock:
+            self._pending_api_similar_uploads.pop(token, None)
+
+    async def _force_api_similar_upload(
+        self, category: str, force_token: str
+    ) -> tuple[dict, int]:
+        pending = self._get_api_similar_upload(force_token)
+        if pending is None:
+            return {"ok": False, "error": "相似图片确认已过期，请重新选择图片上传"}, 410
+        if str(pending.get("category", "")) != category:
+            return {"ok": False, "error": "相似图片确认与当前分类不匹配"}, 400
+        category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+        if category_dir is None:
+            return {"ok": False, "error": "invalid category"}, 400
+        category_dir.mkdir(parents=True, exist_ok=True)
+
+        remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
+            self._prepare_remote_upload_guard, category
+        )
+        if not remote_checked:
+            return {"ok": False, "error": "远程查重失败，本次强制上传未执行"}, 503
+
+        target, decision = self._store_unique_image(
+            category_dir,
+            category,
+            str(pending["suffix"]),
+            bytes(pending["image_bytes"]),
+            remote_records=remote_records,
+            remote_checked=True,
+            min_index=remote_max_index + 1,
+            force_similar=True,
+            fingerprint=pending["fingerprint"],
+        )
+        if target is None:
+            self._forget_api_similar_upload(force_token)
+            return {
+                "ok": True,
+                "count": 0,
+                "files": [],
+                "rejected": [self._upload_decision_json(decision)],
+            }, 200
+
+        if self._git_sync_enabled:
+            pushed = await asyncio.to_thread(self._git_push_file, str(target))
+            manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+            if not manifest_ok:
+                if pushed:
+                    await asyncio.to_thread(self._git_delete_remote_file, str(target))
+                self._rollback_stored_image(target, category)
+                return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
+        self._forget_api_similar_upload(force_token)
+        return {"ok": True, "count": 1, "files": [target.name], "rejected": []}, 200
+
+    @staticmethod
+    def _upload_decision_json(decision: IndexedUploadDecision) -> dict:
+        def match_json(match: UploadMatch) -> dict:
+            return {
+                "path": match.path,
+                "number": match.number,
+                "similarity": round(match.similarity, 6),
+                "distance": match.distance,
+            }
+        return {
+            "reason": decision.reason,
+            "exact_match": match_json(decision.exact_match) if decision.exact_match else None,
+            "similar_matches": [match_json(match) for match in decision.similar_matches],
+        }
+
     async def _api_upload_images(self):
         from quart import request, jsonify
-        import base64 as b64mod
         if not _is_authenticated_web_request():
             return jsonify({"ok": False, "error": "unauthorized"}), 403
         try:
             data = await request.get_json()
-            category = data.get("category", "").strip()
+            category = str(data.get("category", "")).strip()
             images = data.get("images", [])
+            force_token = str(data.get("force_token", "")).strip()
             if not category:
                 return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            if force_token:
+                payload, status = await self._force_api_similar_upload(category, force_token)
+                return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
-            category = _sanitize_component(category)
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
             category_dir.mkdir(parents=True, exist_ok=True)
-            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
-            if category_dir is None:
-                return jsonify({"ok": False, "error": "invalid category"}), 400
-            remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+            remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
                 self._prepare_remote_upload_guard, category
             )
             if not remote_checked:
-                return jsonify({
-                    "ok": False,
-                    "error": "远程查重失败，为避免重复，本次未上传",
-                }), 503
+                return jsonify({"ok": False, "error": "远程查重失败，为避免重复，本次未上传"}), 503
 
             uploaded: list[str] = []
-            skipped_duplicate = 0
+            rejected: list[dict] = []
             for img in images:
-                name = img.get("name", "")
-                data_b64 = img.get("data", "")
+                name = str(img.get("name", ""))
+                data_b64 = str(img.get("data", ""))
                 if not name or not data_b64:
                     continue
                 ext = Path(name).suffix.lower()
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
                 image_bytes = b64mod.b64decode(data_b64)
-                target = self._store_unique_image(
+                fingerprint = compute_image_fingerprint(image_bytes)
+                target, decision = self._store_unique_image(
                     category_dir,
                     category,
                     ext,
                     image_bytes,
-                    remote_blob_shas=remote_blob_shas,
-                    remote_checked=remote_checked,
+                    remote_records=remote_records,
+                    remote_checked=True,
                     min_index=remote_max_index + 1,
+                    force_similar=False,
+                    fingerprint=fingerprint,
                 )
                 if target is None:
-                    skipped_duplicate += 1
+                    detail = self._upload_decision_json(decision)
+                    detail["name"] = name
+                    if decision.reason == "similar":
+                        detail["force_token"] = self._cache_api_similar_upload(
+                            category=category,
+                            suffix=ext,
+                            image_bytes=image_bytes,
+                            fingerprint=fingerprint,
+                        )
+                    rejected.append(detail)
                     continue
                 if self._git_sync_enabled:
                     pushed = await asyncio.to_thread(self._git_push_file, str(target))
-                    if not pushed:
+                    manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+                    if not manifest_ok:
+                        if pushed:
+                            await asyncio.to_thread(self._git_delete_remote_file, str(target))
                         self._rollback_stored_image(target, category)
-                        remote_blob_shas.discard(git_blob_sha(image_bytes))
-                        return jsonify({
-                            "ok": False,
-                            "error": "远程上传失败，本地写入已回滚",
-                            "count": len(uploaded),
-                            "files": uploaded,
-                        }), 502
+                        return jsonify({"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚", "files": uploaded}), 502
                 uploaded.append(target.name)
-            resp = {"ok": True, "count": len(uploaded), "files": uploaded}
-            if skipped_duplicate:
-                resp["skipped"] = skipped_duplicate
-            return jsonify(resp)
+                remote_max_index = max(remote_max_index, int(target.stem))
+            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
             logger.error(f"上传API错误: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1274,74 +1424,78 @@ class Main(Star):
 
     async def _api_pub_upload(self):
         from quart import request, jsonify
-        import base64 as b64mod
         try:
             data = await request.get_json()
-            token = data.get("token", "")
+            token = str(data.get("token", ""))
             if not self._check_upload_token(token):
                 return jsonify({"ok": False, "error": "密钥错误"}), 403
-            category = data.get("category", "").strip()
+            category = str(data.get("category", "")).strip()
             images = data.get("images", [])
+            force_token = str(data.get("force_token", "")).strip()
             if not category:
                 return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            if force_token:
+                payload, status = await self._force_api_similar_upload(category, force_token)
+                return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
-            category = _sanitize_component(category)
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
             category_dir.mkdir(parents=True, exist_ok=True)
-            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
-            if category_dir is None:
-                return jsonify({"ok": False, "error": "invalid category"}), 400
-            remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+            remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
                 self._prepare_remote_upload_guard, category
             )
             if not remote_checked:
-                return jsonify({
-                    "ok": False,
-                    "error": "远程查重失败，为避免重复，本次未上传",
-                }), 503
+                return jsonify({"ok": False, "error": "远程查重失败，为避免重复，本次未上传"}), 503
 
             uploaded: list[str] = []
-            skipped_duplicate = 0
+            rejected: list[dict] = []
             for img in images:
-                name = img.get("name", "")
-                data_b64 = img.get("data", "")
+                name = str(img.get("name", ""))
+                data_b64 = str(img.get("data", ""))
                 if not name or not data_b64:
                     continue
                 ext = Path(name).suffix.lower()
                 if ext not in IMAGE_SUFFIXES:
                     ext = ".png"
                 image_bytes = b64mod.b64decode(data_b64)
-                target = self._store_unique_image(
+                fingerprint = compute_image_fingerprint(image_bytes)
+                target, decision = self._store_unique_image(
                     category_dir,
                     category,
                     ext,
                     image_bytes,
-                    remote_blob_shas=remote_blob_shas,
-                    remote_checked=remote_checked,
+                    remote_records=remote_records,
+                    remote_checked=True,
                     min_index=remote_max_index + 1,
+                    force_similar=False,
+                    fingerprint=fingerprint,
                 )
                 if target is None:
-                    skipped_duplicate += 1
+                    detail = self._upload_decision_json(decision)
+                    detail["name"] = name
+                    if decision.reason == "similar":
+                        detail["force_token"] = self._cache_api_similar_upload(
+                            category=category,
+                            suffix=ext,
+                            image_bytes=image_bytes,
+                            fingerprint=fingerprint,
+                        )
+                    rejected.append(detail)
                     continue
                 if self._git_sync_enabled:
                     pushed = await asyncio.to_thread(self._git_push_file, str(target))
-                    if not pushed:
+                    manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+                    if not manifest_ok:
+                        if pushed:
+                            await asyncio.to_thread(self._git_delete_remote_file, str(target))
                         self._rollback_stored_image(target, category)
-                        remote_blob_shas.discard(git_blob_sha(image_bytes))
-                        return jsonify({
-                            "ok": False,
-                            "error": "远程上传失败，本地写入已回滚",
-                            "count": len(uploaded),
-                            "files": uploaded,
-                        }), 502
+                        return jsonify({"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚", "files": uploaded}), 502
                 uploaded.append(target.name)
-            resp = {"ok": True, "count": len(uploaded), "files": uploaded}
-            if skipped_duplicate:
-                resp["skipped"] = skipped_duplicate
-            return jsonify(resp)
+                remote_max_index = max(remote_max_index, int(target.stem))
+            return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
             logger.error(f"公开上传API错误: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1710,18 +1864,186 @@ class Main(Star):
                 })
         return result
 
+    def _git_list_tree_at(self, tree_sha: str) -> list[dict] | None:
+        """Read one immutable GitHub tree snapshot by SHA for destructive operations."""
+        if self._git_platform() != "github" or not str(tree_sha).strip():
+            return None
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/trees/{str(tree_sha).strip()}"
+        status, data = self._git_request("GET", url, params={"recursive": "1"})
+        if status != 200 or not data:
+            logger.warning(f"[Gallery] 获取固定 GitHub tree 失败 (HTTP {status})")
+            return None
+        if data.get("truncated"):
+            logger.warning("[Gallery] 固定 GitHub tree 被截断，为避免误重编号，本次中止。")
+            return None
+        result = []
+        for entry in data.get("tree", []):
+            if entry.get("type") == "blob":
+                result.append({
+                    "path": entry["path"],
+                    "sha": entry.get("sha", ""),
+                    "size": entry.get("size", 0),
+                })
+        return result
+
+    def _ensure_perceptual_index(self) -> None:
+        """Fill missing perceptual hashes once and persist them in hash_index.json."""
+        changed = False
+        for image_path in self._iter_image_files():
+            key = self._hash_index_key(image_path)
+            if not key:
+                continue
+            try:
+                stat_data = self._hash_index_stat(image_path)
+            except FileNotFoundError:
+                continue
+            with self._hash_index_lock:
+                entry = self._hash_index.get(key)
+            if (
+                isinstance(entry, dict)
+                and entry.get("size") == stat_data["size"]
+                and entry.get("mtime_ns") == stat_data["mtime_ns"]
+                and entry.get("hash")
+                and entry.get("perceptual_hash")
+            ):
+                continue
+            try:
+                content = image_path.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+                phash = perceptual_hash_from_bytes(content)
+            except Exception as exc:
+                logger.warning(f"计算感知哈希失败 {image_path}: {exc}")
+                continue
+            self._remember_file_hash(
+                image_path,
+                digest,
+                category=image_path.parent.name,
+                save=False,
+                perceptual_hash=phash,
+            )
+            changed = True
+        if changed:
+            self._save_hash_index()
+
+    def _indexed_local_images(self) -> tuple[IndexedImage, ...]:
+        self._ensure_perceptual_index()
+        with self._hash_index_lock:
+            snapshot = dict(self._hash_index)
+        active: list[IndexedImage] = []
+        for record in indexed_images_from_hash_index(snapshot):
+            local_path = resolve_gallery_local_path(self.gallery_root.parent, record.path)
+            if local_path is not None and local_path.exists() and _is_image_file(local_path):
+                active.append(record)
+        return tuple(active)
+
+    def _gallery_manifest_payload(self) -> dict:
+        self._ensure_perceptual_index()
+        with self._hash_index_lock:
+            files = {
+                path: {"perceptual_hash": str(entry.get("perceptual_hash", ""))}
+                for path, entry in self._hash_index.items()
+                if isinstance(entry, dict)
+                and str(entry.get("perceptual_hash", "")).strip()
+                and Path(path).suffix.lower() in IMAGE_SUFFIXES
+            }
+        return {
+            "version": 1,
+            "algorithm": GALLERY_INDEX_ALGORITHM,
+            "files": files,
+        }
+
+    def _publish_gallery_manifest(self) -> bool:
+        if not self._git_sync_enabled:
+            return True
+        payload = json.dumps(
+            self._gallery_manifest_payload(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        uploaded, _ = self._git_put_file(
+            GALLERY_INDEX_PATH,
+            payload,
+            "Update gallery perceptual index",
+        )
+        return uploaded
+
+    def _read_remote_perceptual_manifest(
+        self, tree: list[dict]
+    ) -> tuple[bool, dict[str, str]]:
+        remote_images = {
+            str(entry.get("path", ""))
+            for entry in tree
+            if self._is_remote_gallery_image(str(entry.get("path", "")))
+            and len(Path(str(entry.get("path", ""))).parts) == 3
+        }
+        manifest_present = any(
+            str(entry.get("path", "")) == GALLERY_INDEX_PATH for entry in tree
+        )
+        manifest: dict[str, str] = {}
+        if manifest_present:
+            raw = self._git_get_file(GALLERY_INDEX_PATH)
+            if raw is None:
+                return False, {}
+            try:
+                manifest = normalize_perceptual_manifest(json.loads(raw.decode("utf-8")))
+            except Exception as exc:
+                logger.warning(f"[Gallery] 远程感知索引解析失败：{exc}")
+                return False, {}
+
+        missing = sorted(path for path in remote_images if not manifest.get(path))
+        if not missing:
+            return True, manifest
+
+        # First upgrade after v2.11.3: reuse synchronized local files to build the
+        # small remote manifest. No remote image is decoded twice by this path.
+        local_records = {record.path: record for record in self._indexed_local_images()}
+        for path in missing:
+            record = local_records.get(path)
+            if record is None or not record.perceptual_hash:
+                logger.warning(
+                    f"[Gallery] 远程图片 {path} 尚未同步到本地，无法安全建立感知索引。"
+                )
+                return False, {}
+            manifest[path] = record.perceptual_hash
+
+        payload = {
+            "version": 1,
+            "algorithm": GALLERY_INDEX_ALGORITHM,
+            "files": {
+                path: {"perceptual_hash": phash}
+                for path, phash in sorted(manifest.items())
+            },
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        uploaded, _ = self._git_put_file(
+            GALLERY_INDEX_PATH,
+            encoded,
+            "Build gallery perceptual index",
+        )
+        return (uploaded, manifest if uploaded else {})
+
     def _prepare_remote_upload_guard(
         self, category: str
-    ) -> tuple[bool, set[str], int]:
-        """Snapshot remote duplicate state before admitting a Git-backed upload."""
+    ) -> tuple[bool, tuple[IndexedImage, ...], int]:
+        """Snapshot remote exact + perceptual state before an upload."""
+        del category  # dedup is global; the argument remains for API compatibility.
         if not self._git_sync_enabled:
-            return True, set(), 0
+            return True, (), 0
         tree = self._git_list_tree()
         if tree is None:
-            return False, set(), 0
+            return False, (), 0
+        manifest_ok, manifest = self._read_remote_perceptual_manifest(tree)
+        if not manifest_ok:
+            return False, (), 0
         return (
             True,
-            collect_remote_category_blob_shas(tree, category, IMAGE_SUFFIXES),
+            indexed_images_from_remote_tree(tree, manifest, IMAGE_SUFFIXES),
             remote_gallery_max_index(tree, IMAGE_SUFFIXES),
         )
 
@@ -2543,7 +2865,8 @@ class Main(Star):
                 "- /删除123：删除编号为 123 的图片或表情包",
                 "- /去重图库：扫描并删除本地图库中的重复图片，保留每个分类中首次出现的文件",
                 "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
-                "- /导入图库：重新扫描 gallery 并自动整理数字编号",
+                "- /导入图库：按同一映射把本地与 GitHub 全图库整理为连续的 1..N 编号",
+                "- /强制上传：仅在感知查重提示相似时确认仍然上传；完全重复不可绕过",
                 "- /画廊检查：只读检查配置、权限、远程连接和插件更新",
                 "- /立即同步：立即从远程仓库拉取新增图片到本地（别名：/同步远程）",
                 "- /推送到远程：快速推送本地新增或变更图片到远程仓库，已存在则跳过",
@@ -2668,6 +2991,9 @@ class Main(Star):
 
         if normalized == "/导入图库":
             return "import", None
+
+        if normalized == "/强制上传":
+            return "force_similar_upload", None
 
         if normalized.startswith("/去重图库"):
             tail = normalized[len("/去重图库"):].strip()
@@ -2893,6 +3219,7 @@ class Main(Star):
         digest: str,
         category: str | None = None,
         save: bool = True,
+        perceptual_hash: str | None = None,
     ) -> None:
         key = self._hash_index_key(path)
         if not key:
@@ -2910,6 +3237,7 @@ class Main(Star):
                 size=stat_data["size"],
                 mtime_ns=stat_data["mtime_ns"],
                 category=_sanitize_component(category),
+                perceptual_hash=perceptual_hash,
             )
             if self._hash_index.get(key) != entry:
                 self._hash_index[key] = entry
@@ -2935,8 +3263,10 @@ class Main(Star):
         local_sha = git_blob_sha(content)
         normalized_remote_sha = remote_sha.strip() if isinstance(remote_sha, str) else ""
         matching_sha = local_sha if local_sha == normalized_remote_sha else None
+        with self._hash_index_lock:
+            previous_entry = self._hash_index.get(git_path)
         entry = merge_hash_entry(
-            None,
+            previous_entry,
             digest=digest,
             size=stat_data["size"],
             mtime_ns=stat_data["mtime_ns"],
@@ -3021,21 +3351,25 @@ class Main(Star):
         ext: str,
         image_bytes: bytes,
         *,
-        remote_blob_shas: set[str] | None = None,
+        remote_records: tuple[IndexedImage, ...] = (),
         remote_checked: bool = True,
         min_index: int = 1,
-    ) -> Path | None:
-        """Store only after local and, when required, remote duplicate checks pass."""
+        force_similar: bool = False,
+        fingerprint: ImageFingerprint | None = None,
+    ) -> tuple[Path | None, IndexedUploadDecision]:
+        """Evaluate one fingerprint against both indexes, then optionally store it."""
         with self._gallery_write_lock:
-            category_hashes = self._category_hashes(category)
-            decision = evaluate_upload_dedup(
-                image_bytes,
-                local_hashes=category_hashes,
-                remote_blob_shas=remote_blob_shas or set(),
+            candidate = fingerprint or compute_image_fingerprint(image_bytes)
+            decision = evaluate_indexed_upload(
+                candidate,
+                local_records=self._indexed_local_images(),
+                remote_records=remote_records,
                 remote_checked=remote_checked,
+                perceptual_max_distance=PERCEPTUAL_MAX_DISTANCE,
+                force_similar=force_similar,
             )
             if not decision.allowed:
-                return None
+                return None, decision
 
             index = max(self._next_index(), max(1, int(min_index)))
             target_path = category_dir / f"{index}{ext}"
@@ -3044,13 +3378,14 @@ class Main(Star):
                 target_path = category_dir / f"{index}{ext}"
 
             target_path.write_bytes(image_bytes)
-            category_hashes.add(decision.content_hash)
-            if remote_blob_shas is not None:
-                remote_blob_shas.add(decision.blob_sha)
+            self._invalidate_category_hash_cache(category)
             self._remember_file_hash(
-                target_path, decision.content_hash, category=category
+                target_path,
+                candidate.content_hash,
+                category=category,
+                perceptual_hash=candidate.perceptual_hash,
             )
-            return target_path
+            return target_path, decision
 
     def _rollback_stored_image(self, path: Path, category: str) -> None:
         """Remove a local candidate when its required remote push did not complete."""
@@ -3348,6 +3683,116 @@ class Main(Star):
             )
         )
 
+    @staticmethod
+    def _upload_match_label(match: UploadMatch) -> str:
+        number = f"#{match.number}" if match.number is not None else match.path
+        return f"{number}（{match.similarity * 100:.1f}%）"
+
+    async def _send_upload_decision_hint(
+        self, event: AstrMessageEvent, decision: IndexedUploadDecision
+    ) -> None:
+        matches: list[UploadMatch] = []
+        if decision.exact_match is not None:
+            matches = [decision.exact_match]
+            label = self._upload_match_label(decision.exact_match).split("（", 1)[0]
+            await event.send(
+                event.plain_result(f"发现完全重复图片：{label}。已禁止重复上传。")
+            )
+        elif decision.similar_matches:
+            matches = list(decision.similar_matches)
+            labels = "、".join(self._upload_match_label(match) for match in matches)
+            await event.send(
+                event.plain_result(
+                    f"发现相似图片：{labels}\n"
+                    "如果确认它们不是同一张图，可在 5 分钟内发送 /强制上传。"
+                )
+            )
+
+        for match in matches:
+            local_path = resolve_gallery_local_path(self.gallery_root.parent, match.path)
+            if local_path is not None and local_path.exists():
+                try:
+                    await event.send(event.image_result(str(local_path)))
+                except Exception as exc:
+                    logger.warning(f"发送查重提示图失败 {match.path}: {exc}")
+
+    def _cache_similar_upload(
+        self,
+        event: AstrMessageEvent,
+        *,
+        category: str,
+        suffix: str,
+        image_bytes: bytes,
+        fingerprint: ImageFingerprint,
+    ) -> None:
+        key = self._remote_delete_preview_key(event)
+        with self._pending_similar_upload_lock:
+            self._pending_similar_uploads[key] = {
+                "created_at": time.time(),
+                "category": category,
+                "suffix": suffix,
+                "image_bytes": image_bytes,
+                "fingerprint": fingerprint,
+            }
+
+    async def _handle_force_similar_upload(self, event: AstrMessageEvent) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        key = self._remote_delete_preview_key(event)
+        with self._pending_similar_upload_lock:
+            pending = self._pending_similar_uploads.get(key)
+        if not pending:
+            await event.send(event.plain_result("当前没有待确认的相似图片，请先执行一次 /上传<分类>。"))
+            return
+        if time.time() - float(pending.get("created_at", 0)) > SIMILAR_UPLOAD_CONFIRM_TTL:
+            with self._pending_similar_upload_lock:
+                self._pending_similar_uploads.pop(key, None)
+            await event.send(event.plain_result("相似图片确认已过期，请重新上传检查。"))
+            return
+
+        category = str(pending["category"])
+        category_dir = self._resolve_existing_category_dir(category)
+        if category_dir is None:
+            await event.send(event.plain_result(f"分类【{category}】已不存在，无法强制上传。"))
+            return
+        image_bytes = bytes(pending["image_bytes"])
+        fingerprint = pending["fingerprint"]
+        remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
+            self._prepare_remote_upload_guard, category
+        )
+        if not remote_checked:
+            await event.send(event.plain_result("远程查重失败，本次强制上传未执行。"))
+            return
+        target, decision = self._store_unique_image(
+            category_dir,
+            category,
+            str(pending["suffix"]),
+            image_bytes,
+            remote_records=remote_records,
+            remote_checked=True,
+            min_index=remote_max_index + 1,
+            force_similar=True,
+            fingerprint=fingerprint,
+        )
+        if target is None:
+            with self._pending_similar_upload_lock:
+                self._pending_similar_uploads.pop(key, None)
+            await self._send_upload_decision_hint(event, decision)
+            return
+        if self._git_sync_enabled:
+            pushed = await asyncio.to_thread(self._git_push_file, str(target))
+            manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+            if not manifest_ok:
+                if pushed:
+                    await asyncio.to_thread(self._git_delete_remote_file, str(target))
+                self._rollback_stored_image(target, category)
+                await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
+                return
+        with self._pending_similar_upload_lock:
+            self._pending_similar_uploads.pop(key, None)
+        await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
+
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
         category_dir = self._resolve_existing_category_dir(category)
         if not category_dir:
@@ -3362,13 +3807,11 @@ class Main(Star):
         if not all_images:
             await event.send(event.plain_result("请先回复图片、多图或合并转发聊天记录，再发送 /上传<分类>。"))
             return
-
-        limited_by_batch_size = len(all_images) > UPLOAD_BATCH_MAX
-        if limited_by_batch_size:
+        if len(all_images) > UPLOAD_BATCH_MAX:
             all_images = all_images[:UPLOAD_BATCH_MAX]
 
         category_name = category_dir.name
-        remote_checked, remote_blob_shas, remote_max_index = await asyncio.to_thread(
+        remote_checked, remote_records, remote_max_index = await asyncio.to_thread(
             self._prepare_remote_upload_guard, category_name
         )
         if not remote_checked:
@@ -3380,62 +3823,60 @@ class Main(Star):
             return
 
         uploaded: list[str] = []
-        skipped_duplicate = 0
-        remote_push_failed = False
+        exact_count = 0
+        similar_count = 0
         for source_path, image_bytes in all_images:
             suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
             if suffix == ".gif":
                 suffix = ".jpg"
-            target_path = self._store_unique_image(
+            fingerprint = compute_image_fingerprint(image_bytes)
+            target_path, decision = self._store_unique_image(
                 category_dir,
                 category_name,
                 suffix,
                 image_bytes,
-                remote_blob_shas=remote_blob_shas,
-                remote_checked=remote_checked,
+                remote_records=remote_records,
+                remote_checked=True,
                 min_index=remote_max_index + 1,
+                fingerprint=fingerprint,
             )
             if target_path is None:
-                skipped_duplicate += 1
+                if decision.reason == "exact_duplicate":
+                    exact_count += 1
+                    await self._send_upload_decision_hint(event, decision)
+                    continue
+                if decision.reason == "similar":
+                    similar_count += 1
+                    self._cache_similar_upload(
+                        event,
+                        category=category_name,
+                        suffix=suffix,
+                        image_bytes=image_bytes,
+                        fingerprint=fingerprint,
+                    )
+                    await self._send_upload_decision_hint(event, decision)
+                    # One pending candidate per user/session keeps /强制上传 unambiguous.
+                    break
                 continue
+
             if self._git_sync_enabled:
                 pushed = await asyncio.to_thread(self._git_push_file, str(target_path))
-                if not pushed:
+                manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
+                if not manifest_ok:
+                    if pushed:
+                        await asyncio.to_thread(self._git_delete_remote_file, str(target_path))
                     self._rollback_stored_image(target_path, category_name)
-                    remote_blob_shas.discard(git_blob_sha(image_bytes))
-                    remote_push_failed = True
+                    await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
                     break
             uploaded.append(target_path.name)
+            remote_max_index = max(remote_max_index, int(target_path.stem))
 
-        if remote_push_failed and not uploaded:
-            await event.send(
-                event.plain_result(
-                    "远程上传失败，本地写入已回滚，本次没有放行任何图片。"
-                )
-            )
-            return
-
-        if len(uploaded) == 1:
-            msg = f"已上传到【{category}】：{uploaded[0]}"
-            if skipped_duplicate:
-                msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
-            if remote_push_failed:
-                msg += "（后续远程上传失败，失败图片已回滚并停止本批次）"
-            await event.send(event.plain_result(msg))
-        elif uploaded:
-            msg = f"已批量上传 {len(uploaded)} 张到【{category}】：{', '.join(uploaded)}"
-            if skipped_duplicate:
-                msg += f"（已跳过 {skipped_duplicate} 张重复图片）"
-            if limited_by_batch_size:
-                msg += f"（单次最多处理 {UPLOAD_BATCH_MAX} 张，其余已跳过）"
-            if remote_push_failed:
-                msg += "（后续远程上传失败，失败图片已回滚并停止本批次）"
-            await event.send(event.plain_result(msg))
-        else:
-            msg = "没有新上传的图片，重复的图片已被跳过。"
-            if limited_by_batch_size:
-                msg += f"单次最多处理 {UPLOAD_BATCH_MAX} 张。"
-            await event.send(event.plain_result(msg))
+        parts = [f"成功上传 {len(uploaded)} 张到【{category_name}】"]
+        if exact_count:
+            parts.append(f"完全重复 {exact_count} 张已拦截")
+        if similar_count:
+            parts.append("1 张相似图片等待 /强制上传 确认")
+        await event.send(event.plain_result("；".join(parts) + "。"))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
@@ -3469,67 +3910,240 @@ class Main(Star):
 
         await event.send(event.plain_result(message))
 
-    async def _normalize_gallery_tree(self) -> int:
-        """把图库里的文件统一整理成数字命名，并保证分类目录稳定。"""
-        self.gallery_root.mkdir(parents=True, exist_ok=True)
+    def _remap_hash_index(self, plan: tuple[RenameStep, ...]) -> None:
+        mapping = {step.source: step.target for step in plan}
+        with self._hash_index_lock:
+            remapped: dict[str, dict] = {}
+            for old_path, entry in self._hash_index.items():
+                new_path = mapping.get(old_path, old_path)
+                copied = dict(entry)
+                parts = Path(new_path).parts
+                if len(parts) >= 3:
+                    copied["category"] = _sanitize_component(parts[1])
+                remapped[new_path] = copied
+            self._hash_index = remapped
+            self._hash_index_dirty = True
+        self._sha_cache = {
+            mapping.get(path, path): sha for path, sha in self._sha_cache.items()
+        }
         self._category_hash_cache.clear()
+        self._save_hash_index(force=True)
 
-        image_paths = sorted(
-            self._iter_image_files(),
-            key=lambda item: (
-                0 if item.stem.isdigit() else 1,
-                item.relative_to(self.gallery_root).as_posix().lower(),
-            ),
+    def _stage_local_renumber(
+        self, plan: tuple[RenameStep, ...]
+    ) -> list[tuple[Path, Path, Path]]:
+        staged: list[tuple[Path, Path, Path]] = []
+        changed = [step for step in plan if step.source != step.target]
+        token = f"{os.getpid()}-{time.time_ns()}"
+        try:
+            for offset, step in enumerate(changed):
+                source = resolve_gallery_local_path(self.gallery_root.parent, step.source)
+                target = resolve_gallery_local_path(self.gallery_root.parent, step.target)
+                if source is None or target is None or not source.exists():
+                    raise RuntimeError(f"本地重编号源文件缺失：{step.source}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temp = source.with_name(f".airi-renumber-{token}-{offset}{source.suffix}")
+                source.replace(temp)
+                staged.append((temp, source, target))
+            return staged
+        except Exception:
+            for temp, source, _ in reversed(staged):
+                if temp.exists():
+                    temp.replace(source)
+            raise
+
+    @staticmethod
+    def _rollback_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
+        for temp, source, _ in reversed(staged):
+            try:
+                if temp.exists():
+                    temp.replace(source)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _finish_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
+        for temp, _, target in staged:
+            if target.exists():
+                raise RuntimeError(f"重编号目标被意外占用：{target}")
+            temp.replace(target)
+
+    def _github_commit_renumber(
+        self,
+        plan: tuple[RenameStep, ...],
+        tree: list[dict],
+        manifest_payload: bytes,
+        *,
+        expected_head_sha: str,
+        base_tree_sha: str,
+    ) -> bool:
+        """Commit one renumber plan only against the HEAD/tree it was planned from."""
+        if self._git_platform() != "github":
+            return False
+        current_head = self._git_get_head_commit_and_tree()
+        if not current_head or current_head[0] != expected_head_sha:
+            logger.warning("[Gallery] 重编号期间 GitHub 已发生变化，拒绝基于新 HEAD 继续提交。")
+            return False
+
+        blobs = {
+            str(entry.get("path", "")): str(entry.get("sha", ""))
+            for entry in tree
+            if str(entry.get("sha", ""))
+        }
+        final_targets = {step.target for step in plan}
+        source_paths = {step.source for step in plan}
+        entries: list[dict] = []
+        for step in plan:
+            blob_sha = blobs.get(step.source)
+            if not blob_sha:
+                logger.warning(f"[Gallery] 远程重编号缺少 blob SHA：{step.source}")
+                return False
+            entries.append({"path": step.target, "mode": "100644", "type": "blob", "sha": blob_sha})
+        for old_path in sorted(source_paths - final_targets):
+            entries.append({"path": old_path, "mode": "100644", "type": "blob", "sha": None})
+        manifest_sha = self._git_create_github_blob(manifest_payload)
+        if not manifest_sha:
+            return False
+        entries.append({"path": GALLERY_INDEX_PATH, "mode": "100644", "type": "blob", "sha": manifest_sha})
+
+        tree_sha = self._git_create_github_tree(base_tree_sha, entries)
+        if not tree_sha:
+            return False
+        commit_sha = self._git_create_github_commit(
+            f"Renumber {len(plan)} gallery images",
+            tree_sha,
+            expected_head_sha,
         )
-        if not image_paths:
-            if self._hash_index:
-                with self._hash_index_lock:
-                    self._hash_index.clear()
-                    self._hash_index_dirty = True
-                self._save_hash_index()
-            return 0
+        if not commit_sha:
+            return False
+        if self._git_update_github_ref(commit_sha):
+            return True
+        logger.warning("[Gallery] GitHub HEAD 在重编号提交期间发生变化，非快进更新已被拒绝。")
+        return False
 
-        used_indices: set[int] = set()
-        next_index = 1
-        renamed_count = 0
+    def _renumber_gallery_consistently_sync(self) -> dict:
+        self.gallery_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_perceptual_index()
 
-        for path in image_paths:
-            relative_parts = path.relative_to(self.gallery_root).parts
-            category = _sanitize_component(relative_parts[0] if relative_parts else DEFAULT_CATEGORY)
-            category_dir = self._category_dir(category)
-            category_dir.mkdir(parents=True, exist_ok=True)
+        if not self._git_sync_enabled:
+            local_paths = [
+                self._to_git_path(str(path)) for path in self._iter_image_files()
+            ]
+            plan = build_global_renumber_plan(
+                [path for path in local_paths if path], IMAGE_SUFFIXES
+            )
+            staged = self._stage_local_renumber(plan)
+            self._finish_local_renumber(staged)
+            self._remap_hash_index(plan)
+            return {"ok": True, "renamed": len(staged), "total": len(plan), "remote": False}
 
-            current_index = int(path.stem) if path.stem.isdigit() else None
-            if current_index is not None and current_index not in used_indices:
-                target_index = current_index
-                next_index = max(next_index, target_index + 1)
-            else:
-                while next_index in used_indices:
-                    next_index += 1
-                target_index = next_index
-                next_index += 1
-
-            target_path = category_dir / f"{target_index}{path.suffix.lower()}"
-            if path.resolve() != target_path.resolve():
-                if target_path.exists():
-                    alt_index = target_index
-                    while target_path.exists():
-                        alt_index += 1
-                        target_path = category_dir / f"{alt_index}{path.suffix.lower()}"
-                    target_index = alt_index
-                    next_index = max(next_index, alt_index + 1)
-                shutil.move(str(path), str(target_path))
-                renamed_count += 1
-
-            used_indices.add(target_index)
-
-        if renamed_count:
+        if self._git_platform() != "github":
+            return {"ok": False, "error": "双端一致重编号目前仅支持 GitHub；为避免编号分叉，本次未修改任何文件。"}
+        if not self._sync_lock.acquire(blocking=False):
+            return {"ok": False, "error": "已有同步任务正在运行，本次未执行重编号。"}
+        try:
+            head = self._git_get_head_commit_and_tree()
+            if not head:
+                return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
+            expected_head_sha, base_tree_sha = head
+            tree = self._git_list_tree_at(base_tree_sha)
+            if tree is None:
+                return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
+            remote_paths = sorted(
+                str(entry.get("path", ""))
+                for entry in tree
+                if self._is_remote_gallery_image(str(entry.get("path", "")))
+                and len(Path(str(entry.get("path", ""))).parts) == 3
+            )
+            local_paths = sorted(
+                path
+                for path in (self._to_git_path(str(item)) for item in self._iter_image_files())
+                if path
+            )
+            if local_paths != remote_paths:
+                return {
+                    "ok": False,
+                    "error": "本地与 GitHub 图片集合尚未一致，请先执行 /立即同步；本次没有改写任何编号。",
+                }
+            plan = build_global_renumber_plan(remote_paths, IMAGE_SUFFIXES)
+            mapping = {step.source: step.target for step in plan}
+            self._ensure_perceptual_index()
             with self._hash_index_lock:
-                self._hash_index.clear()
-                self._hash_index_dirty = True
-            self._save_hash_index()
+                old_index = dict(self._hash_index)
+            manifest_files = {}
+            for old_path, entry in old_index.items():
+                if not isinstance(entry, dict):
+                    continue
+                phash = str(entry.get("perceptual_hash", "")).strip()
+                if phash and old_path in mapping:
+                    manifest_files[mapping[old_path]] = {"perceptual_hash": phash}
+            manifest_payload = json.dumps(
+                {"version": 1, "algorithm": GALLERY_INDEX_ALGORITHM, "files": manifest_files},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
 
-        return renamed_count
+            current_head = self._git_get_head_commit_and_tree()
+            if not current_head or current_head[0] != expected_head_sha:
+                return {
+                    "ok": False,
+                    "error": "重编号期间 GitHub 已发生变化，本次没有改写任何本地编号，请重新执行 /导入图库。",
+                }
+
+            staged = self._stage_local_renumber(plan)
+            if not self._github_commit_renumber(
+                plan,
+                tree,
+                manifest_payload,
+                expected_head_sha=expected_head_sha,
+                base_tree_sha=base_tree_sha,
+            ):
+                self._rollback_local_renumber(staged)
+                latest_head = self._git_get_head_commit_and_tree()
+                if latest_head and latest_head[0] != expected_head_sha:
+                    return {
+                        "ok": False,
+                        "error": "重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。",
+                    }
+                return {"ok": False, "error": "GitHub 重编号提交失败，本地临时改名已回滚。"}
+            try:
+                self._finish_local_renumber(staged)
+            except Exception as exc:
+                logger.error(f"[Gallery] GitHub 已重编号但本地落盘失败，将由下一次同步修复：{exc}")
+                for temp, _, _ in staged:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                return {"ok": False, "error": "GitHub 已完成重编号，但本地落盘失败；请立即执行 /立即同步。"}
+            self._remap_hash_index(plan)
+            for step in plan:
+                old_sha = next((str(e.get("sha", "")) for e in tree if e.get("path") == step.source), "")
+                if old_sha:
+                    self._sha_cache[step.target] = old_sha
+            return {"ok": True, "renamed": len(staged), "total": len(plan), "remote": True}
+        finally:
+            self._sync_lock.release()
+
+    async def _renumber_gallery_consistently(self) -> dict:
+        return await asyncio.to_thread(self._renumber_gallery_consistently_sync)
+
+    @staticmethod
+    def _format_renumber_report(report: dict) -> str:
+        if not report.get("ok"):
+            return str(report.get("error") or "图库整理失败，未修改编号。")
+        total = int(report.get("total", 0))
+        renamed = int(report.get("renamed", 0))
+        if total <= 0:
+            return "图库整理完成：当前没有图片需要编号。"
+        consistency = "；本地与 GitHub 编号一致" if report.get("remote") else ""
+        return f"图库整理完成：共 {total} 张，编号 1-{total}；重命名 {renamed} 个文件{consistency}。"
+
+    async def _normalize_gallery_tree(self) -> int:
+        """Local-only compact normalizer used when Git synchronization is disabled."""
+        report = await asyncio.to_thread(self._renumber_gallery_consistently_sync)
+        return int(report.get("renamed", 0)) if report.get("ok") else 0
 
     async def _build_category_collage(self, category: str, images: list[Path]) -> Path | None:
         try:

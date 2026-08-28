@@ -177,24 +177,59 @@ def test_versionless_index_strips_matching_remote_baseline_fields():
     assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
 
 
-def test_only_exact_integer_v2_preserves_remote_baseline_fields():
+def test_v2_remote_baseline_migrates_to_v3_without_fabricating_perceptual_hash():
     entry = {
         "hash": "sha256-old",
         "git_blob_sha": "matching-blob",
         "remote_sha": "matching-blob",
+        "perceptual_hash": "0123456789abcdef",
     }
-    for invalid_version in (3, "2", 2.0, True, None, {"major": 2}):
+    files = normalize_hash_index({
+        "version": 2,
+        "files": {"gallery/airi/1.png": entry},
+    })
+    migrated = files["gallery/airi/1.png"]
+    assert verified_remote_sha(migrated) == "matching-blob"
+    assert "perceptual_hash" not in migrated
+
+    for invalid_version in ("2", 2.0, True, None, {"major": 2}):
         files = normalize_hash_index({
             "version": invalid_version,
             "files": {"gallery/airi/1.png": entry},
         })
         assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
 
+
+def test_unknown_future_index_version_does_not_trust_advanced_fields():
     files = normalize_hash_index({
-        "version": 2,
-        "files": {"gallery/airi/1.png": entry},
+        "version": 4,
+        "files": {
+            "gallery/airi/1.png": {
+                "hash": "sha256-old",
+                "git_blob_sha": "matching-blob",
+                "remote_sha": "matching-blob",
+                "perceptual_hash": "0123456789abcdef",
+            }
+        },
     })
-    assert verified_remote_sha(files["gallery/airi/1.png"]) == "matching-blob"
+    assert files == {"gallery/airi/1.png": {"hash": "sha256-old"}}
+
+
+def test_v3_preserves_valid_perceptual_hash_and_remote_baseline():
+    files = normalize_hash_index({
+        "version": 3,
+        "files": {
+            "gallery/airi/1.png": {
+                "hash": "sha256-old",
+                "git_blob_sha": "matching-blob",
+                "remote_sha": "matching-blob",
+                "perceptual_hash": "0123456789ABCDEF",
+            }
+        },
+    })
+    entry = files["gallery/airi/1.png"]
+    assert verified_remote_sha(entry) == "matching-blob"
+    assert entry["perceptual_hash"] == "0123456789abcdef"
 
 
 def test_verified_entry_requires_matching_git_and_remote_sha():
