@@ -496,7 +496,9 @@ def build_category_tree_delta_entries(
         after = final.get(name)
         if before == after:
             continue
-        if before is not None:
+        # Replacing an existing path only needs an upsert. Deleting it first can
+        # transiently empty a category tree, which GitHub rejects with HTTP 404.
+        if before is not None and after is None:
             deletes.append(
                 {
                     "path": name,
