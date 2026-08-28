@@ -1907,7 +1907,12 @@ class Main(Star):
         self._ensure_perceptual_index()
         with self._hash_index_lock:
             snapshot = dict(self._hash_index)
-        return indexed_images_from_hash_index(snapshot)
+        active: list[IndexedImage] = []
+        for record in indexed_images_from_hash_index(snapshot):
+            local_path = resolve_gallery_local_path(self.gallery_root.parent, record.path)
+            if local_path is not None and local_path.exists() and _is_image_file(local_path):
+                active.append(record)
+        return tuple(active)
 
     def _gallery_manifest_payload(self) -> dict:
         self._ensure_perceptual_index()
