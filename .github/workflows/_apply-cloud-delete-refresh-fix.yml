@@ -1,0 +1,45 @@
+name: Apply cloud delete refresh fix
+
+on:
+  push:
+    branches:
+      - fix/cloud-delete-immediate-refresh
+    paths:
+      - .github/scripts/apply_cloud_delete_refresh_fix.py
+      - .github/workflows/_apply-cloud-delete-refresh-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/cloud-delete-immediate-refresh
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python .github/scripts/apply_cloud_delete_refresh_fix.py
+      - name: Check cloud JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path('pages/zz_cloud/index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script>(.*?)</script>', html, flags=re.S)
+          assert scripts
+          Path('/tmp/cloud.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/cloud.js
+      - name: Remove temporary patch files
+        run: rm -f .github/scripts/apply_cloud_delete_refresh_fix.py .github/workflows/_apply-cloud-delete-refresh-fix.yml
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pages/zz_cloud/index.html .github/scripts/apply_cloud_delete_refresh_fix.py .github/workflows/_apply-cloud-delete-refresh-fix.yml
+          git commit -m "fix: hide cloud deletions immediately"
+          git push origin HEAD:fix/cloud-delete-immediate-refresh
