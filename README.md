@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.8-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.9-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -34,7 +34,7 @@
 | 特性 | 描述 |
 | :--- | :--- |
 | 🗂️ **数字画廊** | 图片按分类保存，文件名自动整理为数字序号，方便查看、删除和导入 |
-| 🪄 **轻量触发** | 使用 `看看<分类>`、`看看123`、`看全部<分类>` 快速取图 |
+| 🪄 **轻量触发** | 使用 `看看<分类>`、`看看123`、`看全部<分类>` / `看所有<分类>` 快速取图 |
 | 🎨 **图片化输出** | 帮助说明、分类列表和昵称映射都以海报图片输出 |
 | 🔐 **权限控制** | 支持可选管理员与白名单控制，保护创建、上传、删除等操作 |
 | 🧹 **双端一致整理** | `/导入图库` 使用同一份全局 1..N 映射整理本地与 GitHub；远程状态不明时不单独改本地编号 |
@@ -83,11 +83,11 @@
 | `看看<分类>` | 从对应分类里随机返回一张图片或表情包 |
 | `看看<分类> N` | 随机返回 `N` 张，`N` 最大为 `10` |
 | `/抽表情` / `/抽表情 N` | 从全图库随机抽取图片或表情包，默认 1 张，`N` 最大为 `10` |
-| `看全部<分类>` | 输出该分类下全部图片的总览图，并标注序号 |
+| `看全部<分类>` / `看所有<分类>` | 输出该分类下全部图片的总览图，并标注序号；两种写法完全等价 |
 | `看看123` | 返回编号为 `123` 的图片或表情包 |
 | `看100-110` | 按编号范围连续返回 `100` 到 `110` 的图片或表情包，最多 50 张 |
 
-> `看看` / `看全部` / 编号查看可在配置中切换是否使用 `/` 前缀；`/抽表情` 固定使用 `/` 前缀，避免普通聊天误触发。
+> `看看` / `看全部` / `看所有` / 编号查看可在配置中切换是否使用 `/` 前缀；`/抽表情` 固定使用 `/` 前缀，避免普通聊天误触发。
 
 ### 3. 多图发送模式
 
@@ -108,7 +108,7 @@
 表情包=emoji
 ```
 
-设置后发送「看看爱莉」等同于「看看airi」，所有涉及分类名的命令（看看、看全部、上传、创建）均支持别名。
+设置后发送「看看爱莉」等同于「看看airi」，所有涉及分类名的命令（看看、看全部、看所有、上传、创建）均支持别名。
 
 输入 `/昵称列表` 可以图片形式查看当前所有昵称映射：
 
@@ -334,6 +334,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.9
+
+- 新增 `看所有<分类>` 兼容命令，与 `看全部<分类>` 完全等价，并遵循相同的 `/` 前缀配置与分类昵称解析。
+- 帮助海报和 README 同步展示 `看全部` / `看所有` 两种写法。
+
 ### v2.11.8
 
 - 修复 `/导入图库` 的固定 GitHub tree 快照在整理数据时丢失 `type` / `mode`，导致图片被误报 `renumber category entry is incomplete` 的问题。
