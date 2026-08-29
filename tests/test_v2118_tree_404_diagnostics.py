@@ -36,4 +36,4 @@ def test_tree_failure_log_contains_body_base_and_mutation_context():
     assert 'phase_name = "upsert"' in delta_block
     assert "batch=" in delta_block
     assert "context=context" in delta_block
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.9"' in source
