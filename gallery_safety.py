@@ -512,6 +512,21 @@ def build_category_tree_delta_entries(
     return tuple(deletes), tuple(upserts)
 
 
+def deduplicate_upload_candidates_by_content(
+    candidates: Iterable[tuple[Path, bytes]],
+) -> list[tuple[Path, bytes]]:
+    """Collapse duplicate upload candidates emitted by overlapping reply sources."""
+    seen_hashes: set[bytes] = set()
+    unique: list[tuple[Path, bytes]] = []
+    for path, content in candidates:
+        digest = hashlib.sha256(content).digest()
+        if digest in seen_hashes:
+            continue
+        seen_hashes.add(digest)
+        unique.append((path, content))
+    return unique
+
+
 def read_bool_flag(obj: object, attribute: str) -> bool:
     try:
         value = getattr(obj, attribute, False)

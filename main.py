@@ -75,6 +75,7 @@ try:
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
+        deduplicate_upload_candidates_by_content,
         evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
@@ -111,6 +112,7 @@ except ImportError:
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
+        deduplicate_upload_candidates_by_content,
         evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
@@ -3703,7 +3705,7 @@ class Main(Star):
                         results.append((image_path, image_path.read_bytes()))
                 except Exception as exc:
                     logger.warning(f"读取合并转发图片失败: {image_ref[:128]}: {exc}")
-        return results
+        return deduplicate_upload_candidates_by_content(results)
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):
         image_path = self._find_by_index(index)
