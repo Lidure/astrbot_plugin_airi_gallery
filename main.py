@@ -23,6 +23,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
 
 try:
+    from astrbot.core.utils.quoted_message.onebot_client import OneBotClient
+except Exception:
+    OneBotClient = None
+
+try:
     from .gallery_diagnostics import (
         DiagnosticItem,
         DiagnosticReport,
@@ -76,6 +81,7 @@ try:
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
         deduplicate_upload_candidates_by_content,
+        extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
@@ -113,6 +119,7 @@ except ImportError:
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
         deduplicate_upload_candidates_by_content,
+        extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
         evaluate_upload_dedup,
         git_blob_sha,
@@ -152,7 +159,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.9"
+CURRENT_PLUGIN_VERSION = "v2.11.10"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -3666,8 +3673,83 @@ class Main(Star):
                 images.extend(self._extract_image_components(list(component.chain)))
         return images
 
+    async def _materialize_quoted_image_ref(
+        self, event: AstrMessageEvent, image_ref: str
+    ) -> tuple[Path, bytes] | None:
+        """把引用图片候选落到本地；裸 OneBot 文件标识失败时尝试 get_image。"""
+        image_ref = str(image_ref or "").strip()
+        if not image_ref:
+            return None
+
+        async def materialize(ref: str) -> tuple[Path, bytes] | None:
+            try:
+                image_component = Image(file=ref)
+                image_path = Path(await image_component.convert_to_file_path())
+                if image_path.exists() and image_path.is_file():
+                    return image_path, image_path.read_bytes()
+            except Exception:
+                return None
+            return None
+
+        direct = await materialize(image_ref)
+        if direct:
+            return direct
+        if OneBotClient is None:
+            return None
+
+        try:
+            client = OneBotClient(event)
+            params_list = (
+                {"file": image_ref},
+                {"file_id": image_ref},
+                {"id": image_ref},
+                {"image": image_ref},
+            )
+            for params in params_list:
+                data = await client.call(
+                    "get_image",
+                    params,
+                    warn_on_all_failed=False,
+                    unwrap_data=True,
+                )
+                if not isinstance(data, dict):
+                    continue
+                for key in ("url", "file", "path"):
+                    resolved_ref = data.get(key)
+                    if not isinstance(resolved_ref, str):
+                        continue
+                    resolved_ref = resolved_ref.strip()
+                    if not resolved_ref or resolved_ref == image_ref:
+                        continue
+                    resolved = await materialize(resolved_ref)
+                    if resolved:
+                        return resolved
+        except Exception as exc:
+            logger.debug(f"OneBot 引用图片恢复失败: {image_ref[:128]}: {exc}")
+        return None
+
+    async def _get_reply_onebot_image_refs(self, event: AstrMessageEvent) -> list[str]:
+        """从 Reply ID 对应的 OneBot 原消息保留 QQ 表情的 url/file 多候选。"""
+        if OneBotClient is None:
+            return []
+        reply_component = next(
+            (component for component in event.get_messages() if isinstance(component, Reply)),
+            None,
+        )
+        if reply_component is None:
+            return []
+        reply_id = getattr(reply_component, "id", None)
+        if reply_id is None or not str(reply_id).strip():
+            return []
+        try:
+            payload = await OneBotClient(event).get_msg(reply_id)
+        except Exception as exc:
+            logger.debug(f"读取 OneBot 引用原消息失败: {exc}")
+            return []
+        return extract_onebot_quoted_image_refs(payload)
+
     async def _get_reply_images(self, event: AstrMessageEvent) -> list[tuple[Path, bytes]]:
-        """提取回复消息中的所有图片，支持多图回复和转发消息。"""
+        """提取回复消息中的所有图片，支持多图、转发及 QQ 下载/商城表情。"""
         results: list[tuple[Path, bytes]] = []
         components = list(event.get_messages())
         for image_component in self._extract_image_components(components):
@@ -3698,13 +3780,23 @@ class Main(Star):
                 if not image_ref or image_ref in seen_refs:
                     continue
                 seen_refs.add(image_ref)
-                try:
-                    image_component = Image(file=image_ref)
-                    image_path = Path(await image_component.convert_to_file_path())
-                    if image_path.exists():
-                        results.append((image_path, image_path.read_bytes()))
-                except Exception as exc:
-                    logger.warning(f"读取合并转发图片失败: {image_ref[:128]}: {exc}")
+                materialized = await self._materialize_quoted_image_ref(event, image_ref)
+                if materialized:
+                    results.append(materialized)
+
+        # AstrBot 的通用 quoted parser 会把 OneBot image 的 url/file 折叠成一个引用。
+        # QQ 下载/商城表情的 CDN URL 若在当前环境不可达，需要回到原消息保留 file
+        # 候选，并通过 NapCat get_image 恢复；正常引用已经成功时不触发此额外请求。
+        if not results:
+            seen_refs: set[str] = set()
+            for image_ref in await self._get_reply_onebot_image_refs(event):
+                if image_ref in seen_refs:
+                    continue
+                seen_refs.add(image_ref)
+                materialized = await self._materialize_quoted_image_ref(event, image_ref)
+                if materialized:
+                    results.append(materialized)
+
         return deduplicate_upload_candidates_by_content(results)
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):

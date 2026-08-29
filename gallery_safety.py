@@ -2,12 +2,66 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from collections.abc import Callable, Iterable, Mapping
 
 
 HASH_INDEX_VERSION: int = 3
+
+
+_QQ_MARKETFACE_EMOJI_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def extract_onebot_quoted_image_refs(payload: object) -> list[str]:
+    """保留 OneBot 原消息里的图片多候选引用，兼容 NapCat QQ 商城表情。"""
+    if not isinstance(payload, Mapping):
+        return []
+
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        data = payload
+    segments = data.get("message") or data.get("messages")
+    if not isinstance(segments, list):
+        return []
+
+    refs: list[str] = []
+    seen: set[str] = set()
+
+    def append_ref(value: object) -> None:
+        if not isinstance(value, str):
+            return
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            return
+        seen.add(cleaned)
+        refs.append(cleaned)
+
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        segment_type = str(segment.get("type") or "").strip().lower()
+        segment_data = segment.get("data")
+        if not isinstance(segment_data, Mapping):
+            continue
+        if segment_type not in {"image", "mface", "marketface", "market_face"}:
+            continue
+
+        for key in ("url", "file", "path", "file_id"):
+            append_ref(segment_data.get(key))
+
+        emoji_id = segment_data.get("emoji_id") or segment_data.get("emojiId")
+        if isinstance(emoji_id, str):
+            emoji_id = emoji_id.strip()
+            if _QQ_MARKETFACE_EMOJI_ID_RE.fullmatch(emoji_id):
+                directory = emoji_id[:2]
+                append_ref(
+                    "https://gxh.vip.qq.com/club/item/parcel/item/"
+                    f"{directory}/{emoji_id}/raw300.gif"
+                )
+
+    return refs
 
 
 @dataclass(frozen=True)

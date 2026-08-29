@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.9-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.10-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -334,6 +334,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.10
+
+- 修复回复 QQ 下载/商城表情包执行 `/上传<分类>` 时，引用解析只保留单一 CDN URL、下载失败后误报“请先回复图片”的问题。
+- 新增 OneBot 原消息兜底：普通引用解析失败时保留商城表情的 `url` / `file` / `emoji_id` 候选，并尝试通过 NapCat `get_image` 恢复实际图片。
+
 ### v2.11.9
 
 - 新增 `看所有<分类>` 兼容命令，与 `看全部<分类>` 完全等价，并遵循相同的 `/` 前缀配置与分类昵称解析。
