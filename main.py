@@ -152,7 +152,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.8"
+CURRENT_PLUGIN_VERSION = "v2.11.9"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -3183,10 +3183,10 @@ class Main(Star):
 
     def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
         if self.view_command_mode == MODE_PREFIX:
-            return re.match(r"^/看全部\s*(.+)$", normalized)
+            return re.match(r"^/(?:看全部|看所有)\s*(.+)$", normalized)
         if normalized.startswith("/"):
             return None
-        return re.match(r"^看全部\s*(.+)$", normalized)
+        return re.match(r"^(?:看全部|看所有)\s*(.+)$", normalized)
 
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
@@ -4737,7 +4737,7 @@ class Main(Star):
                     (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
                     (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
                     ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
-                    (f"{self._view_command_prefix()}看全部<分类>", "生成该分类总览图，并标注每张图片编号"),
+                    (f"{self._view_command_prefix()}看全部<分类> / {self._view_command_prefix()}看所有<分类>", "生成该分类总览图，并标注每张图片编号"),
                     (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
                     (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),
                     ("/看最近上传 N", "查看最近上传的图片；可省略 N，快捷 /看最近"),
