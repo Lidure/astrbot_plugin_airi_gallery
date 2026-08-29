@@ -92,7 +92,7 @@ def test_github_tree_creation_retries_transient_gateway_failures_without_version
     assert "time.sleep(" in block
     for permanent_status in (401, 403, 409, 422):
         assert str(permanent_status) not in retry_line
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.9"' in source
 
 
 def test_large_category_tree_mutations_upsert_before_delete_without_version_bump():
@@ -112,7 +112,7 @@ def test_large_category_tree_mutations_upsert_before_delete_without_version_bump
     assert "context=context" in helper
     assert "self._git_apply_category_tree_delta(" in renumber
     assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.9"' in source
 
 
 def test_category_tree_delta_replaces_same_path_without_deleting_it_first():
@@ -155,7 +155,7 @@ def test_large_categories_mutate_existing_tree_instead_of_rebuilding_from_empty(
     assert 'tree_shas.get(f"gallery/{category}", "")' in renumber
     assert "self._git_apply_category_tree_delta(" in renumber
     assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.8"' in source
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.9"' in source
 
 
 # Delta renumber must preserve unchanged direct children while only mutating changed paths.
