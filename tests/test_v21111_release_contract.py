@@ -17,9 +17,9 @@ def test_v21111_version_is_consistent_everywhere():
 def test_v21111_readme_documents_fail_closed_upload_and_cloud_token_storage():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert "upload_token 留空时公开上传默认关闭" in readme
+    assert "`upload_token` 留空时公开上传默认关闭" in readme
     assert "Access Token 只保留在当前页面内存" in readme
-    assert "upload_token 留空则任何人皆可上传" not in readme
+    assert "`upload_token` 留空则任何人皆可上传" not in readme
     assert "留空则无需密钥（不安全）" not in readme
 
 
