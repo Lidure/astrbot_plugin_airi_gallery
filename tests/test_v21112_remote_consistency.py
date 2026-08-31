@@ -199,3 +199,79 @@ def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
     assert "self._shutdown_event.is_set()" in timer_cb
     assert "not self._shutdown_event.is_set()" in timer_cb
     assert "self._shutdown_event.is_set()" in startup_sync
+
+
+def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
+    guard = _load_sync_method("_git_github_create_only_paths_exist")
+
+    def make_plugin(payload, status=200):
+        return types.SimpleNamespace(
+            _git_platform=lambda: "github",
+            _git_api_base=lambda: "https://api.github.test",
+            _git_owner=lambda: "owner",
+            _git_repo=lambda: "repo",
+            _git_request=Mock(return_value=(status, payload)),
+        )
+
+    clear = make_plugin({"truncated": False, "tree": [{"path": "gallery/a/1.png"}]})
+    colliding = make_plugin({"truncated": False, "tree": [{"path": "gallery/a/2.png"}]})
+    truncated = make_plugin({"truncated": True, "tree": []})
+
+    assert guard(clear, "tree-sha", {"gallery/a/2.png"}) is False
+    assert guard(colliding, "tree-sha", {"gallery/a/2.png"}) is True
+    assert guard(truncated, "tree-sha", {"gallery/a/2.png"}) is None
+
+
+def test_github_batch_rechecks_create_only_paths_after_ref_conflict():
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = _method_block(source, "_git_commit_github_batch")
+
+    assert "create_only_paths: set[str] | None = None" in block
+    assert block.count("_git_github_create_only_paths_exist(") >= 2
+    assert "if collision is not False:" in block
+    assert "if retry_collision is not False:" in block
+
+
+def test_upload_transaction_commits_images_and_manifest_together_on_github():
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = _method_block(source, "_push_staged_upload_transaction")
+
+    assert "GALLERY_INDEX_PATH" in block
+    assert "_gallery_manifest_payload()" in block
+    assert "_git_push_batch_github(" in block
+    assert "create_only_paths=image_paths" in block
+    assert "_publish_gallery_manifest" in block  # Gitee compensation path only.
+    assert "_git_delete_remote_file" in block
+
+
+def test_all_upload_surfaces_use_one_staged_transaction_without_per_file_remote_commits():
+    source = Path("main.py").read_text(encoding="utf-8")
+    for name in (
+        "_force_api_similar_upload",
+        "_api_upload_images",
+        "_api_pub_upload",
+        "_handle_force_similar_upload",
+        "_handle_upload",
+    ):
+        block = _method_block(source, name)
+        assert "_push_staged_upload_transaction" in block, name
+        assert "_git_push_file" not in block, name
+        assert "_publish_gallery_manifest" not in block, name
+        assert "_git_delete_remote_file" not in block, name
+
+    for name in ("_api_upload_images", "_api_pub_upload", "_handle_upload"):
+        block = _method_block(source, name)
+        assert block.count("_push_staged_upload_transaction") == 1, name
+        assert "staged_paths" in block
+
+
+def test_staged_rollback_reverts_every_local_candidate():
+    rollback = _load_sync_method("_rollback_staged_uploads")
+    plugin = types.SimpleNamespace(_rollback_stored_image=Mock())
+    paths = [Path("/tmp/a.png"), Path("/tmp/b.png")]
+
+    rollback(plugin, paths, "airi")
+
+    assert plugin._rollback_stored_image.call_count == 2
+    plugin._rollback_stored_image.assert_any_call(paths[0], "airi")
+    plugin._rollback_stored_image.assert_any_call(paths[1], "airi")
