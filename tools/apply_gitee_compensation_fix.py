@@ -14,61 +14,75 @@ for node in ast.walk(tree):
 if method is None:
     raise SystemExit("transaction method missing")
 
-pushed_assignment = None
-upload_failure = None
-manifest_failure = None
-for node in ast.walk(method):
-    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        if node.target.id == "pushed_paths":
-            pushed_assignment = node
-    if isinstance(node, ast.If):
-        test_text = ast.get_source_segment(source, node.test) or ""
-        if "_git_push_file" in test_text and test_text.lstrip().startswith("not "):
-            upload_failure = node
-        if "manifest_refresh_needed" in test_text and "_publish_gallery_manifest" in test_text:
-            manifest_failure = node
+start = method.lineno - 1
+end = method.end_lineno
 
-if pushed_assignment is None or upload_failure is None or manifest_failure is None:
-    raise SystemExit("transaction AST anchors missing")
 
-upload_block = (
-    "            if not self._git_push_file(str(local_path)):\n"
-    "                compensate_gitee_partial_uploads()\n"
-    "                return False\n"
+def find_line(fragment: str) -> int:
+    matches = [
+        index
+        for index in range(start, end)
+        if fragment in lines[index]
+    ]
+    if len(matches) != 1:
+        raise SystemExit(f"line anchor mismatch: {fragment}: {matches}")
+    return matches[0]
+
+
+def replace_indented_block(fragment: str, replacement: list[str]) -> None:
+    index = find_line(fragment)
+    indent = len(lines[index]) - len(lines[index].lstrip(" "))
+    block_end = index + 1
+    while block_end < len(lines):
+        text = lines[block_end]
+        if not text.strip():
+            block_end += 1
+            continue
+        next_indent = len(text) - len(text.lstrip(" "))
+        if next_indent <= indent:
+            break
+        block_end += 1
+    lines[index:block_end] = replacement
+
+
+replace_indented_block(
+    "if manifest_refresh_needed and not self._publish_gallery_manifest():",
+    [
+        "        if manifest_refresh_needed and not self._publish_gallery_manifest():\n",
+        "            compensate_gitee_partial_uploads()\n",
+        "            return False\n",
+    ],
 )
-manifest_block = (
-    "        if manifest_refresh_needed and not self._publish_gallery_manifest():\n"
-    "            compensate_gitee_partial_uploads()\n"
-    "            return False\n"
+replace_indented_block(
+    "if not self._git_push_file(str(local_path)):",
+    [
+        "            if not self._git_push_file(str(local_path)):\n",
+        "                compensate_gitee_partial_uploads()\n",
+        "                return False\n",
+    ],
 )
 
-for node, replacement in sorted(
-    [(upload_failure, upload_block), (manifest_failure, manifest_block)],
-    key=lambda item: item[0].lineno,
-    reverse=True,
-):
-    lines[node.lineno - 1 : node.end_lineno] = [replacement]
-
-helper = (
-    "        def compensate_gitee_partial_uploads() -> None:\n"
-    "            pushed_set = set(pushed_paths)\n"
-    "            for pushed_path in reversed(pushed_paths):\n"
-    "                if self._git_delete_remote_file(str(pushed_path)):\n"
-    "                    self._rollback_stored_image(pushed_path, category)\n"
-    "                else:\n"
-    "                    logger.error(\n"
-    "                        f\"[Git Sync] Gitee 补偿删除失败，已保留对应本地文件避免远端孤儿: {pushed_path}\"\n"
-    "                    )\n"
-    "            for staged_path in staged_paths:\n"
-    "                if staged_path not in pushed_set:\n"
-    "                    self._rollback_stored_image(staged_path, category)\n"
-    "            if pushed_paths and not self._publish_gallery_manifest():\n"
-    "                logger.warning(\n"
-    "                    \"[Git Sync] Gitee 一致性补偿后的感知索引修复失败，请立即同步核对。\"\n"
-    "                )\n"
-    "\n"
-)
-lines[pushed_assignment.lineno - 1 : pushed_assignment.lineno - 1] = [helper]
+anchor = find_line("pushed_paths: list[Path] = []")
+helper = [
+    "        def compensate_gitee_partial_uploads() -> None:\n",
+    "            pushed_set = set(pushed_paths)\n",
+    "            for pushed_path in reversed(pushed_paths):\n",
+    "                if self._git_delete_remote_file(str(pushed_path)):\n",
+    "                    self._rollback_stored_image(pushed_path, category)\n",
+    "                else:\n",
+    "                    logger.error(\n",
+    "                        f\"[Git Sync] Gitee 补偿删除失败，已保留对应本地文件避免远端孤儿: {pushed_path}\"\n",
+    "                    )\n",
+    "            for staged_path in staged_paths:\n",
+    "                if staged_path not in pushed_set:\n",
+    "                    self._rollback_stored_image(staged_path, category)\n",
+    "            if pushed_paths and not self._publish_gallery_manifest():\n",
+    "                logger.warning(\n",
+    "                    \"[Git Sync] Gitee 一致性补偿后的感知索引修复失败，请立即同步核对。\"\n",
+    "                )\n",
+    "\n",
+]
+lines[anchor:anchor] = helper
 source = "".join(lines)
 
 for old, new in (
