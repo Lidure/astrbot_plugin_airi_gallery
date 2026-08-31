@@ -1,0 +1,39 @@
+name: Temporary cloud force refresh patch
+
+on:
+  push:
+    branches:
+      - perf/cloud-request-lifecycle
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/cloud-request-lifecycle
+          fetch-depth: 0
+      - name: Install patch test dependency
+        run: python -m pip install pytest
+      - name: Apply patch
+        run: python tools/_tmp_patch_cloud_force_refresh.py
+      - name: Verify focused regression tests
+        run: |
+          python -m pytest tests/test_cloud_request_lifecycle.py -q
+          python -m pytest tests/test_repository_contract.py::test_cloud_page_omits_anonymous_auth_and_rejects_unauthenticated_writes -q
+      - name: Verify JavaScript syntax
+        run: node --check pages/zz_cloud/app.js
+      - name: Remove temporary patch files
+        run: rm -f tools/_tmp_patch_cloud_force_refresh.py .github/workflows/_tmp_patch_cloud_force_refresh.yml
+      - name: Commit patched source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --exit-code && exit 0
+          git commit -m "fix: force refresh after cloud mutations"
+          git push origin HEAD:perf/cloud-request-lifecycle
