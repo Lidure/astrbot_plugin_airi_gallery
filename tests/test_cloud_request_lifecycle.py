@@ -42,8 +42,9 @@ def test_sync_deduplicates_same_config_aborts_changed_config_and_rejects_stale_c
     assert "syncPromise" in state_section
     assert "syncConfigKey" in state_section
 
-    sync_section = _section("async function syncFromRemote() {", "// ──────────────────────────────────────────────\n// UI: Tabs")
-    assert "state.syncPromise && state.syncConfigKey === syncConfigKey" in sync_section
+    sync_section = _section("async function syncFromRemote(", "// ──────────────────────────────────────────────\n// UI: Tabs")
+    assert "force = false" in sync_section
+    assert "!force && state.syncPromise && state.syncConfigKey === syncConfigKey" in sync_section
     assert "return state.syncPromise" in sync_section
     assert ".syncAbortController?.abort()" in sync_section
     assert "new AbortController()" in sync_section
@@ -52,6 +53,17 @@ def test_sync_deduplicates_same_config_aborts_changed_config_and_rejects_stale_c
     assert "signal:" in sync_section
     assert "syncGeneration !== state.syncGeneration" in sync_section
     assert "e?.name === 'AbortError'" in sync_section
+
+
+def test_mutation_followup_refreshes_bypass_same_config_sync_deduplication():
+    conflict_section = _section("async function uploadFileWithRetry(", "upBtn.onclick = async () => {")
+    assert "await syncFromRemote({ force: true })" in conflict_section
+
+    delete_section = _section("del.onclick = async (e) => {", "div.appendChild(badge);")
+    assert "await syncFromRemote({ force: true })" in delete_section
+
+    upload_section = _section("upBtn.onclick = async () => {", "function getExt(filename) {")
+    assert "await syncFromRemote({ force: true })" in upload_section
 
 
 def test_image_cache_clear_and_prune_abort_inflight_network_fetches_and_retry_stops_on_abort():
