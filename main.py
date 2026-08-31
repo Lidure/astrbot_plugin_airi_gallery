@@ -1189,7 +1189,6 @@ class Main(Star):
 
     async def _api_category_images(self):
         from quart import request, jsonify
-        import base64 as b64mod
         if not _is_authenticated_web_request():
             return jsonify({"ok": False, "error": "unauthorized"}), 403
         category = request.args.get("category", "").strip()
@@ -1213,15 +1212,7 @@ class Main(Star):
         total = len(all_files)
         start = (page - 1) * per_page
         page_files = all_files[start:start + per_page]
-        result = []
-        for p in page_files:
-            try:
-                data = b64mod.b64encode(p.read_bytes()).decode()
-                suffix = p.suffix.lower()
-                ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
-                result.append({"name": p.name, "data": data, "ct": ct})
-            except Exception:
-                result.append({"name": p.name, "data": "", "ct": ""})
+        result = [{"name": path.name} for path in page_files]
         return jsonify({"images": result, "total": total, "page": page, "per_page": per_page, "category": category})
 
     def _cache_api_similar_upload(
