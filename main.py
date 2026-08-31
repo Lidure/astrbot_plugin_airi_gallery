@@ -2450,14 +2450,26 @@ class Main(Star):
         return sha or None
 
     def _git_update_github_ref(self, commit_sha: str) -> bool:
-        """将 GitHub 分支引用快进到新 commit。"""
+        """将 GitHub 分支引用快进到新 commit，并记录失败语义。"""
         base = self._git_api_base()
         owner = self._git_owner()
         repo = self._git_repo()
         branch = self._git_branch()
         url = f"{base}/repos/{owner}/{repo}/git/refs/heads/{branch}"
-        status, _ = self._git_request("PATCH", url, json_body={"sha": commit_sha, "force": False})
-        return status == 200
+        status, _ = self._git_request(
+            "PATCH", url, json_body={"sha": commit_sha, "force": False}
+        )
+        if status == 200:
+            self._git_ref_update_outcome = "success"
+            return True
+        if status in (409, 422):
+            self._git_ref_update_outcome = "conflict"
+        elif status in (0,) or status >= 500:
+            self._git_ref_update_outcome = "uncertain"
+        else:
+            # 认证、权限、限流、分支不存在等明确拒绝都不应伪装成并发冲突。
+            self._git_ref_update_outcome = "rejected"
+        return False
 
     def _git_github_create_only_paths_exist(
         self, tree_sha: str, paths: set[str]
@@ -2564,19 +2576,38 @@ class Main(Star):
                     self._sha_cache[git_path] = blob_sha
                 return True
 
-            logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
+            # 真实实现每次 PATCH 都会写入 outcome；默认 conflict 仅兼容旧测试桩。
+            ref_outcome = getattr(self, "_git_ref_update_outcome", None) or "conflict"
+            if ref_outcome == "rejected":
+                logger.warning(
+                    "[Git Sync] GitHub ref 更新被明确拒绝，本批次停止，不执行冲突重试。"
+                )
+                return False
+
             head = self._git_get_head_commit_and_tree()
             if not head:
                 return False
             parent_sha, base_tree_sha = head
 
-            # PATCH 响应丢失时，分支可能已移动到本 commit，甚至又前进到它的后继。
-            # 仅当当前 tree 仍完整包含本批次全部 blob 时，才能把不确定响应收敛为成功。
-            if parent_sha == commit_sha or branch_tree_matches_items(base_tree_sha):
-                for git_path, _, blob_sha in items:
-                    self._sha_cache[git_path] = blob_sha
-                return True
+            if ref_outcome == "uncertain":
+                # PATCH 响应丢失时，分支可能已移动到本 commit，甚至又前进到它的后继。
+                # 仅当当前 tree 仍完整包含本批次全部 blob 时，才能把不确定响应收敛为成功。
+                if parent_sha == commit_sha or branch_tree_matches_items(base_tree_sha):
+                    for git_path, _, blob_sha in items:
+                        self._sha_cache[git_path] = blob_sha
+                    return True
+                logger.warning(
+                    "[Git Sync] GitHub ref 更新结果不确定且无法确认已生效，本批次停止。"
+                )
+                return False
 
+            if ref_outcome != "conflict":
+                logger.warning(
+                    f"[Git Sync] GitHub ref 更新返回未知结果 {ref_outcome!r}，本批次停止。"
+                )
+                return False
+
+            logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
             retry_collision = False
             if create_only_paths:
                 retry_collision = self._git_github_create_only_paths_exist(
@@ -2596,6 +2627,11 @@ class Main(Star):
             if not retry_commit_sha:
                 return False
             if not self._git_update_github_ref(retry_commit_sha):
+                retry_outcome = (
+                    getattr(self, "_git_ref_update_outcome", None) or "conflict"
+                )
+                if retry_outcome != "uncertain":
+                    return False
                 refreshed = self._git_get_head_commit_and_tree()
                 if not refreshed:
                     return False
@@ -2642,6 +2678,7 @@ class Main(Star):
             return 0, 0, 0
 
         if self._git_platform() == "github":
+            self._git_ref_update_outcome = None
             if self._git_push_batch_github(items):
                 try:
                     for git_path, content in items:
@@ -2653,6 +2690,13 @@ class Main(Star):
                     self._save_hash_index()
                 logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
                 return len(items), 0, 0
+            ref_outcome = getattr(self, "_git_ref_update_outcome", None)
+            if ref_outcome in {"rejected", "uncertain"}:
+                logger.warning(
+                    "[Git Sync] GitHub 批量提交因 ref 更新拒绝/结果不确定而停止，"
+                    "不回退逐文件写入。"
+                )
+                return 0, len(items), 0
             logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
 
         success = 0

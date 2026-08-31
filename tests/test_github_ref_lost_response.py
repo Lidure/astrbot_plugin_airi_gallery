@@ -36,15 +36,29 @@ def _make_plugin(heads, tree_payloads, update_results):
     plugin = types.SimpleNamespace(
         _git_mutation_lock=threading.RLock(),
         _sha_cache={},
+        _git_ref_update_outcome=None,
         _git_get_head_commit_and_tree=Mock(side_effect=heads),
         _git_create_github_tree=Mock(side_effect=lambda base, entries: f"built-{base}"),
         _git_create_github_commit=Mock(side_effect=lambda message, tree, parent: f"commit-{parent}"),
-        _git_update_github_ref=Mock(side_effect=update_results),
         _git_platform=lambda: "github",
         _git_api_base=lambda: "https://api.github.test",
         _git_owner=lambda: "owner",
         _git_repo=lambda: "repo",
     )
+
+    updates = iter(update_results)
+
+    def update_ref(commit_sha):
+        result = next(updates)
+        if isinstance(result, tuple):
+            ok, outcome = result
+        else:
+            ok = bool(result)
+            outcome = "success" if ok else "uncertain"
+        plugin._git_ref_update_outcome = outcome
+        return ok
+
+    plugin._git_update_github_ref = Mock(side_effect=update_ref)
 
     def request(method, url, params=None, timeout=None, **kwargs):
         tree_sha = url.rsplit("/", 1)[-1]
@@ -124,7 +138,7 @@ def test_lost_retry_ref_response_accepts_descendant_head_when_retry_tree_already
                 ("gallery/gallery_index.json", "blob-manifest"),
             ),
         },
-        update_results=[False, False],
+        update_results=[(False, "conflict"), (False, "uncertain")],
     )
 
     result = plugin._git_commit_github_batch(
