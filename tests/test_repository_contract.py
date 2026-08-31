@@ -229,11 +229,11 @@ def test_cloud_page_offers_builtin_gallery_and_optional_token_reads():
 def test_cloud_page_omits_anonymous_auth_and_rejects_unauthenticated_writes():
     script = cloud_script()
 
-    assert "if (config.token) headers.Authorization" in script
-    assert "if (config.token) url.searchParams.set('access_token', config.token)" in script
+    assert "if (cfg.token) headers.Authorization" in script
+    assert "if (cfg.token) url.searchParams.set('access_token', cfg.token)" in script
     assert "const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE'])" in script
-    assert "if (WRITE_METHODS.has(method) && !canWrite())" in script
-    assert "requireWriteAccess()" in script
+    assert "if (WRITE_METHODS.has(method) && !canWrite(cfg))" in script
+    assert "requireWriteAccess(cfg)" in script
     assert "鍙妯″紡" in script
 
 

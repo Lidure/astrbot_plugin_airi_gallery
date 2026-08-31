@@ -724,7 +724,7 @@ function showMainUI(show) {
 // ──────────────────────────────────────────────
 // Sync: fetch tree & render
 // ──────────────────────────────────────────────
-async function syncFromRemote() {
+async function syncFromRemote({ force = false } = {}) {
   if (!hasReadConfig()) return false;
   if (config.platform !== 'github' && !config.token) return false;
 
@@ -736,7 +736,7 @@ async function syncFromRemote() {
     syncConfig.branch || 'main',
     syncConfig.token || '',
   ].join('\u0000');
-  if (state.syncPromise && state.syncConfigKey === syncConfigKey) {
+  if (!force && state.syncPromise && state.syncConfigKey === syncConfigKey) {
     return state.syncPromise;
   }
 
@@ -927,7 +927,7 @@ async function loadCategoryImages() {
           await saveGalleryIndex(state.galleryIndex);
         }
         toast(`已删除 ${fileName}`);
-        await syncFromRemote();
+        await syncFromRemote({ force: true });
       } catch (err) { toast('删除失败: ' + err.message, false); }
     };
 
@@ -1138,7 +1138,7 @@ async function uploadFileWithRetry(cat, file, ext, contentB64, blobSha, startIdx
     } catch (e) {
       const canRetry = (e.status === 409 || e.status === 422) && attempt < 2;
       if (!canRetry) throw e;
-      await syncFromRemote();
+      await syncFromRemote({ force: true });
       if (categoryBlobShas(cat).has(blobSha)) {
         return { duplicate: true };
       }
@@ -1257,7 +1257,7 @@ upBtn.onclick = async () => {
 
     if (uploaded > 0) {
       clearImageCache();
-      await syncFromRemote();
+      await syncFromRemote({ force: true });
     }
     toast(
       `成功上传 ${uploaded} 张到【${cat}】` +
