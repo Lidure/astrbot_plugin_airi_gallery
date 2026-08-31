@@ -39,8 +39,8 @@ def test_sync_uses_real_disk_paths_and_converges_to_remote_paths():
     assert "path_diff.local_only" in sync
     assert "matches_verified_remote_content" in sync
     assert "local_path.unlink()" in sync
-    # Pull-sync is a remote-authoritative mirror. A remote path must not be
-    # skipped merely because identical bytes exist under a different local path.
+    # Pull-sync still materializes exact remote paths even when identical bytes live
+    # elsewhere locally; same-path local edits are protected by a separate conflict guard.
     assert "检测到同分类重复图片，已跳过" not in sync
 
 

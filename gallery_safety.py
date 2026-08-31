@@ -949,6 +949,19 @@ def matches_verified_remote_content(
     return current_sha in proven_shas
 
 
+def should_preserve_local_sync_content(
+    content: bytes, entry: object, remote_sha: str
+) -> bool:
+    """Return True when pull sync must preserve current local bytes."""
+    current_sha = git_blob_sha(content)
+    normalized_remote_sha = str(remote_sha or "").strip()
+    if normalized_remote_sha and current_sha == normalized_remote_sha:
+        return False
+    baseline_sha = verified_remote_sha(entry)
+    if baseline_sha:
+        return current_sha != baseline_sha
+    return True
+
 def _safe_gallery_relative_path(git_path: str) -> PurePosixPath | None:
     if "\\" in git_path:
         return None
