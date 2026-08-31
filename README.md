@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.11-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.12-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -196,6 +196,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - 预览会跳过远程 SHA 已变化的文件，并显示跳过原因；确认时会再次核对本地文件和远程 SHA，避免误删 Cloud 新增或已发生变化的图片
 - GitHub 平台下 `/推送` 会按 `git_push_batch_size` 合并为少量 commit，避免大量图片时一张图一个 commit 导致推送缓慢；Gitee 暂保留逐文件推送
 - 使用 `/取消推送` 可中断正在进行的批量推送
+- v2.11.12 起，普通删除采用远端删除成功后才提交本地删除；远端失败时本地文件会保留，不再留下“本地已删、远端未删”的半完成状态
+- 远端分支写操作串行化，上传、删除、批量提交与重编号不会在同一插件实例中交叉推进；插件卸载后不会重新调度同步任务，并会等待已启动的后台同步退出
+- GitHub 新上传使用 create-only 路径保护：提交前和 ref 冲突重试后都会重新确认目标编号，远端编号已被占用或无法完整证明未占用时都 fail-closed，不覆盖现有图片
+- QQ、本地 Web 和公开 API 的一批上传先在本地暂存，再将图片与 `gallery/gallery_index.json` 进入同一个 GitHub commit；事务失败会触发整批本地写入回滚
+- Gitee 暂无等价的 Git Data 单提交路径，因此仍串行写入；中途失败会对已推送图片执行补偿删除，并尝试修复感知索引
 - 使用 `/立即同步` 或 `/同步远程` 可手动立即从远程拉取新增图片到本地，不必等待定时器
 - 远程拉取时会按同分类图片内容哈希去重，避免 Cloud 页面重复上传后在本地生成多份相同图片
 - 删除远程文件时即使重启导致本地 SHA 缓存为空，也会主动查询远程 SHA 后再删除
@@ -334,6 +339,15 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.12
+
+- **删除事务一致性** 普通图片删除改为远端删除成功后才提交本地删除；远端失败会保留本地文件，Web、聊天命令和去重入口统一使用同一安全路径。
+- **远端写串行化** 上传、删除、GitHub batch commit 与重编号等远端分支写操作串行化，降低并发操作交叉覆盖或基于过期 HEAD 写入的风险。
+- **GitHub 原子上传** QQ、本地 Web、公开 API 与强制相似上传统一走批量事务，图片与 `gallery/gallery_index.json` 进入同一个 GitHub commit；任一步失败执行整批本地写入回滚。
+- **并发编号保护** 新图片路径采用 create-only 语义，提交前以及 ref 冲突重试后都会检查目标路径；远端编号已被占用、recursive tree 被截断或状态无法证明时均 fail-closed。
+- **Gitee 补偿路径** Gitee 继续串行逐文件写入，但失败时会对已成功推送的图片执行补偿删除，并再次发布感知索引以尽量收敛到一致状态。
+- **干净停机** startup sync thread 与定时同步进入显式生命周期管理；插件卸载后不会重新调度同步任务，并会停止新远端写入、等待已启动的后台同步退出。
+
 ### v2.11.11
 
 - **权限边界** `/上传<分类>` 在提取图片、解析目录或访问远程仓库之前先完成管理员/白名单检查，未授权用户不会进入任何上传工作。
