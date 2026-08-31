@@ -1301,7 +1301,7 @@ class Main(Star):
             self._push_staged_upload_transaction, [target], category
         )
         if not committed:
-            return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
+            return {"ok": False, "error": "远程上传或感知索引更新失败，已执行一致性补偿，请立即同步核对状态"}, 502
         self._forget_api_similar_upload(force_token)
         return {"ok": True, "count": 1, "files": [target.name], "rejected": []}, 200
 
@@ -1394,7 +1394,7 @@ class Main(Star):
                     self._push_staged_upload_transaction, staged_paths, category
                 )
                 if not committed:
-                    return jsonify({"ok": False, "error": "远程上传事务失败，本批本地写入已全部回滚", "files": []}), 502
+                    return jsonify({"ok": False, "error": "远程上传事务失败，已执行一致性补偿，请立即同步核对状态", "files": []}), 502
                 uploaded = [path.name for path in staged_paths]
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
@@ -1542,7 +1542,7 @@ class Main(Star):
                     self._push_staged_upload_transaction, staged_paths, category
                 )
                 if not committed:
-                    return jsonify({"ok": False, "error": "远程上传事务失败，本批本地写入已全部回滚", "files": []}), 502
+                    return jsonify({"ok": False, "error": "远程上传事务失败，已执行一致性补偿，请立即同步核对状态", "files": []}), 502
                 uploaded = [path.name for path in staged_paths]
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
@@ -3939,11 +3939,26 @@ class Main(Star):
         # Gitee 没有等价的 Git Data 单提交路径：串行写入并在失败时补偿。
         with self._git_mutation_lock:
             pushed_paths: list[Path] = []
+
+            def compensate_gitee_partial_uploads() -> None:
+                pushed_set = set(pushed_paths)
+                for pushed_path in reversed(pushed_paths):
+                    if self._git_delete_remote_file(str(pushed_path)):
+                        self._rollback_stored_image(pushed_path, category)
+                    else:
+                        logger.error(
+                            f"[Git Sync] Gitee 补偿删除失败，已保留对应本地文件避免远端孤儿: {pushed_path}"
+                        )
+                for staged_path in staged_paths:
+                    if staged_path not in pushed_set:
+                        self._rollback_stored_image(staged_path, category)
+                if pushed_paths and not self._publish_gallery_manifest():
+                    logger.warning(
+                        "[Git Sync] Gitee 一致性补偿后的感知索引修复失败，请立即同步核对。"
+                    )
             for local_path in staged_paths:
                 if self._git_push_cancelled or not self._git_push_file(str(local_path)):
-                    for pushed_path in reversed(pushed_paths):
-                        self._git_delete_remote_file(str(pushed_path))
-                    self._rollback_staged_uploads(staged_paths, category)
+                    compensate_gitee_partial_uploads()
                     return False
                 pushed_paths.append(local_path)
 
@@ -3951,12 +3966,7 @@ class Main(Star):
             if manifest_ok:
                 return True
 
-            for pushed_path in reversed(pushed_paths):
-                self._git_delete_remote_file(str(pushed_path))
-            self._rollback_staged_uploads(staged_paths, category)
-            # 若索引 PUT 的响应丢失但服务端已写入，回滚本地后再发布一次用于修复。
-            if not self._publish_gallery_manifest():
-                logger.warning("[Git Sync] Gitee 上传补偿后感知索引修复失败，请稍后执行立即同步。")
+            compensate_gitee_partial_uploads()
             return False
 
     async def _delete_image_consistently(self, image_path: Path, category: str) -> bool:
@@ -4493,7 +4503,7 @@ class Main(Star):
             self._push_staged_upload_transaction, [target], category
         )
         if not committed:
-            await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
+            await event.send(event.plain_result("远程上传或感知索引更新失败，已执行一致性补偿，请立即同步核对状态。"))
             return
         with self._pending_similar_upload_lock:
             self._pending_similar_uploads.pop(key, None)
@@ -4583,7 +4593,7 @@ class Main(Star):
                 self._push_staged_upload_transaction, staged_paths, category_name
             )
             if not committed:
-                await event.send(event.plain_result("远程上传事务失败，本批本地写入已全部回滚。"))
+                await event.send(event.plain_result("远程上传事务失败，已执行一致性补偿，请立即同步核对状态。"))
                 return
             uploaded = [path.name for path in staged_paths]
 
