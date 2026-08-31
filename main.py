@@ -2757,6 +2757,7 @@ class Main(Star):
             logger.debug("[Git Sync] 已有同步任务进行中，跳过本次。")
             result["busy"] = True
             return result
+        self._git_mutation_lock.acquire()
         try:
             tree = self._git_list_tree()
             if tree is None:
@@ -2913,8 +2914,11 @@ class Main(Star):
             result["failed"] = True
             result["error"] = f"同步失败：{type(exc).__name__}。请检查日志后重试。"
         finally:
-            self._save_hash_index()
-            self._sync_lock.release()
+            try:
+                self._save_hash_index()
+            finally:
+                self._git_mutation_lock.release()
+                self._sync_lock.release()
         return result
 
     def _git_push_file(self, local_abs_path: str) -> bool:
