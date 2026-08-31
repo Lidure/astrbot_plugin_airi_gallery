@@ -33,3 +33,5 @@ jobs:
           git add pages/zz_cloud/app.js tests/test_cloud_image_lifecycle.py
           git commit -m "fix: bound cloud image object URL lifecycle"
           git push origin HEAD:perf/cloud-image-lifecycle
+
+# Retry after correcting the lifecycle test to accept centralized revocation.
