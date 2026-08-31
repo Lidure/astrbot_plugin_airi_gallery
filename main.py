@@ -74,12 +74,14 @@ try:
         RenameStep,
         RemoteDeleteReport,
         UploadMatch,
+        UploadPayloadTooLarge,
         build_global_renumber_plan,
         build_renumbered_category_entries,
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
+        decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
@@ -100,6 +102,7 @@ try:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        validate_image_payload,
         verified_remote_sha,
     )
 except ImportError:
@@ -112,12 +115,14 @@ except ImportError:
         RenameStep,
         RemoteDeleteReport,
         UploadMatch,
+        UploadPayloadTooLarge,
         build_global_renumber_plan,
         build_renumbered_category_entries,
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
         compute_image_fingerprint,
+        decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
@@ -138,6 +143,7 @@ except ImportError:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        validate_image_payload,
         verified_remote_sha,
     )
 
@@ -1304,6 +1310,14 @@ class Main(Star):
                 return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            try:
+                validated_images = decode_upload_image_batch(
+                    images, max_count=UPLOAD_BATCH_MAX
+                )
+            except UploadPayloadTooLarge as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 413
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1316,15 +1330,9 @@ class Main(Star):
 
             uploaded: list[str] = []
             rejected: list[dict] = []
-            for img in images:
-                name = str(img.get("name", ""))
-                data_b64 = str(img.get("data", ""))
-                if not name or not data_b64:
-                    continue
-                ext = Path(name).suffix.lower()
-                if ext not in IMAGE_SUFFIXES:
-                    ext = ".png"
-                image_bytes = b64mod.b64decode(data_b64)
+            for name, validated in validated_images:
+                image_bytes = validated.content
+                ext = validated.extension
                 fingerprint = compute_image_fingerprint(image_bytes)
                 target, decision = self._store_unique_image(
                     category_dir,
@@ -1455,6 +1463,14 @@ class Main(Star):
                 return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            try:
+                validated_images = decode_upload_image_batch(
+                    images, max_count=UPLOAD_BATCH_MAX
+                )
+            except UploadPayloadTooLarge as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 413
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1467,15 +1483,9 @@ class Main(Star):
 
             uploaded: list[str] = []
             rejected: list[dict] = []
-            for img in images:
-                name = str(img.get("name", ""))
-                data_b64 = str(img.get("data", ""))
-                if not name or not data_b64:
-                    continue
-                ext = Path(name).suffix.lower()
-                if ext not in IMAGE_SUFFIXES:
-                    ext = ".png"
-                image_bytes = b64mod.b64decode(data_b64)
+            for name, validated in validated_images:
+                image_bytes = validated.content
+                ext = validated.extension
                 fingerprint = compute_image_fingerprint(image_bytes)
                 target, decision = self._store_unique_image(
                     category_dir,
@@ -4131,10 +4141,15 @@ class Main(Star):
         uploaded: list[str] = []
         exact_count = 0
         similar_count = 0
+        invalid_count = 0
         for source_path, image_bytes in all_images:
-            suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
-            if suffix == ".gif":
-                suffix = ".jpg"
+            try:
+                validated = validate_image_payload(image_bytes)
+            except (UploadPayloadTooLarge, ValueError):
+                invalid_count += 1
+                continue
+            image_bytes = validated.content
+            suffix = validated.extension
             fingerprint = compute_image_fingerprint(image_bytes)
             target_path, decision = self._store_unique_image(
                 category_dir,
@@ -4182,6 +4197,8 @@ class Main(Star):
             parts.append(f"完全重复 {exact_count} 张已拦截")
         if similar_count:
             parts.append("1 张相似图片等待 /强制上传 确认")
+        if invalid_count:
+            parts.append(f"无效或过大 {invalid_count} 张已跳过")
         await event.send(event.plain_result("；".join(parts) + "。"))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
