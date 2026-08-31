@@ -1300,7 +1300,7 @@ class Main(Star):
             self._push_staged_upload_transaction, [target], category
         )
         if not committed:
-                return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
+            return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
         self._forget_api_similar_upload(force_token)
         return {"ok": True, "count": 1, "files": [target.name], "rejected": []}, 200
 
@@ -4343,8 +4343,8 @@ class Main(Star):
             self._push_staged_upload_transaction, [target], category
         )
         if not committed:
-                await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
-                return
+            await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
+            return
         with self._pending_similar_upload_lock:
             self._pending_similar_uploads.pop(key, None)
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
