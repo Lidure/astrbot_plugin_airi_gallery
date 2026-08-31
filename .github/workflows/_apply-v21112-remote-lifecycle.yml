@@ -6,6 +6,7 @@ on:
       - hardening/v21112-remote-consistency
     paths:
       - '.github/scripts/apply_v21112_remote_lifecycle.py'
+      - '.github/scripts/apply_v21112_lifecycle_compat.py'
       - '.github/workflows/_apply-v21112-remote-lifecycle.yml'
   workflow_dispatch:
 
@@ -25,7 +26,9 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
       - name: Apply remote lifecycle patch
-        run: python .github/scripts/apply_v21112_remote_lifecycle.py
+        run: |
+          python .github/scripts/apply_v21112_remote_lifecycle.py
+          python .github/scripts/apply_v21112_lifecycle_compat.py
       - name: Verify Task 2 focused regression
         run: python -m pytest tests/test_v21112_remote_consistency.py -v
       - name: Verify full suite
@@ -36,7 +39,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f .github/scripts/apply_v21112_remote_lifecycle.py .github/workflows/_apply-v21112-remote-lifecycle.yml
+          git rm -f .github/scripts/apply_v21112_remote_lifecycle.py .github/scripts/apply_v21112_lifecycle_compat.py .github/workflows/_apply-v21112-remote-lifecycle.yml
           git add main.py tests/test_v21112_remote_consistency.py
           git commit -m 'fix: serialize remote mutations and stop sync cleanly'
           git push origin HEAD:hardening/v21112-remote-consistency
