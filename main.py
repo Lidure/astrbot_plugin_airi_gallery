@@ -4045,12 +4045,20 @@ class Main(Star):
             transaction_items = image_items + [
                 (GALLERY_INDEX_PATH, manifest_payload)
             ]
+            self._git_ref_update_outcome = None
             committed = self._git_push_batch_github(
                 transaction_items,
                 create_only_paths=image_paths,
             )
             if not committed:
-                self._rollback_staged_uploads(staged_paths, category)
+                ref_outcome = getattr(self, "_git_ref_update_outcome", None)
+                if ref_outcome == "uncertain":
+                    logger.warning(
+                        "[Git Sync] GitHub ref 更新结果不确定，已保留本地 staged 文件，"
+                        "避免远端可能已成功时制造远端孤儿；请立即同步核对。"
+                    )
+                else:
+                    self._rollback_staged_uploads(staged_paths, category)
                 return False
 
             try:
