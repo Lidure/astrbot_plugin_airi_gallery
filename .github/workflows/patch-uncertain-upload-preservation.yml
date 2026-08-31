@@ -1,0 +1,36 @@
+name: Temporary uncertain upload preservation patch
+
+on:
+  push:
+    branches:
+      - fix/github-uncertain-upload-preserve-local
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/github-uncertain-upload-preserve-local
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply targeted patch
+        run: python .github/scripts/patch_uncertain_upload_preservation.py
+      - name: Run focused regression tests
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/test_github_uncertain_upload_preservation.py tests/test_github_ref_failure_classification.py tests/test_github_ref_lost_response.py -q
+      - name: Commit production fix and remove temporary artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py
+          git rm .github/scripts/patch_uncertain_upload_preservation.py .github/workflows/patch-uncertain-upload-preservation.yml
+          git commit -m "fix: preserve local uploads on uncertain GitHub ref result"
+          git push origin HEAD:fix/github-uncertain-upload-preserve-local
