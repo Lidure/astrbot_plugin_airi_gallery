@@ -149,7 +149,7 @@ def test_public_token_uses_compare_digest(monkeypatch):
     assert called == [("candidate", "secret")]
 ```
 
-Add an endpoint test using Quart request context that posts `{"token":"","category":"szk","images":[]}` while configured token is empty and asserts status `403` before any upload helper is called.
+Add an endpoint test using a Quart request context that posts `{"token":"","category":"szk","images":[]}` while configured token is empty. Stub `_prepare_remote_upload_guard` with `AssertionError("must not reach upload work")` and assert the endpoint returns status 403 before that stub is reached.
 
 - [ ] **Step 2: Run RED**
 
@@ -191,41 +191,27 @@ git commit -m "fix: disable unauthenticated public gallery writes"
 - Create: `tests/test_upload_payload_validation.py`
 
 **Interfaces:**
-
-```python
-@dataclass(frozen=True)
-class ValidatedImagePayload:
-    content: bytes
-    extension: str
-    format_name: str
-    width: int
-    height: int
-
-
-def validate_image_payload(
-    content: bytes,
-    *,
-    max_bytes: int = 20 * 1024 * 1024,
-    max_pixels: int = 40_000_000,
-) -> ValidatedImagePayload:
-    ...
-```
-
-The implementation body above is intentionally defined by Steps 3–4; the exact public signature is fixed. Supported mapping: `JPEG -> .jpg`, `PNG -> .png`, `GIF -> .gif`, `WEBP -> .webp`, `BMP -> .bmp`, `TIFF -> .tiff`. Invalid/empty/unsupported/oversized payloads raise `ValueError`.
+- Dataclass: `ValidatedImagePayload(content: bytes, extension: str, format_name: str, width: int, height: int)`
+- Function: `validate_image_payload(content: bytes, *, max_bytes: int = 20 * 1024 * 1024, max_pixels: int = 40_000_000) -> ValidatedImagePayload`
+- Supported mapping: `JPEG -> .jpg`, `PNG -> .png`, `GIF -> .gif`, `WEBP -> .webp`, `BMP -> .bmp`, `TIFF -> .tiff`
+- Invalid, empty, unsupported, over-byte-limit or over-pixel-limit input raises `ValueError`
 
 - [ ] **Step 1: Write concrete pure validation tests**
 
-Use this helper in the test module:
-
 ```python
 from io import BytesIO
+import pytest
 from PIL import Image
 from gallery_safety import validate_image_payload
 
 
 def encoded_image(fmt: str, size=(4, 4)) -> bytes:
     stream = BytesIO()
-    Image.new("RGBA", size, (255, 0, 0, 255)).save(stream, format=fmt)
+    mode = "RGB" if fmt == "JPEG" else "RGBA"
+    Image.new(mode, size, (255, 0, 0) if mode == "RGB" else (255, 0, 0, 255)).save(
+        stream,
+        format=fmt,
+    )
     return stream.getvalue()
 
 
@@ -235,7 +221,7 @@ def test_real_gif_stays_gif():
     assert result.format_name == "GIF"
 
 
-def test_png_content_wins_over_source_name_concerns():
+def test_png_content_maps_to_png_extension():
     result = validate_image_payload(encoded_image("PNG"))
     assert result.extension == ".png"
 
@@ -250,7 +236,7 @@ def test_malformed_image_is_rejected():
         validate_image_payload(b"not-an-image")
 ```
 
-For pixel area, monkeypatch `PIL.Image.open` with a context-manager fake exposing `format="PNG"`, `size=(10000, 5000)`, and `verify()`; assert `ValueError` before any decode/storage call.
+For pixel area, monkeypatch `PIL.Image.open` with a context-manager fake exposing `format="PNG"`, `size=(10000, 5000)`, and a no-op `verify()` method; assert `ValueError` and that no storage helper is invoked.
 
 - [ ] **Step 2: Verify RED**
 
@@ -299,22 +285,16 @@ git commit -m "fix: validate upload payloads and preserve real image formats"
 - Create: `tests/test_github_http_classification.py`
 
 **Interfaces:**
-
-```python
-def classify_github_http_failure(
-    status: int,
-    headers: Mapping[str, object],
-    body: object,
-) -> str:
-    # return: auth | permission | rate_limit | conflict | transport | other
-    raise NotImplementedError
-```
-
-The signature and return vocabulary are fixed; Step 3 supplies the real implementation.
+- Function: `classify_github_http_failure(status: int, headers: Mapping[str, object], body: object) -> str`
+- Return vocabulary: `auth`, `permission`, `rate_limit`, `conflict`, `transport`, `other`
 
 - [ ] **Step 1: Write classifier RED tests**
 
 ```python
+import pytest
+from gallery_safety import classify_github_http_failure
+
+
 @pytest.mark.parametrize(
     ("status", "headers", "expected"),
     [
