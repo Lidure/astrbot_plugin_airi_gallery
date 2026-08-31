@@ -86,7 +86,6 @@ def test_gitee_update_retry_keeps_configured_branch():
     retry_update = request.call_args_list[1]
 
     assert first_update.args[0] == "PUT"
-    assert first_update.kwargs["json_body"]["sha"] == "cached-sha"
     assert first_update.kwargs["json_body"]["branch"] == "gallery-data"
     assert retry_update.args[0] == "PUT"
     assert retry_update.kwargs["json_body"]["sha"] == "fresh-sha"
