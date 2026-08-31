@@ -2687,6 +2687,43 @@ class Main(Star):
                 self._sha_cache.pop(path, None)
                 logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
                 return True
+
+            if status in (409, 422):
+                self._sha_cache.pop(path, None)
+                refresh_status, refresh_data = self._git_request(
+                    "GET", url, params={"ref": branch}
+                )
+                if refresh_status == 404:
+                    logger.info(f"[Git Sync] 删除 {path} 冲突后确认远程已不存在。")
+                    return True
+                if refresh_status != 200 or not isinstance(refresh_data, dict):
+                    logger.error(
+                        f"[Git Sync] 删除 {path} 冲突后无法刷新远程 SHA "
+                        f"(HTTP {refresh_status})"
+                    )
+                    return False
+                fresh_sha = str(refresh_data.get("sha", "")).strip()
+                if not fresh_sha:
+                    logger.error(f"[Git Sync] 删除 {path} 冲突后远程响应缺少 SHA。")
+                    return False
+
+                self._sha_cache[path] = fresh_sha
+                retry_body = dict(body)
+                retry_body["sha"] = fresh_sha
+                retry_status, _ = self._git_request(
+                    "DELETE", url, json_body=retry_body
+                )
+                if retry_status in (200, 204, 404):
+                    self._sha_cache.pop(path, None)
+                    if retry_status == 404:
+                        logger.info(f"[Git Sync] 重试删除 {path} 时远程已不存在。")
+                    return True
+                logger.error(
+                    f"[Git Sync] 使用刷新 SHA 重试删除失败 {path} "
+                    f"(HTTP {retry_status})"
+                )
+                return False
+
             logger.error(f"[Git Sync] 删除文件失败 {path} (HTTP {status})")
             return False
 
