@@ -54,6 +54,14 @@ def _load_git_request():
     return scope["_git_request"], state
 
 
+def _github_plugin():
+    plugin = types.SimpleNamespace(_git_sync_enabled=True)
+    plugin._git_auth_params = lambda: {}
+    plugin._git_headers = lambda: {}
+    plugin._git_platform = lambda: "github"
+    return plugin
+
+
 @pytest.mark.parametrize(
     ("status", "headers", "body", "expected"),
     [
@@ -95,9 +103,7 @@ def test_git_request_preserves_sync_for_rate_limits(monkeypatch, status, headers
             return body
 
     monkeypatch.setattr(requests, "request", lambda *args, **kwargs: Response())
-    plugin = types.SimpleNamespace(_git_sync_enabled=True)
-    plugin._git_auth_params = lambda: {}
-    plugin._git_headers = lambda: {}
+    plugin = _github_plugin()
 
     returned_status, returned_body = git_request(
         plugin, "GET", "https://api.github.com/repos/example/gallery"
@@ -122,9 +128,7 @@ def test_git_request_still_disables_sync_for_plain_permission_403(monkeypatch):
             return {"message": "Resource not accessible by personal access token"}
 
     monkeypatch.setattr(requests, "request", lambda *args, **kwargs: Response())
-    plugin = types.SimpleNamespace(_git_sync_enabled=True)
-    plugin._git_auth_params = lambda: {}
-    plugin._git_headers = lambda: {}
+    plugin = _github_plugin()
 
     status, body = git_request(
         plugin, "GET", "https://api.github.com/repos/example/gallery"
