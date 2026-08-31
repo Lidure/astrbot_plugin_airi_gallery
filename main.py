@@ -2197,6 +2197,7 @@ class Main(Star):
                 body: dict = {
                     "message": message,
                     "content": content_b64,
+                    "branch": branch,
                 }
                 old_sha = self._sha_cache.get(path)
                 if old_sha:
@@ -2675,7 +2676,7 @@ class Main(Star):
                 self._sha_cache[path] = sha
     
             if self._git_platform() == "gitee":
-                body = {"message": message, "sha": sha}
+                body = {"message": message, "sha": sha, "branch": branch}
             else:
                 body = {"message": message, "sha": sha, "branch": branch}
     
