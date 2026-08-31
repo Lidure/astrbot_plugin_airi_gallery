@@ -8,6 +8,28 @@ permissions:
   contents: write
 
 jobs:
+  apply-webui-lazy-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/perf/webui-lazy-image-loading'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/webui-lazy-image-loading
+          fetch-depth: 0
+      - run: python .github/apply_webui_lazy_images.py
+      - run: python -m compileall -q main.py
+      - run: node --check pages/gallery/app.js
+      - name: Commit scoped implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git rm -f .github/workflows/apply-webui-lazy-images.yml .github/apply_webui_lazy_images.py
+          git add .github/workflows/ci.yml main.py pages/gallery/app.js
+          git commit -m "perf: lazy-load authenticated WebUI images"
+          git push origin HEAD:perf/webui-lazy-image-loading
+
   test:
     runs-on: ubuntu-latest
     strategy:
