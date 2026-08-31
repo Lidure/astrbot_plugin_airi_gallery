@@ -1,0 +1,30 @@
+name: apply-gitee-compensation-fix-v2
+
+on:
+  push:
+    branches:
+      - hardening/gitee-compensation-consistency
+    paths:
+      - .github/workflows/apply-gitee-compensation-fix-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/gitee-compensation-consistency
+          fetch-depth: 0
+      - name: Apply patch
+        run: python tools/apply_gitee_compensation_fix.py
+      - name: Remove temporary patch artifacts and commit
+        run: |
+          git rm tools/apply_gitee_compensation_fix.py .github/workflows/apply-gitee-compensation-fix.yml .github/workflows/apply-gitee-compensation-fix-v2.yml
+          git add main.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: preserve Gitee state on failed compensation"
+          git push origin HEAD:hardening/gitee-compensation-consistency
