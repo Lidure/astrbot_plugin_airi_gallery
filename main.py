@@ -1411,8 +1411,8 @@ class Main(Star):
     def _check_upload_token(self, token: str) -> bool:
         expected = str(self.config.get("upload_token", "")).strip()
         if not expected:
-            return True
-        return token == expected
+            return False
+        return secrets.compare_digest(str(token), expected)
 
     async def _api_pub_categories(self):
         from quart import request, jsonify
@@ -1438,6 +1438,9 @@ class Main(Star):
         from quart import request, jsonify
         try:
             data = await request.get_json()
+            expected_token = str(self.config.get("upload_token", "")).strip()
+            if not expected_token:
+                return jsonify({"ok": False, "error": "公开上传未启用"}), 403
             token = str(data.get("token", ""))
             if not self._check_upload_token(token):
                 return jsonify({"ok": False, "error": "密钥错误"}), 403
