@@ -1,0 +1,35 @@
+name: Temporary cloud request lifecycle patch
+
+on:
+  push:
+    branches:
+      - perf/cloud-request-lifecycle
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/cloud-request-lifecycle
+          fetch-depth: 0
+      - name: Apply patch
+        run: python tools/_tmp_patch_cloud_request_lifecycle.py
+      - name: Verify focused regression tests
+        run: python -m pytest tests/test_cloud_request_lifecycle.py -q
+      - name: Verify JavaScript syntax
+        run: node --check pages/zz_cloud/app.js
+      - name: Remove temporary patch files
+        run: rm -f tools/_tmp_patch_cloud_request_lifecycle.py .github/workflows/_tmp_patch_cloud_request_lifecycle.yml
+      - name: Commit patched source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --exit-code && exit 0
+          git commit -m "perf: cancel stale cloud requests"
+          git push origin HEAD:perf/cloud-request-lifecycle
