@@ -18,3 +18,18 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
       - run: python -m pytest tests -v
+
+  astrbot-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install AstrBot
+      - run: python -m pip install -r requirements.txt
+      - run: python tests/astrbot_runtime_smoke.py
