@@ -74,12 +74,15 @@ try:
         RenameStep,
         RemoteDeleteReport,
         UploadMatch,
+        UploadPayloadTooLarge,
         build_global_renumber_plan,
         build_renumbered_category_entries,
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
+        classify_github_http_failure,
         compute_image_fingerprint,
+        decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
@@ -100,6 +103,7 @@ try:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        validate_image_payload,
         verified_remote_sha,
     )
 except ImportError:
@@ -112,12 +116,15 @@ except ImportError:
         RenameStep,
         RemoteDeleteReport,
         UploadMatch,
+        UploadPayloadTooLarge,
         build_global_renumber_plan,
         build_renumbered_category_entries,
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
+        classify_github_http_failure,
         compute_image_fingerprint,
+        decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
         evaluate_indexed_upload,
@@ -138,6 +145,7 @@ except ImportError:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        validate_image_payload,
         verified_remote_sha,
     )
 
@@ -159,7 +167,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.10"
+CURRENT_PLUGIN_VERSION = "v2.11.11"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -1304,6 +1312,14 @@ class Main(Star):
                 return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            try:
+                validated_images = decode_upload_image_batch(
+                    images, max_count=UPLOAD_BATCH_MAX
+                )
+            except UploadPayloadTooLarge as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 413
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1316,15 +1332,9 @@ class Main(Star):
 
             uploaded: list[str] = []
             rejected: list[dict] = []
-            for img in images:
-                name = str(img.get("name", ""))
-                data_b64 = str(img.get("data", ""))
-                if not name or not data_b64:
-                    continue
-                ext = Path(name).suffix.lower()
-                if ext not in IMAGE_SUFFIXES:
-                    ext = ".png"
-                image_bytes = b64mod.b64decode(data_b64)
+            for name, validated in validated_images:
+                image_bytes = validated.content
+                ext = validated.extension
                 fingerprint = compute_image_fingerprint(image_bytes)
                 target, decision = self._store_unique_image(
                     category_dir,
@@ -1411,8 +1421,8 @@ class Main(Star):
     def _check_upload_token(self, token: str) -> bool:
         expected = str(self.config.get("upload_token", "")).strip()
         if not expected:
-            return True
-        return token == expected
+            return False
+        return secrets.compare_digest(str(token), expected)
 
     async def _api_pub_categories(self):
         from quart import request, jsonify
@@ -1438,6 +1448,9 @@ class Main(Star):
         from quart import request, jsonify
         try:
             data = await request.get_json()
+            expected_token = str(self.config.get("upload_token", "")).strip()
+            if not expected_token:
+                return jsonify({"ok": False, "error": "公开上传未启用"}), 403
             token = str(data.get("token", ""))
             if not self._check_upload_token(token):
                 return jsonify({"ok": False, "error": "密钥错误"}), 403
@@ -1452,6 +1465,14 @@ class Main(Star):
                 return jsonify(payload), status
             if not images:
                 return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            try:
+                validated_images = decode_upload_image_batch(
+                    images, max_count=UPLOAD_BATCH_MAX
+                )
+            except UploadPayloadTooLarge as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 413
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
             category_dir = resolve_gallery_category_dir(self.gallery_root, category)
             if category_dir is None:
                 return jsonify({"ok": False, "error": "invalid category"}), 400
@@ -1464,15 +1485,9 @@ class Main(Star):
 
             uploaded: list[str] = []
             rejected: list[dict] = []
-            for img in images:
-                name = str(img.get("name", ""))
-                data_b64 = str(img.get("data", ""))
-                if not name or not data_b64:
-                    continue
-                ext = Path(name).suffix.lower()
-                if ext not in IMAGE_SUFFIXES:
-                    ext = ".png"
-                image_bytes = b64mod.b64decode(data_b64)
+            for name, validated in validated_images:
+                image_bytes = validated.content
+                ext = validated.extension
                 fingerprint = compute_image_fingerprint(image_bytes)
                 target, decision = self._store_unique_image(
                     category_dir,
@@ -1800,33 +1815,52 @@ class Main(Star):
             return 0, None
 
         status = resp.status_code
-        if status in (401, 403):
-            logger.error(f"[Git Sync] 认证失败 (HTTP {status})，请检查 git_token。URL: {url}")
-            if disable_on_auth_failure:
-                self._git_sync_enabled = False
-            return status, None
-        if status == 429:
-            reset = resp.headers.get("X-RateLimit-Reset", "")
-            logger.warning(f"[Git Sync] 触发 API 限流 (429)，重置时间: {reset}")
-            return status, None
-        if status == 409 or status == 422:
-            # SHA 冲突或验证失败
-            try:
-                body = resp.json()
-            except Exception:
-                body = None
-            if disable_on_auth_failure:
-                logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
-            else:
-                logger.warning(
-                    f"[画廊检查] Git 请求返回 HTTP {status}"
-                )
-            return status, body
-
         try:
             body = resp.json() if resp.content else None
         except Exception:
             body = None
+
+        if self._git_platform() == "github":
+            failure_kind = classify_github_http_failure(status, resp.headers, body)
+        elif status in (401, 403):
+            failure_kind = "auth"
+        elif status == 429:
+            failure_kind = "rate_limit"
+        elif status in (409, 422):
+            failure_kind = "conflict"
+        else:
+            failure_kind = "other"
+
+        if failure_kind in {"auth", "permission"}:
+            _GIT_REQUEST_STATE.failure = failure_kind
+            if disable_on_auth_failure:
+                label = "认证失败" if failure_kind == "auth" else "权限不足"
+                logger.error(
+                    f"[Git Sync] {label} (HTTP {status})，请检查 git_token/仓库权限。URL: {url}"
+                )
+                self._git_sync_enabled = False
+            else:
+                logger.warning(f"[画廊检查] Git 请求返回 HTTP {status}")
+            return status, body
+
+        if failure_kind == "rate_limit":
+            _GIT_REQUEST_STATE.failure = "rate_limit"
+            retry_after = str(resp.headers.get("Retry-After", "")).strip()
+            reset = str(resp.headers.get("X-RateLimit-Reset", "")).strip()
+            retry_hint = retry_after or reset or "未知"
+            logger.warning(
+                f"[Git Sync] GitHub API 限流 (HTTP {status})，重试/重置时间: {retry_hint}"
+            )
+            return status, body
+
+        if failure_kind == "conflict":
+            # SHA 冲突或验证失败
+            if disable_on_auth_failure:
+                logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
+            else:
+                logger.warning(f"[画廊检查] Git 请求返回 HTTP {status}")
+            return status, body
+
         return status, body
 
     def _git_list_tree(self) -> list[dict] | None:
@@ -4094,6 +4128,9 @@ class Main(Star):
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
         category_dir = self._resolve_existing_category_dir(category)
         if not category_dir:
             await event.send(
@@ -4125,10 +4162,15 @@ class Main(Star):
         uploaded: list[str] = []
         exact_count = 0
         similar_count = 0
+        invalid_count = 0
         for source_path, image_bytes in all_images:
-            suffix = source_path.suffix.lower() if source_path.suffix.lower() in IMAGE_SUFFIXES else ".png"
-            if suffix == ".gif":
-                suffix = ".jpg"
+            try:
+                validated = validate_image_payload(image_bytes)
+            except (UploadPayloadTooLarge, ValueError):
+                invalid_count += 1
+                continue
+            image_bytes = validated.content
+            suffix = validated.extension
             fingerprint = compute_image_fingerprint(image_bytes)
             target_path, decision = self._store_unique_image(
                 category_dir,
@@ -4176,6 +4218,8 @@ class Main(Star):
             parts.append(f"完全重复 {exact_count} 张已拦截")
         if similar_count:
             parts.append("1 张相似图片等待 /强制上传 确认")
+        if invalid_count:
+            parts.append(f"无效或过大 {invalid_count} 张已跳过")
         await event.send(event.plain_result("；".join(parts) + "。"))
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):

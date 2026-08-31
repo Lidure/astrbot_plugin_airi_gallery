@@ -154,7 +154,9 @@ def test_gallery_web_apis_reject_linked_category_for_list_and_uploads(
     import base64
     from quart import Quart
 
-    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})
+    plugin, _ = construct_plugin(
+        main_module, monkeypatch, tmp_path, {"upload_token": "secret"}
+    )
     outside = tmp_path / "outside"
     outside.mkdir()
     linked = plugin.gallery_root / "linked"
@@ -182,7 +184,7 @@ def test_gallery_web_apis_reject_linked_category_for_list_and_uploads(
 
     async def invoke_public_upload():
         async with app.test_request_context(
-            "/pub/upload", method="POST", json={**payload, "token": ""}
+            "/pub/upload", method="POST", json={**payload, "token": "secret"}
         ):
             return status_of(await plugin._api_pub_upload())
 

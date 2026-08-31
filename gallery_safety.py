@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import inspect
 import re
+import warnings
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path, PurePosixPath
 from collections.abc import Callable, Iterable, Mapping
 
@@ -102,6 +106,126 @@ class ImageFingerprint:
 
 
 @dataclass(frozen=True)
+class ValidatedImagePayload:
+    content: bytes
+    extension: str
+    format_name: str
+    width: int
+    height: int
+
+
+class UploadPayloadTooLarge(ValueError):
+    """Raised when an upload exceeds an explicit byte/count/pixel limit."""
+
+
+_IMAGE_FORMAT_EXTENSIONS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "GIF": ".gif",
+    "WEBP": ".webp",
+    "BMP": ".bmp",
+    "TIFF": ".tiff",
+}
+
+
+def validate_image_payload(
+    content: bytes,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+    max_pixels: int = 40_000_000,
+) -> ValidatedImagePayload:
+    """Validate image bytes and derive the canonical extension from content."""
+    if not isinstance(content, (bytes, bytearray)):
+        raise ValueError("图片数据无效")
+    data = bytes(content)
+    if not data:
+        raise ValueError("图片数据为空")
+    if len(data) > max_bytes:
+        raise UploadPayloadTooLarge("单张图片超过大小限制")
+
+    try:
+        from PIL import Image as PILImage
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PILImage.DecompressionBombWarning)
+            with PILImage.open(BytesIO(data)) as image:
+                format_name = str(image.format or "").upper()
+                width, height = (int(image.size[0]), int(image.size[1]))
+                if width <= 0 or height <= 0:
+                    raise ValueError("图片尺寸无效")
+                if width * height > max_pixels:
+                    raise UploadPayloadTooLarge("图片像素超过限制")
+                if format_name not in _IMAGE_FORMAT_EXTENSIONS:
+                    raise ValueError("不支持的图片格式")
+                image.verify()
+    except UploadPayloadTooLarge:
+        raise
+    except ValueError:
+        raise
+    except Exception as exc:
+        # Pillow also raises its decompression-bomb error through this path.
+        if exc.__class__.__name__ in {"DecompressionBombError", "DecompressionBombWarning"}:
+            raise UploadPayloadTooLarge("图片像素超过限制") from exc
+        raise ValueError("图片内容无法解析") from exc
+
+    return ValidatedImagePayload(
+        content=data,
+        extension=_IMAGE_FORMAT_EXTENSIONS[format_name],
+        format_name=format_name,
+        width=width,
+        height=height,
+    )
+
+
+def decode_upload_image_batch(
+    images: object,
+    *,
+    max_count: int = 100,
+    max_image_bytes: int = 20 * 1024 * 1024,
+    max_request_bytes: int = 100 * 1024 * 1024,
+    max_pixels: int = 40_000_000,
+) -> list[tuple[str, ValidatedImagePayload]]:
+    """Strictly decode one Web upload batch before storage or remote work."""
+    if not isinstance(images, list) or not images:
+        raise ValueError("请选择要上传的图片")
+    if len(images) > max_count:
+        raise UploadPayloadTooLarge("单次上传图片数量超过限制")
+
+    decoded: list[tuple[str, ValidatedImagePayload]] = []
+    total_bytes = 0
+    for item in images:
+        if not isinstance(item, Mapping):
+            raise ValueError("图片条目格式无效")
+        name = str(item.get("name", "")).strip()
+        encoded = item.get("data")
+        if not name or not isinstance(encoded, str) or not encoded.strip():
+            raise ValueError("图片名称或数据为空")
+
+        payload = encoded.strip()
+        if payload.lower().startswith("data:"):
+            if "," not in payload:
+                raise ValueError("图片 base64 数据无效")
+            metadata, payload = payload.split(",", 1)
+            if ";base64" not in metadata.lower():
+                raise ValueError("图片 base64 数据无效")
+        try:
+            content = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("图片 base64 数据无效") from exc
+
+        total_bytes += len(content)
+        if total_bytes > max_request_bytes:
+            raise UploadPayloadTooLarge("单次上传总大小超过限制")
+        validated = validate_image_payload(
+            content,
+            max_bytes=max_image_bytes,
+            max_pixels=max_pixels,
+        )
+        decoded.append((name, validated))
+    return decoded
+
+
+@dataclass(frozen=True)
 class IndexedImage:
     path: str
     content_hash: str = ""
@@ -148,6 +272,39 @@ class GalleryPathDifference:
     @property
     def is_clean(self) -> bool:
         return not self.local_only and not self.remote_only
+
+
+def classify_github_http_failure(
+    status: int,
+    headers: Mapping[str, object],
+    body: object,
+) -> str:
+    """Classify GitHub failures without confusing throttling with bad auth."""
+    if status == 0:
+        return "transport"
+    if status == 401:
+        return "auth"
+    if status == 429:
+        return "rate_limit"
+    if status == 403:
+        normalized_headers = {
+            str(key).strip().lower(): str(value).strip()
+            for key, value in (headers or {}).items()
+        }
+        message = ""
+        if isinstance(body, Mapping):
+            message = str(body.get("message", "")).strip().lower()
+        if (
+            normalized_headers.get("x-ratelimit-remaining") == "0"
+            or bool(normalized_headers.get("retry-after"))
+            or "rate limit" in message
+            or "abuse detection" in message
+        ):
+            return "rate_limit"
+        return "permission"
+    if status in {409, 422}:
+        return "conflict"
+    return "other"
 
 
 def compare_gallery_paths(

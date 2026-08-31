@@ -35,6 +35,10 @@ def cloud_page() -> str:
     return Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
 
 
+def cloud_script() -> str:
+    return Path("pages/zz_cloud/app.js").read_text(encoding="utf-8")
+
+
 def cloud_worker() -> str:
     return Path("pages/zz_cloud/worker.js").read_text(encoding="utf-8")
 
@@ -58,17 +62,17 @@ def test_config_schema_is_valid_json():
     assert isinstance(schema, dict)
 
 
-def test_release_version_is_2_11_10_everywhere():
+def test_release_version_is_2_11_11_everywhere():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
     readme = Path("README.md").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.10"
-    assert badge == "v2.11.10"
-    assert changelog == "v2.11.10"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.10"' in main_source
+    assert metadata["version"] == "v2.11.11"
+    assert badge == "v2.11.11"
+    assert changelog == "v2.11.11"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.11"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
@@ -195,6 +199,7 @@ def test_startup_diagnostics_are_background_only_and_cancelled_on_shutdown():
 
 def test_cloud_page_offers_builtin_gallery_and_optional_token_reads():
     html = cloud_page()
+    script = cloud_script()
 
     assert 'id="cfg-default-gallery"' in html
     assert 'value="builtin"' in html
@@ -202,60 +207,60 @@ def test_cloud_page_offers_builtin_gallery_and_optional_token_reads():
     assert 'data-owner="Lidure"' in html
     assert 'data-repo="airi-gallery-images"' in html
     assert 'data-branch="main"' in html
-    assert "function hasReadConfig" in html
-    assert "function canWrite" in html
-    assert "config.platform !== 'github' && !config.token" in html
-    assert "if (!config.owner || !config.repo)" in html
+    assert "function hasReadConfig" in script
+    assert "function canWrite" in script
+    assert "config.platform !== 'github' && !config.token" in script
+    assert "if (!config.owner || !config.repo)" in script
 
 
 def test_cloud_page_omits_anonymous_auth_and_rejects_unauthenticated_writes():
-    html = cloud_page()
+    script = cloud_script()
 
-    assert "if (config.token) headers.Authorization" in html
-    assert "if (config.token) url.searchParams.set('access_token', config.token)" in html
-    assert "const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE'])" in html
-    assert "if (WRITE_METHODS.has(method) && !canWrite())" in html
-    assert "requireWriteAccess()" in html
-    assert "鍙妯″紡" in html
+    assert "if (config.token) headers.Authorization" in script
+    assert "if (config.token) url.searchParams.set('access_token', config.token)" in script
+    assert "const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE'])" in script
+    assert "if (WRITE_METHODS.has(method) && !canWrite())" in script
+    assert "requireWriteAccess()" in script
+    assert "鍙妯″紡" in script
 
 
 def test_cloud_page_allows_sync_and_initialization_without_github_token():
-    html = cloud_page()
+    script = cloud_script()
 
-    assert "if (!hasReadConfig()) return" in html
-    assert "if (!hasReadConfig())" in html
-    assert "if (config.owner && config.repo)" in html
-    assert "if (!config.token)" not in html.split("syncBtn.onclick", 1)[1].split("//", 1)[0]
+    assert "if (!hasReadConfig()) return" in script
+    assert "if (!hasReadConfig())" in script
+    assert "if (config.owner && config.repo)" in script
+    assert "if (!config.token)" not in script.split("syncBtn.onclick", 1)[1].split("//", 1)[0]
 
 
 def test_cloud_page_distinguishes_anonymous_rate_limits_from_auth_failures():
-    html = cloud_page()
+    script = cloud_script()
 
-    assert "const rateLimited = !resp.ok &&" in html
-    assert "x-ratelimit-remaining" in html
-    assert "config.token" in html
-    assert "rate limit" in html.lower()
-    assert "if (rateLimited)" in html
+    assert "const rateLimited = !resp.ok &&" in script
+    assert "x-ratelimit-remaining" in script
+    assert "config.token" in script
+    assert "rate limit" in script.lower()
+    assert "if (rateLimited)" in script
 
 
 def test_cloud_page_marks_default_gallery_selector_custom_after_manual_edits():
-    html = cloud_page()
+    script = cloud_script()
 
-    assert "cfgDefaultGallery.value = 'custom'" in html
-    assert "cfgOwner.addEventListener('input'" in html
-    assert "cfgRepo.addEventListener('input'" in html
-    assert "cfgBranch.addEventListener('input'" in html
+    assert "cfgDefaultGallery.value = 'custom'" in script
+    assert "cfgOwner.addEventListener('input'" in script
+    assert "cfgRepo.addEventListener('input'" in script
+    assert "cfgBranch.addEventListener('input'" in script
 
 
 def test_cloud_page_uses_same_origin_proxy_for_builtin_gallery_images():
-    html = cloud_page()
+    script = cloud_script()
     worker = cloud_worker()
 
-    assert "function useImageProxy" in html
-    assert "__gallery-image/" in html
-    assert "file.sha" in html
-    assert "img.loading = 'lazy'" in html
-    assert "img.decoding = 'async'" in html
+    assert "function useImageProxy" in script
+    assert "__gallery-image/" in script
+    assert "file.sha" in script
+    assert "img.loading = 'lazy'" in script
+    assert "img.decoding = 'async'" in script
     assert "raw.githubusercontent.com/Lidure/airi-gallery-images/main/" in worker
     assert "cacheEverything: true" in worker
     assert "cacheTtl" in worker

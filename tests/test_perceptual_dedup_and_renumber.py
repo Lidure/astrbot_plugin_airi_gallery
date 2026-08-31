@@ -194,7 +194,7 @@ def test_main_and_cloud_page_expose_similarity_and_shared_renumber_contracts():
     from pathlib import Path
 
     main_source = Path("main.py").read_text(encoding="utf-8")
-    cloud_source = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+    cloud_source = Path("pages/zz_cloud/app.js").read_text(encoding="utf-8")
 
     assert "相似图片" in main_source
     assert "强制上传" in main_source

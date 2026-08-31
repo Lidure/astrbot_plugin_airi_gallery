@@ -34,7 +34,7 @@
   "upload_token": {
     "type": "string",
     "description": "公开上传密钥",
-    "hint": "用于外部上传页面的访问密钥。留空则无需密钥（不安全）。建议设置以防止陌生人上传。",
+    "hint": "用于外部上传页面的访问密钥。留空将关闭公开上传接口；公开写入必须设置密钥。",
     "default": ""
   },
   "cloud_gallery_url": {

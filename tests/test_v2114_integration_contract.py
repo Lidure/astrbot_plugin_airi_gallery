@@ -23,7 +23,7 @@ def test_force_confirmation_reuses_cached_candidate_fingerprint():
 def test_all_upload_surfaces_expose_exact_and_similar_review():
     main = Path("main.py").read_text(encoding="utf-8")
     local_web = Path("pages/gallery/app.js").read_text(encoding="utf-8")
-    cloud = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+    cloud = Path("pages/zz_cloud/app.js").read_text(encoding="utf-8")
 
     assert "发现完全重复图片" in main
     assert "发现相似图片" in main
@@ -83,7 +83,7 @@ def test_github_renumber_is_bound_to_one_head_snapshot():
 
 
 def test_cloud_delete_hides_path_immediately_and_stale_tree_cannot_revive_it():
-    cloud = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+    cloud = Path("pages/zz_cloud/app.js").read_text(encoding="utf-8")
 
     assert "pendingDeletedPaths" in cloud
     assert "hideDeletedPathImmediately(file.path)" in cloud
@@ -114,13 +114,8 @@ def test_javascript_syntax_for_local_and_cloud_pages(tmp_path: Path):
     )
     assert local_result.returncode == 0, local_result.stderr
 
-    cloud_html = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
-    inline_scripts = re.findall(r"<script>(.*?)</script>", cloud_html, flags=re.DOTALL)
-    assert inline_scripts, "cloud page must contain an inline application script"
-    cloud_script = tmp_path / "cloud.js"
-    cloud_script.write_text("\n".join(inline_scripts), encoding="utf-8")
     cloud_result = subprocess.run(
-        [node, "--check", str(cloud_script)],
+        [node, "--check", "pages/zz_cloud/app.js"],
         text=True,
         capture_output=True,
         check=False,

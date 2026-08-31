@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.10-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.11-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -209,7 +209,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 ![alt text](assets/image2.png)
 **部署方式：**
 
-1. 将 `pages/zz_cloud/index.html` 上传到 Cloudflare Pages 项目
+1. 将 `pages/zz_cloud/` 整个目录部署到 Cloudflare Workers / Pages 项目；不要只上传 `index.html`，页面还依赖 `style.css`、`app.js`、`_headers` 与 Worker 配置
 2. 打开页面后填写配置信息：
 
 | 配置项 | 默认值 | 说明 |
@@ -218,17 +218,17 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | 仓库所有者 | `Lidure` | 用户名或组织名 |
 | 仓库名称 | `airi-gallery-images` | 图片存储仓库名 |
 | 分支 | `main` | 同步使用的分支 |
-| 访问令牌 | （空） | GitHub / Gitee 令牌，需读写权限 |
+| 访问令牌 | （空） | GitHub / Gitee 令牌；需要写操作时填写。Access Token 只保留在当前页面内存，刷新页面后需要重新输入，不会写入 `localStorage` |
 
-**功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 SHA-256 去重、上传前按目标分类与远程图库做内容查重、按全局最大编号续号。重复图片会被跳过并明确显示数量；多个浏览器同时上传发生编号冲突时，页面会刷新远程树，再次查重并重试分配新编号。
+**功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 SHA-256 去重、上传前按目标分类与远程图库做内容查重、按全局最大编号续号。重复图片会被跳过并明确显示数量；多个浏览器同时上传发生编号冲突时，页面会刷新远程树，再次查重并重试分配新编号。v2.11.11 起页面脚本与样式完全外置，并启用 CSP；远程分类名等仓库数据使用安全 DOM API 渲染。
 
 如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送 `/airi_gallery`、`/画廊帮助` 或 `/图库帮助` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器查看表情包、批量上传和整理图片。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
 
 ### 10. 公开上传
 
-配置 `upload_token` 后，外部用户可通过 Web 页面上传图片到图库。令牌作为简单的访问密钥，防止未授权上传。
+配置 `upload_token` 后，外部用户可通过 Web 页面上传图片到图库。令牌作为简单的访问密钥，防止未授权上传；比较时使用常量时间校验。
 
-> ⚠️ **安全提示：** `upload_token` 留空则任何人皆可上传，建议务必设置一个密钥。
+> 🔐 **安全提示：** `upload_token` 留空时公开上传默认关闭；只有显式配置非空密钥后，公开上传接口才接受写入。Web 上传还会严格校验 Base64 和真实图片格式，单次最多 100 张、单图最多 20 MiB、整批解码后最多 100 MiB，并限制单图最多 4000 万像素。
 
 ### 11. Web UI 管理页面
 
@@ -258,7 +258,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `view_multiple_max` | int | `10` | 看看多张的最大数量（范围 5~10），LLM 工具也受此限制 |
 | `view_all_collage_compress` | bool | `false` | 是否压缩看全部拼图 |
 | `view_all_collage_scale` | float | `0.85` | 看全部拼图压缩比例（`0.5`~`1.0`） |
-| `upload_token` | string | `""` | 公开上传密钥，留空则无需密钥（不安全） |
+| `upload_token` | string | `""` | 公开上传密钥；留空时公开上传默认关闭，配置非空密钥后才允许外部写入 |
 | `cloud_gallery_url` | string | `""` | 云端图库页面链接，填写后帮助命令会顺便发送这个浏览器入口，可省略 `https://` |
 
 ### LLM 工具配置
@@ -334,6 +334,15 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.11
+
+- **权限边界** `/上传<分类>` 在提取图片、解析目录或访问远程仓库之前先完成管理员/白名单检查，未授权用户不会进入任何上传工作。
+- **公开上传默认关闭** `upload_token` 留空时公开上传默认关闭；只有配置非空密钥后才开放写入，令牌比较改用常量时间校验。
+- **上传内容校验** QQ、本地 Web 与公开 API 统一按真实图片内容识别格式；Web 请求使用严格 Base64，并限制单次 100 张、单图 20 MiB、整批 100 MiB、单图 4000 万像素，避免伪扩展名和超大图片消耗资源。
+- **GitHub 限流分类** 区分 401、普通权限 403、限流 403/429 与 409/422；确认是 GitHub 限流时不再把远程同步永久关闭，真正的认证/权限失败仍保持 fail-closed。
+- **Cloud 安全加固** 云端管理页拆分为外置 `index.html` / `style.css` / `app.js` 并启用 CSP；远程分类名改用 `textContent` 等安全 DOM API，移除动态 inline style/script。
+- **浏览器凭据保护** Cloud 页的 Access Token 只保留在当前页面内存，不写入 `localStorage`；升级后读取到旧版持久化配置时会立即重写为不含 Token 的公开仓库配置。
+
 ### v2.11.10
 
 - 修复回复 QQ 下载/商城表情包执行 `/上传<分类>` 时，引用解析只保留单一 CDN URL、下载失败后误报“请先回复图片”的问题。
