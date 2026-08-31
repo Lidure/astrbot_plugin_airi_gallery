@@ -354,7 +354,7 @@ async function putFile(path, contentB64, message) {
   if (!requireWriteAccess()) throw new Error('写入需要有效 Token');
   const branch = config.branch || 'main';
   const existingSha = state.shaCache[path];
-  const body = { message, content: contentB64 };
+  const body = { message, content: contentB64, branch };
 
   if (config.platform === 'gitee') {
     if (existingSha) {
@@ -370,7 +370,6 @@ async function putFile(path, contentB64, message) {
       return data;
     }
   } else {
-    body.branch = branch;
     if (existingSha) body.sha = existingSha;
     const { data } = await ghRequest('PUT', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
     const newSha = data?.content?.sha;
@@ -387,8 +386,7 @@ async function deleteFile(path, message) {
     console.warn(`SHA not cached for ${path}, skip delete`);
     return;
   }
-  const body = { message, sha };
-  if (config.platform !== 'gitee') body.branch = branch;
+  const body = { message, sha, branch };
   await ghRequest('DELETE', `/repos/${config.owner}/${config.repo}/contents/${path}`, { body });
   delete state.shaCache[path];
 }
@@ -904,6 +902,20 @@ perPageInput.onkeydown = e => { if (e.key === 'Enter') perPageInput.onchange(); 
 // ──────────────────────────────────────────────
 // Upload
 // ──────────────────────────────────────────────
+async function rollbackUploadedResults(uploadedResults, galleryIndex) {
+  const rollbackFailures = [];
+  for (const result of [...uploadedResults].reverse()) {
+    try {
+      await deleteFile(result.gitPath, `Rollback ${result.fileName}: gallery index update failed`);
+      delete galleryIndex[result.gitPath];
+    } catch (error) {
+      rollbackFailures.push({ path: result.gitPath, error });
+      console.error(`[Gallery] 补偿删除失败: ${result.gitPath}`, error);
+    }
+  }
+  return rollbackFailures;
+}
+
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
 dropZone.ondragleave = () => dropZone.classList.remove('dragover');
@@ -1098,13 +1110,16 @@ upBtn.onclick = async () => {
       try {
         await saveGalleryIndex(galleryIndex);
       } catch (indexError) {
-        // Perceptual state is part of the upload transaction. Roll back new images
-        // rather than leave GitHub and the Bot with different similarity knowledge.
-        for (const result of [...uploadedResults].reverse()) {
-          try { await deleteFile(result.gitPath, `Rollback ${result.fileName}: gallery index update failed`); } catch {}
-          delete galleryIndex[result.gitPath];
+        // Perceptual state is part of the upload transaction. Compensate every new image,
+        // but never claim a full rollback when any remote delete could not be confirmed.
+        const rollbackFailures = await rollbackUploadedResults(uploadedResults, galleryIndex);
+        if (rollbackFailures.length) {
+          const failedPaths = rollbackFailures.map(item => item.path).join('、');
+          throw new Error(
+            `感知查重索引更新失败；部分远端图片补偿删除失败（${failedPaths}），请立即同步核对：${indexError.message}`
+          );
         }
-        throw new Error(`感知查重索引更新失败，新上传图片已回滚：${indexError.message}`);
+        throw new Error(`感知查重索引更新失败；远端新增图片补偿删除已完成：${indexError.message}`);
       }
     }
 
