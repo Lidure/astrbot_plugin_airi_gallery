@@ -14,7 +14,7 @@ def block(start_marker: str, end_marker: str) -> str:
 def test_cloud_image_cache_resets_revoke_blob_urls_before_dropping_references():
     assert "function clearImageCache(" in SOURCE
     clear_block = block("function clearImageCache(", "function pruneImageCache(")
-    assert "URL.revokeObjectURL" in clear_block
+    assert "revokeObjectUrl(url)" in clear_block
     assert "state.imageCache = {};" not in SOURCE
 
 
