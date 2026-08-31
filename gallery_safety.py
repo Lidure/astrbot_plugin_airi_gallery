@@ -274,6 +274,39 @@ class GalleryPathDifference:
         return not self.local_only and not self.remote_only
 
 
+def classify_github_http_failure(
+    status: int,
+    headers: Mapping[str, object],
+    body: object,
+) -> str:
+    """Classify GitHub failures without confusing throttling with bad auth."""
+    if status == 0:
+        return "transport"
+    if status == 401:
+        return "auth"
+    if status == 429:
+        return "rate_limit"
+    if status == 403:
+        normalized_headers = {
+            str(key).strip().lower(): str(value).strip()
+            for key, value in (headers or {}).items()
+        }
+        message = ""
+        if isinstance(body, Mapping):
+            message = str(body.get("message", "")).strip().lower()
+        if (
+            normalized_headers.get("x-ratelimit-remaining") == "0"
+            or bool(normalized_headers.get("retry-after"))
+            or "rate limit" in message
+            or "abuse detection" in message
+        ):
+            return "rate_limit"
+        return "permission"
+    if status in {409, 422}:
+        return "conflict"
+    return "other"
+
+
 def compare_gallery_paths(
     local_paths: Iterable[str], remote_paths: Iterable[str]
 ) -> GalleryPathDifference:

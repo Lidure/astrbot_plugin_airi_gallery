@@ -80,6 +80,7 @@ try:
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
+        classify_github_http_failure,
         compute_image_fingerprint,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
@@ -121,6 +122,7 @@ except ImportError:
         build_category_tree_delta_entries,
         compare_gallery_paths,
         collect_remote_category_blob_shas,
+        classify_github_http_failure,
         compute_image_fingerprint,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
@@ -1813,33 +1815,52 @@ class Main(Star):
             return 0, None
 
         status = resp.status_code
-        if status in (401, 403):
-            logger.error(f"[Git Sync] 认证失败 (HTTP {status})，请检查 git_token。URL: {url}")
-            if disable_on_auth_failure:
-                self._git_sync_enabled = False
-            return status, None
-        if status == 429:
-            reset = resp.headers.get("X-RateLimit-Reset", "")
-            logger.warning(f"[Git Sync] 触发 API 限流 (429)，重置时间: {reset}")
-            return status, None
-        if status == 409 or status == 422:
-            # SHA 冲突或验证失败
-            try:
-                body = resp.json()
-            except Exception:
-                body = None
-            if disable_on_auth_failure:
-                logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
-            else:
-                logger.warning(
-                    f"[画廊检查] Git 请求返回 HTTP {status}"
-                )
-            return status, body
-
         try:
             body = resp.json() if resp.content else None
         except Exception:
             body = None
+
+        if self._git_platform() == "github":
+            failure_kind = classify_github_http_failure(status, resp.headers, body)
+        elif status in (401, 403):
+            failure_kind = "auth"
+        elif status == 429:
+            failure_kind = "rate_limit"
+        elif status in (409, 422):
+            failure_kind = "conflict"
+        else:
+            failure_kind = "other"
+
+        if failure_kind in {"auth", "permission"}:
+            _GIT_REQUEST_STATE.failure = failure_kind
+            if disable_on_auth_failure:
+                label = "认证失败" if failure_kind == "auth" else "权限不足"
+                logger.error(
+                    f"[Git Sync] {label} (HTTP {status})，请检查 git_token/仓库权限。URL: {url}"
+                )
+                self._git_sync_enabled = False
+            else:
+                logger.warning(f"[画廊检查] Git 请求返回 HTTP {status}")
+            return status, body
+
+        if failure_kind == "rate_limit":
+            _GIT_REQUEST_STATE.failure = "rate_limit"
+            retry_after = str(resp.headers.get("Retry-After", "")).strip()
+            reset = str(resp.headers.get("X-RateLimit-Reset", "")).strip()
+            retry_hint = retry_after or reset or "未知"
+            logger.warning(
+                f"[Git Sync] GitHub API 限流 (HTTP {status})，重试/重置时间: {retry_hint}"
+            )
+            return status, body
+
+        if failure_kind == "conflict":
+            # SHA 冲突或验证失败
+            if disable_on_auth_failure:
+                logger.warning(f"[Git Sync] SHA 冲突/验证失败 (HTTP {status}): {body}")
+            else:
+                logger.warning(f"[画廊检查] Git 请求返回 HTTP {status}")
+            return status, body
+
         return status, body
 
     def _git_list_tree(self) -> list[dict] | None:
