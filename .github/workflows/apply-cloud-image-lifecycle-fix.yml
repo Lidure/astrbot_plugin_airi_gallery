@@ -1,0 +1,35 @@
+name: Apply cloud image lifecycle fix
+
+on:
+  push:
+    branches:
+      - perf/cloud-image-lifecycle
+    paths:
+      - tools/apply_cloud_image_lifecycle_fix.py
+      - .github/workflows/apply-cloud-image-lifecycle-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/cloud-image-lifecycle
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python tools/apply_cloud_image_lifecycle_fix.py
+      - run: python -m pip install pytest
+      - run: python -m pytest tests/test_cloud_image_lifecycle.py tests/test_cloud_security_contract.py -q
+      - name: Commit production fix and remove temporary patch files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/apply_cloud_image_lifecycle_fix.py .github/workflows/apply-cloud-image-lifecycle-fix.yml
+          git add pages/zz_cloud/app.js tests/test_cloud_image_lifecycle.py
+          git commit -m "fix: bound cloud image object URL lifecycle"
+          git push origin HEAD:perf/cloud-image-lifecycle
