@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,47 +23,45 @@ jobs:
 
           main_path = Path("main.py")
           main = main_path.read_text(encoding="utf-8")
-          old = '''            elif kind == "dedupe_gallery":
-                removed, details = await self._dedupe_gallery(str(payload) if payload else None)
-                if payload:
-                    await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))
-                else:
-                    await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
-                if details:
-                    await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
-'''
-          new = '''            elif kind == "dedupe_gallery":
-                if not self._is_allowed(event):
-                    await event.send(event.plain_result("没有权限执行此操作。"))
-                else:
-                    removed, details = await self._dedupe_gallery(str(payload) if payload else None)
-                    if payload:
-                        await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))
-                    else:
-                        await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
-                    if details:
-                        await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
-'''
+          old = "\n".join([
+              '            elif kind == "dedupe_gallery":',
+              '                removed, details = await self._dedupe_gallery(str(payload) if payload else None)',
+              '                if payload:',
+              '                    await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))',
+              '                else:',
+              '                    await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))',
+              '                if details:',
+              '                    await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))',
+              '',
+          ])
+          new = "\n".join([
+              '            elif kind == "dedupe_gallery":',
+              '                if not self._is_allowed(event):',
+              '                    await event.send(event.plain_result("没有权限执行此操作。"))',
+              '                else:',
+              '                    removed, details = await self._dedupe_gallery(str(payload) if payload else None)',
+              '                    if payload:',
+              '                        await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))',
+              '                    else:',
+              '                        await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))',
+              '                    if details:',
+              '                        await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))',
+              '',
+          ])
           if old not in main:
               raise SystemExit("dedupe dispatcher target block not found")
           main = main.replace(old, new, 1)
-          if 'CURRENT_PLUGIN_VERSION = "v2.11.12"' not in main:
+          version_marker = 'CURRENT_PLUGIN_VERSION = "v2.11.12"'
+          if version_marker not in main:
               raise SystemExit("current plugin version marker not found")
-          main = main.replace(
-              'CURRENT_PLUGIN_VERSION = "v2.11.12"',
-              'CURRENT_PLUGIN_VERSION = "v2.11.13"',
-              1,
-          )
+          main = main.replace(version_marker, 'CURRENT_PLUGIN_VERSION = "v2.11.13"', 1)
           main_path.write_text(main, encoding="utf-8")
 
           metadata_path = Path("metadata.yaml")
           metadata = metadata_path.read_text(encoding="utf-8")
           if "version: v2.11.12" not in metadata:
               raise SystemExit("metadata version marker not found")
-          metadata_path.write_text(
-              metadata.replace("version: v2.11.12", "version: v2.11.13", 1),
-              encoding="utf-8",
-          )
+          metadata_path.write_text(metadata.replace("version: v2.11.12", "version: v2.11.13", 1), encoding="utf-8")
 
           readme_path = Path("README.md")
           readme = readme_path.read_text(encoding="utf-8")
@@ -74,24 +71,27 @@ jobs:
           marker = "## 🚀 更新日志\n### v2.11.12\n"
           if marker not in readme:
               raise SystemExit("README changelog marker not found")
-          release = (
-              "## 🚀 更新日志\n"
-              "### v2.11.13\n\n"
-              "- **去重权限边界** 修复通用消息分发路径可绕过 `use_permission` 直接执行 `/去重图库` 的问题；现在任何去重扫描/删除开始前都会先校验管理员或白名单权限，未授权用户只收到拒绝提示，不会进入图库去重删除流程。\n\n"
-              "### v2.11.12\n"
-          )
+          release = "\n".join([
+              "## 🚀 更新日志",
+              "### v2.11.13",
+              "",
+              "- **去重权限边界** 修复通用消息分发路径可绕过 `use_permission` 直接执行 `/去重图库` 的问题；现在任何去重扫描/删除开始前都会先校验管理员或白名单权限，未授权用户只收到拒绝提示，不会进入图库去重删除流程。",
+              "",
+              "### v2.11.12",
+              "",
+          ])
           readme_path.write_text(readme.replace(marker, release, 1), encoding="utf-8")
 
           contract_path = Path("tests/test_repository_contract.py")
           contract = contract_path.read_text(encoding="utf-8")
-          replacements = {
-              "def test_release_version_is_2_11_12_everywhere():": "def test_release_version_is_2_11_13_everywhere():",
-              'assert metadata["version"] == "v2.11.12"': 'assert metadata["version"] == "v2.11.13"',
-              'assert badge == "v2.11.12"': 'assert badge == "v2.11.13"',
-              'assert changelog == "v2.11.12"': 'assert changelog == "v2.11.13"',
-              'assert \'CURRENT_PLUGIN_VERSION = "v2.11.12"\' in main_source': 'assert \'CURRENT_PLUGIN_VERSION = "v2.11.13"\' in main_source',
-          }
-          for before, after in replacements.items():
+          replacements = [
+              ("def test_release_version_is_2_11_12_everywhere():", "def test_release_version_is_2_11_13_everywhere():"),
+              ('assert metadata["version"] == "v2.11.12"', 'assert metadata["version"] == "v2.11.13"'),
+              ('assert badge == "v2.11.12"', 'assert badge == "v2.11.13"'),
+              ('assert changelog == "v2.11.12"', 'assert changelog == "v2.11.13"'),
+              ('assert \'CURRENT_PLUGIN_VERSION = "v2.11.12"\' in main_source', 'assert \'CURRENT_PLUGIN_VERSION = "v2.11.13"\' in main_source'),
+          ]
+          for before, after in replacements:
               if before not in contract:
                   raise SystemExit(f"repository contract marker not found: {before}")
               contract = contract.replace(before, after, 1)
@@ -99,38 +99,58 @@ jobs:
 
           previous_release_path = Path("tests/test_v21112_release_contract.py")
           previous_release = previous_release_path.read_text(encoding="utf-8")
-          old_version_test = '''def test_v21112_version_is_consistent_everywhere():
-    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
-    main_source = Path("main.py").read_text(encoding="utf-8")
-    readme = Path("README.md").read_text(encoding="utf-8")
-
-    assert metadata["version"] == "v2.11.12"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.12"' in main_source
-    assert "Version-v2.11.12-pink" in readme
-    assert "## 🚀 更新日志\\n### v2.11.12" in readme
-
-
-'''
-          new_history_test = '''def test_v21112_release_remains_in_changelog():
-    readme = Path("README.md").read_text(encoding="utf-8")
-
-    assert "### v2.11.12" in readme
-    assert "删除事务一致性" in readme
-    assert "GitHub 原子上传" in readme
-
-
-'''
+          old_version_test = "\n".join([
+              "def test_v21112_version_is_consistent_everywhere():",
+              '    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))',
+              '    main_source = Path("main.py").read_text(encoding="utf-8")',
+              '    readme = Path("README.md").read_text(encoding="utf-8")',
+              "",
+              '    assert metadata["version"] == "v2.11.12"',
+              '    assert \'CURRENT_PLUGIN_VERSION = "v2.11.12"\' in main_source',
+              '    assert "Version-v2.11.12-pink" in readme',
+              '    assert "## 🚀 更新日志\\n### v2.11.12" in readme',
+              "",
+              "",
+          ])
+          new_history_test = "\n".join([
+              "def test_v21112_release_remains_in_changelog():",
+              '    readme = Path("README.md").read_text(encoding="utf-8")',
+              "",
+              '    assert "### v2.11.12" in readme',
+              '    assert "删除事务一致性" in readme',
+              '    assert "GitHub 原子上传" in readme',
+              "",
+              "",
+          ])
           if old_version_test not in previous_release:
               raise SystemExit("v2.11.12 release version test marker not found")
-          previous_release_path.write_text(
-              previous_release.replace(old_version_test, new_history_test, 1),
-              encoding="utf-8",
-          )
+          previous_release_path.write_text(previous_release.replace(old_version_test, new_history_test, 1), encoding="utf-8")
 
-          Path("tests/test_v21113_release_contract.py").write_text(
-              '''from pathlib import Path\n\nimport yaml\n\n\ndef test_v21113_version_is_consistent_everywhere():\n    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))\n    main_source = Path("main.py").read_text(encoding="utf-8")\n    readme = Path("README.md").read_text(encoding="utf-8")\n\n    assert metadata["version"] == "v2.11.13"\n    assert 'CURRENT_PLUGIN_VERSION = "v2.11.13"' in main_source\n    assert "Version-v2.11.13-pink" in readme\n    assert "## 🚀 更新日志\\n### v2.11.13" in readme\n\n\ndef test_v21113_readme_documents_dedupe_permission_fix():\n    readme = Path("README.md").read_text(encoding="utf-8")\n\n    assert "去重权限边界" in readme\n    assert "任何去重扫描/删除开始前都会先校验管理员或白名单权限" in readme\n''',
-              encoding="utf-8",
-          )
+          release_contract = "\n".join([
+              "from pathlib import Path",
+              "",
+              "import yaml",
+              "",
+              "",
+              "def test_v21113_version_is_consistent_everywhere():",
+              '    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))',
+              '    main_source = Path("main.py").read_text(encoding="utf-8")',
+              '    readme = Path("README.md").read_text(encoding="utf-8")',
+              "",
+              '    assert metadata["version"] == "v2.11.13"',
+              '    assert \'CURRENT_PLUGIN_VERSION = "v2.11.13"\' in main_source',
+              '    assert "Version-v2.11.13-pink" in readme',
+              '    assert "## 🚀 更新日志\\n### v2.11.13" in readme',
+              "",
+              "",
+              "def test_v21113_readme_documents_dedupe_permission_fix():",
+              '    readme = Path("README.md").read_text(encoding="utf-8")',
+              "",
+              '    assert "去重权限边界" in readme',
+              '    assert "任何去重扫描/删除开始前都会先校验管理员或白名单权限" in readme',
+              "",
+          ])
+          Path("tests/test_v21113_release_contract.py").write_text(release_contract, encoding="utf-8")
 
           Path(".github/workflows/apply-v21113.yml").unlink()
 
