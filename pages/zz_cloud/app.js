@@ -18,12 +18,17 @@ let state = {
   treeFetched: false,
   imageCache: {},         // path -> blob URL
   imageLoadPromises: {},  // path -> in-flight Promise<blob URL>
+  imageAbortControllers: {}, // path -> AbortController for cancellable image fetches
   imageCacheEpoch: 0,     // invalidates fetches across repository/config resets
   imageRenderToken: 0,    // prevents stale page renders from mutating the current grid
   activeImagePaths: new Set(),
   previewObjectUrls: {},  // pending upload signature -> blob URL
   galleryIndex: null,      // gallery_index.json perceptual hashes, lazy-loaded
   pendingDeletedPaths: new Set(), // successful deletes hidden until remote tree confirms absence
+  syncAbortController: null, // active remote-tree request for the current config
+  syncGeneration: 0,      // rejects stale sync completion after config changes
+  syncPromise: null,      // same-config syncs share one in-flight request
+  syncConfigKey: '',      // identifies the config bound to syncPromise
 };
 
 // ──────────────────────────────────────────────
@@ -108,8 +113,8 @@ function imageProxyUrl(file) {
   return `/__gallery-image/${path}${version}`;
 }
 
-function requireWriteAccess() {
-  if (canWrite()) return true;
+function requireWriteAccess(cfg = config) {
+  if (canWrite(cfg)) return true;
   toast('当前为只读模式，上传或删除需要有效 Token', false);
   // 鍙妯″紡
   return false;
@@ -201,6 +206,10 @@ function clearImageCache() {
   state.imageCacheEpoch++;
   state.imageRenderToken++;
   state.activeImagePaths.clear();
+  for (const [path, controller] of Object.entries(state.imageAbortControllers)) {
+    try { controller.abort(); } catch {}
+    delete state.imageAbortControllers[path];
+  }
   for (const [path, url] of Object.entries(state.imageCache)) {
     revokeObjectUrl(url);
     delete state.imageCache[path];
@@ -212,6 +221,12 @@ function clearImageCache() {
 
 function pruneImageCache(keepPaths = new Set()) {
   state.activeImagePaths = new Set(keepPaths);
+  for (const [path, controller] of Object.entries(state.imageAbortControllers)) {
+    if (keepPaths.has(path)) continue;
+    try { controller.abort(); } catch {}
+    delete state.imageAbortControllers[path];
+    delete state.imageLoadPromises[path];
+  }
   for (const [path, url] of Object.entries(state.imageCache)) {
     if (keepPaths.has(path)) continue;
     revokeObjectUrl(url);
@@ -227,8 +242,9 @@ async function getImageObjectUrl(file) {
   if (inflight) return inflight;
 
   const epoch = state.imageCacheEpoch;
+  const controller = new AbortController();
   const promise = (async () => {
-    const buffer = await getFileContent(path);
+    const buffer = await getFileContent(path, { signal: controller.signal });
     const blobUrl = URL.createObjectURL(new Blob([buffer], { type: imageMime(path) }));
     if (epoch !== state.imageCacheEpoch || !state.activeImagePaths.has(path)) {
       revokeObjectUrl(blobUrl);
@@ -237,11 +253,13 @@ async function getImageObjectUrl(file) {
     state.imageCache[path] = blobUrl;
     return blobUrl;
   })();
+  state.imageAbortControllers[path] = controller;
   state.imageLoadPromises[path] = promise;
   try {
     return await promise;
   } finally {
     if (state.imageLoadPromises[path] === promise) delete state.imageLoadPromises[path];
+    if (state.imageAbortControllers[path] === controller) delete state.imageAbortControllers[path];
   }
 }
 
@@ -272,6 +290,7 @@ async function withRetry(fn, maxRetries = 2) {
     try { return await fn(); }
     catch (err) {
       lastErr = err;
+      if (err?.name === 'AbortError') throw err;
       const msg = err.message || '';
       if (msg.includes('认证失败') || msg.includes('认证')) break;
       if (attempt < maxRetries) {
@@ -285,37 +304,37 @@ async function withRetry(fn, maxRetries = 2) {
 // ──────────────────────────────────────────────
 // GitHub / Gitee API
 // ──────────────────────────────────────────────
-function apiBase() {
-  return config.platform === 'gitee'
+function apiBase(cfg = config) {
+  return cfg.platform === 'gitee'
     ? 'https://gitee.com/api/v5'
     : 'https://api.github.com';
 }
 
-function authHeaders() {
-  if (config.platform === 'gitee') {
+function authHeaders(cfg = config) {
+  if (cfg.platform === 'gitee') {
     return { 'Content-Type': 'application/json' };
   }
   const headers = { 'Accept': 'application/vnd.github.v3+json' };
-  if (config.token) headers.Authorization = `token ${config.token}`;
+  if (cfg.token) headers.Authorization = `token ${cfg.token}`;
   return headers;
 }
 
-function authParams(url) {
-  if (config.platform === 'gitee') {
-    if (config.token) url.searchParams.set('access_token', config.token);
+function authParams(url, cfg = config) {
+  if (cfg.platform === 'gitee') {
+    if (cfg.token) url.searchParams.set('access_token', cfg.token);
   }
 }
 
-async function ghRequest(method, path, { body = null, params = {} } = {}) {
-  if (WRITE_METHODS.has(method) && !canWrite()) {
-    requireWriteAccess();
+async function ghRequest(method, path, { body = null, params = {}, cfg = config, signal = null } = {}) {
+  if (WRITE_METHODS.has(method) && !canWrite(cfg)) {
+    requireWriteAccess(cfg);
     throw new Error('写入需要有效 Token');
   }
-  const url = new URL(apiBase() + path);
-  authParams(url);
+  const url = new URL(apiBase(cfg) + path);
+  authParams(url, cfg);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
-  const opts = { method, headers: authHeaders() };
+  const opts = { method, headers: authHeaders(cfg), signal };
   if (body) {
     opts.body = JSON.stringify(body);
     if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
@@ -353,19 +372,23 @@ async function ghRequest(method, path, { body = null, params = {} } = {}) {
   return { status: resp.status, data };
 }
 
-async function getTree() {
-  const owner = config.owner, repo = config.repo, branch = config.branch || 'main';
+async function getTree(cfg = config, { signal = null } = {}) {
+  const owner = cfg.owner, repo = cfg.repo, branch = cfg.branch || 'main';
 
-  if (config.platform === 'gitee') {
-    const { data: branchData } = await ghRequest('GET', `/repos/${owner}/${repo}/branches/${branch}`);
+  if (cfg.platform === 'gitee') {
+    const { data: branchData } = await ghRequest('GET', `/repos/${owner}/${repo}/branches/${branch}`, { cfg, signal });
     const sha = branchData?.commit?.sha;
     if (!sha) throw new Error('无法获取分支信息');
-    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${sha}`, { params: { recursive: '1' } });
+    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${sha}`, {
+      params: { recursive: '1' }, cfg, signal,
+    });
     return (data?.tree || []).filter(e => e.type === 'blob').map(e => ({
       path: e.path, sha: e.sha, size: e.size || 0
     }));
   } else {
-    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${branch}`, { params: { recursive: '1' } });
+    const { data } = await ghRequest('GET', `/repos/${owner}/${repo}/git/trees/${branch}`, {
+      params: { recursive: '1' }, cfg, signal,
+    });
     if (data?.truncated) console.warn('文件树被截断');
     return (data?.tree || []).filter(e => e.type === 'blob').map(e => ({
       path: e.path, sha: e.sha, size: e.size || 0
@@ -373,28 +396,28 @@ async function getTree() {
   }
 }
 
-
-async function getFileContent(path) {
-  const branch = config.branch || 'main';
+async function getFileContent(path, { signal = null, cfg = config } = {}) {
+  const branch = cfg.branch || 'main';
 
   // GitHub: prefer raw CDN (no API rate limit, faster, no auth needed for public repos)
-  if (config.platform !== 'gitee') {
+  if (cfg.platform !== 'gitee') {
     const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-    const rawUrl = `https://raw.githubusercontent.com/${config.owner}/${config.repo}/${branch}/${encodedPath}`;
+    const rawUrl = `https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${branch}/${encodedPath}`;
     // No Authorization header — public repos don't need it, and sending one
     // triggers a CORS preflight that raw.githubusercontent.com doesn't support well.
     try {
-      const resp = await fetch(rawUrl);
+      const resp = await fetch(rawUrl, { signal });
       if (resp.ok) {
         return await resp.arrayBuffer();
       }
     } catch (e) {
+      if (e?.name === 'AbortError') throw e;
       console.warn(`[Gallery] CDN fetch failed for ${path}:`, e.message);
     }
     // Fallback: try Contents API (handles private repos & case-insensitive owner)
     try {
-      const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
-        params: { ref: branch }
+      const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+        params: { ref: branch }, cfg, signal
       });
       if (data?.sha) state.shaCache[path] = data.sha;
       if (data?.content) {
@@ -404,18 +427,19 @@ async function getFileContent(path) {
         return arr.buffer;
       }
       if (data?.download_url) {
-        const r = await fetch(data.download_url);
+        const r = await fetch(data.download_url, { signal });
         if (r.ok) return await r.arrayBuffer();
       }
     } catch (e) {
+      if (e?.name === 'AbortError') throw e;
       console.warn(`[Gallery] API fallback failed for ${path}:`, e.message);
     }
     throw new Error('无法获取文件内容');
   }
 
   // Gitee: use API (no raw CDN equivalent)
-  const { data } = await ghRequest('GET', `/repos/${config.owner}/${config.repo}/contents/${path}`, {
-    params: { ref: branch }
+  const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+    params: { ref: branch }, cfg, signal
   });
   if (data?.sha) state.shaCache[path] = data.sha;
   if (data?.content) {
@@ -425,7 +449,7 @@ async function getFileContent(path) {
     return arr.buffer;
   }
   if (data?.download_url) {
-    const resp = await fetch(data.download_url);
+    const resp = await fetch(data.download_url, { signal });
     if (resp.ok) return await resp.arrayBuffer();
   }
   throw new Error('无法获取文件内容');
@@ -700,38 +724,73 @@ function showMainUI(show) {
 // ──────────────────────────────────────────────
 // Sync: fetch tree & render
 // ──────────────────────────────────────────────
-async function syncFromRemote() {
-  if (!hasReadConfig()) return;
-  if (config.platform !== 'github' && !config.token) return;
+async function syncFromRemote({ force = false } = {}) {
+  if (!hasReadConfig()) return false;
+  if (config.platform !== 'github' && !config.token) return false;
+
+  const syncConfig = { ...config };
+  const syncConfigKey = [
+    syncConfig.platform,
+    syncConfig.owner,
+    syncConfig.repo,
+    syncConfig.branch || 'main',
+    syncConfig.token || '',
+  ].join('\u0000');
+  if (!force && state.syncPromise && state.syncConfigKey === syncConfigKey) {
+    return state.syncPromise;
+  }
+
+  state.syncAbortController?.abort();
+  const controller = new AbortController();
+  const syncGeneration = ++state.syncGeneration;
   syncBtn.classList.add('spinning');
-  try {
-    const tree = await getTree();
-    state.treeFetched = true;
 
-    const remotePaths = new Set(tree.map(entry => entry.path));
-    for (const path of [...state.pendingDeletedPaths]) {
-      if (!remotePaths.has(path)) state.pendingDeletedPaths.delete(path);
-    }
-    const visibleTree = tree.filter(entry => !state.pendingDeletedPaths.has(entry.path));
+  const syncPromise = (async () => {
+    try {
+      const tree = await getTree(syncConfig, { signal: controller.signal });
+      if (syncGeneration !== state.syncGeneration || controller.signal.aborted) return false;
+      state.treeFetched = true;
 
-    state.shaCache = Object.fromEntries(visibleTree.map(entry => [entry.path, entry.sha]));
-    state.categories = parseCategories(visibleTree);
-    const totalImages = state.categories.reduce((s, c) => s + c.files.length, 0);
-    updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
-    renderTabs();
-    renderOptions();
-    showMainUI(true);
-    if (state.categories.length && !state.currentCat) {
-      state.currentCat = state.categories[0].name;
+      const remotePaths = new Set(tree.map(entry => entry.path));
+      for (const path of [...state.pendingDeletedPaths]) {
+        if (!remotePaths.has(path)) state.pendingDeletedPaths.delete(path);
+      }
+      const visibleTree = tree.filter(entry => !state.pendingDeletedPaths.has(entry.path));
+
+      state.shaCache = Object.fromEntries(visibleTree.map(entry => [entry.path, entry.sha]));
+      state.categories = parseCategories(visibleTree);
+      const totalImages = state.categories.reduce((s, c) => s + c.files.length, 0);
+      updateStatus(true, `${state.categories.length} 分类 / ${totalImages} 张`);
       renderTabs();
+      renderOptions();
+      showMainUI(true);
+      if (state.categories.length && !state.currentCat) {
+        state.currentCat = state.categories[0].name;
+        renderTabs();
+      }
+      if (state.currentCat) await loadCategoryImages();
+      return syncGeneration === state.syncGeneration && !controller.signal.aborted;
+    } catch (e) {
+      if (e?.name === 'AbortError' || syncGeneration !== state.syncGeneration) return false;
+      updateStatus(false);
+      toast(e.message, false);
+      if (!state.treeFetched) showMainUI(false);
+      return false;
     }
-    if (state.currentCat) await loadCategoryImages();
-  } catch (e) {
-    updateStatus(false);
-    toast(e.message, false);
-    if (!state.treeFetched) showMainUI(false);
+  })();
+
+  state.syncAbortController = controller;
+  state.syncConfigKey = syncConfigKey;
+  state.syncPromise = syncPromise;
+  try {
+    return await syncPromise;
   } finally {
-    syncBtn.classList.remove('spinning');
+    if (state.syncPromise === syncPromise) {
+      state.syncPromise = null;
+      state.syncAbortController = null;
+      state.syncConfigKey = '';
+      syncBtn.classList.remove('spinning');
+    }
   }
 }
 
@@ -868,7 +927,7 @@ async function loadCategoryImages() {
           await saveGalleryIndex(state.galleryIndex);
         }
         toast(`已删除 ${fileName}`);
-        await syncFromRemote();
+        await syncFromRemote({ force: true });
       } catch (err) { toast('删除失败: ' + err.message, false); }
     };
 
@@ -1079,7 +1138,7 @@ async function uploadFileWithRetry(cat, file, ext, contentB64, blobSha, startIdx
     } catch (e) {
       const canRetry = (e.status === 409 || e.status === 422) && attempt < 2;
       if (!canRetry) throw e;
-      await syncFromRemote();
+      await syncFromRemote({ force: true });
       if (categoryBlobShas(cat).has(blobSha)) {
         return { duplicate: true };
       }
@@ -1198,7 +1257,7 @@ upBtn.onclick = async () => {
 
     if (uploaded > 0) {
       clearImageCache();
-      await syncFromRemote();
+      await syncFromRemote({ force: true });
     }
     toast(
       `成功上传 ${uploaded} 张到【${cat}】` +
@@ -1293,10 +1352,8 @@ testCfgBtn.onclick = async () => {
   }
   testCfgBtn.disabled = true;
   testCfgBtn.textContent = '测试中...';
-  const oldConfig = { ...config };
-  config = cfg;
   try {
-    const tree = await getTree();
+    const tree = await getTree(cfg);
     const imgCount = tree.filter(e => e.path.startsWith('gallery/') && IMAGE_SUFFIXES.has(e.path.substring(e.path.lastIndexOf('.')))).length;
     toast(cfg.token
       ? `认证读写连接成功！仓库中有 ${tree.length} 个文件，其中 ${imgCount} 张图库图片`
@@ -1304,7 +1361,6 @@ testCfgBtn.onclick = async () => {
   } catch (e) {
     toast('连接失败: ' + e.message, false);
   } finally {
-    config = oldConfig;
     testCfgBtn.disabled = false;
     testCfgBtn.textContent = '🔍 测试连接';
   }
@@ -1314,8 +1370,8 @@ syncBtn.onclick = async () => {
   if (!config.owner || !config.repo) { toast('请先配置仓库信息', false); settingsPanel.classList.add('show'); return; }
   if (!hasReadConfig()) { toast('请先配置可读取的仓库信息', false); settingsPanel.classList.add('show'); return; }
   clearImageCache();
-  await syncFromRemote();
-  if (state.connected) toast('同步完成');
+  const synced = await syncFromRemote();
+  if (synced && state.connected) toast('同步完成');
 };
 
 // ──────────────────────────────────────────────
@@ -1329,6 +1385,7 @@ closeBtn.onclick = closeImageModal;
 mask.onclick = e => { if (e.target === mask) closeImageModal(); };
 
 window.addEventListener('beforeunload', () => {
+  state.syncAbortController?.abort();
   closeImageModal();
   clearImageCache();
   clearPreviewObjectUrls();
