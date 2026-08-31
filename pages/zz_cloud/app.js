@@ -889,6 +889,7 @@ async function loadCategoryImages() {
     } else {
       // Load image via Contents API with concurrency pool & retry
       imagePool(() => withRetry(async () => {
+      if (renderToken !== state.imageRenderToken) return;
       const blobUrl = await getImageObjectUrl(file);
       if (!blobUrl || renderToken !== state.imageRenderToken) return;
       div.innerHTML = '';
