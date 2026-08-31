@@ -6,6 +6,7 @@ on:
       - hardening/v21112-remote-consistency
     paths:
       - '.github/scripts/apply_v21112_release.py'
+      - '.github/scripts/apply_v21112_release_test_compat.py'
       - '.github/workflows/_apply-v21112-release.yml'
   workflow_dispatch:
 
@@ -25,7 +26,9 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
       - name: Apply v2.11.12 release patch
-        run: python .github/scripts/apply_v21112_release.py
+        run: |
+          python .github/scripts/apply_v21112_release.py
+          python .github/scripts/apply_v21112_release_test_compat.py
       - name: Verify release contract
         run: python -m pytest tests/test_v21112_release_contract.py tests/test_v21112_remote_consistency.py -v
       - name: Verify full suite
@@ -36,7 +39,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f .github/scripts/apply_v21112_release.py .github/workflows/_apply-v21112-release.yml
-          git add main.py metadata.yaml README.md tests/test_repository_contract.py tests/test_v21111_release_contract.py tests/test_v21112_release_contract.py
+          git rm -f .github/scripts/apply_v21112_release.py .github/scripts/apply_v21112_release_test_compat.py .github/workflows/_apply-v21112-release.yml
+          git add main.py metadata.yaml README.md tests/test_repository_contract.py tests/test_v21111_release_contract.py tests/test_v21112_release_contract.py tests/test_hierarchical_renumber.py tests/test_qq_sticker_reply_upload.py tests/test_v2118_tree_404_diagnostics.py tests/test_view_all_alias.py
           git commit -m 'release: prepare v2.11.12 remote consistency hardening'
           git push origin HEAD:hardening/v21112-remote-consistency
