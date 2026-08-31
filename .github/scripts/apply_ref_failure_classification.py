@@ -36,4 +36,10 @@ lost = LOST.read_text(encoding="utf-8")
 old_helper = '''    plugin = types.SimpleNamespace(\n        _git_mutation_lock=threading.RLock(),\n        _sha_cache={},\n        _git_get_head_commit_and_tree=Mock(side_effect=heads),\n        _git_create_github_tree=Mock(side_effect=lambda base, entries: f\"built-{base}\"),\n        _git_create_github_commit=Mock(side_effect=lambda message, tree, parent: f\"commit-{parent}\"),\n        _git_update_github_ref=Mock(side_effect=update_results),\n        _git_platform=lambda: \"github\",\n        _git_api_base=lambda: \"https://api.github.test\",\n        _git_owner=lambda: \"owner\",\n        _git_repo=lambda: \"repo\",\n    )\n\n    def request(method, url, params=None, timeout=None, **kwargs):\n'''
 new_helper = '''    plugin = types.SimpleNamespace(\n        _git_mutation_lock=threading.RLock(),\n        _sha_cache={},\n        _git_ref_update_outcome=None,\n        _git_get_head_commit_and_tree=Mock(side_effect=heads),\n        _git_create_github_tree=Mock(side_effect=lambda base, entries: f\"built-{base}\"),\n        _git_create_github_commit=Mock(side_effect=lambda message, tree, parent: f\"commit-{parent}\"),\n        _git_platform=lambda: \"github\",\n        _git_api_base=lambda: \"https://api.github.test\",\n        _git_owner=lambda: \"owner\",\n        _git_repo=lambda: \"repo\",\n    )\n\n    updates = iter(update_results)\n\n    def update_ref(commit_sha):\n        result = next(updates)\n        if isinstance(result, tuple):\n            ok, outcome = result\n        else:\n            ok = bool(result)\n            outcome = \"success\" if ok else \"uncertain\"\n        plugin._git_ref_update_outcome = outcome\n        return ok\n\n    plugin._git_update_github_ref = Mock(side_effect=update_ref)\n\n    def request(method, url, params=None, timeout=None, **kwargs):\n'''
 lost = replace_once(lost, old_helper, new_helper, "lost response helper")
+lost = replace_once(
+    lost,
+    '        update_results=[False, False],\n',
+    '        update_results=[(False, "conflict"), (False, "uncertain")],\n',
+    "retry lost-response outcomes",
+)
 LOST.write_text(lost, encoding="utf-8")
