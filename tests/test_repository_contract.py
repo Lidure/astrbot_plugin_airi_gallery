@@ -62,17 +62,17 @@ def test_config_schema_is_valid_json():
     assert isinstance(schema, dict)
 
 
-def test_release_version_is_2_11_12_everywhere():
+def test_release_version_is_2_11_13_everywhere():
     metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
     readme = Path("README.md").read_text(encoding="utf-8")
     main_source = Path("main.py").read_text(encoding="utf-8")
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.12"
-    assert badge == "v2.11.12"
-    assert changelog == "v2.11.12"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.12"' in main_source
+    assert metadata["version"] == "v2.11.13"
+    assert badge == "v2.11.13"
+    assert changelog == "v2.11.13"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.13"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
@@ -157,6 +157,19 @@ def test_diagnostics_command_access_matches_permission_configuration():
 
     assert "| `/画廊检查` | 按权限配置 |" in readme
     assert "| `/画廊检查` | 管理员 |" not in readme
+
+
+def test_message_dispatch_dedupe_requires_permission_before_deleting_files():
+    source = Path("main.py").read_text(encoding="utf-8")
+    branch = source.split('elif kind == "dedupe_gallery":', 1)[1].split(
+        'elif kind == "delete":', 1
+    )[0]
+
+    permission_guard = branch.find("if not self._is_allowed(event):")
+    destructive_call = branch.find("await self._dedupe_gallery(")
+    assert permission_guard != -1
+    assert destructive_call != -1
+    assert permission_guard < destructive_call
 
 
 def test_gallery_diagnostics_command_and_lifecycle_are_wired():

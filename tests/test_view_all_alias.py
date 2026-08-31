@@ -11,7 +11,6 @@ def test_view_all_command_accepts_kanquanbu_and_kansuoyou_aliases():
 
     assert 'r"^/(?:看全部|看所有)\\s*(.+)$"' in block
     assert 'r"^(?:看全部|看所有)\\s*(.+)$"' in block
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.12"' in source
 
 
 def test_help_mentions_view_all_alias():
@@ -20,6 +19,6 @@ def test_help_mentions_view_all_alias():
     assert "看所有<分类>" in source
 
 
-def test_metadata_releases_v21110():
-    metadata = Path("metadata.yaml").read_text(encoding="utf-8")
-    assert "version: v2.11.12" in metadata
+def test_v21110_release_remains_in_changelog():
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "### v2.11.10" in readme
