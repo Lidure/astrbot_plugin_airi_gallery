@@ -35,12 +35,16 @@ def test_remote_requests_accept_config_snapshot_and_abort_signal():
     assert "signal," in tree_section
 
 
-def test_sync_aborts_previous_request_and_rejects_stale_completion():
+def test_sync_deduplicates_same_config_aborts_changed_config_and_rejects_stale_completion():
     state_section = _section("let state = {", "// ──────────────────────────────────────────────\n// DOM references")
     assert "syncAbortController" in state_section
     assert "syncGeneration" in state_section
+    assert "syncPromise" in state_section
+    assert "syncConfigKey" in state_section
 
     sync_section = _section("async function syncFromRemote() {", "// ──────────────────────────────────────────────\n// UI: Tabs")
+    assert "state.syncPromise && state.syncConfigKey === syncConfigKey" in sync_section
+    assert "return state.syncPromise" in sync_section
     assert ".syncAbortController?.abort()" in sync_section
     assert "new AbortController()" in sync_section
     assert "++state.syncGeneration" in sync_section
@@ -50,13 +54,17 @@ def test_sync_aborts_previous_request_and_rejects_stale_completion():
     assert "e?.name === 'AbortError'" in sync_section
 
 
-def test_image_cache_clear_aborts_inflight_network_fetches_and_retry_stops_on_abort():
+def test_image_cache_clear_and_prune_abort_inflight_network_fetches_and_retry_stops_on_abort():
     state_section = _section("let state = {", "// ──────────────────────────────────────────────\n// DOM references")
     assert "imageAbortControllers" in state_section
 
     clear_section = _section("function clearImageCache() {", "function pruneImageCache(")
     assert ".abort()" in clear_section
     assert "imageAbortControllers" in clear_section
+
+    prune_section = _section("function pruneImageCache(", "async function getImageObjectUrl(file) {")
+    assert ".abort()" in prune_section
+    assert "imageAbortControllers" in prune_section
 
     image_section = _section("async function getImageObjectUrl(file) {", "function clearPreviewObjectUrls()")
     assert "new AbortController()" in image_section
