@@ -65,6 +65,11 @@ except ImportError:
     )
 
 try:
+    from .generated_cache import cleanup_generated_files
+except ImportError:
+    from generated_cache import cleanup_generated_files
+
+try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
         GalleryPathDifference,
@@ -3947,6 +3952,13 @@ class Main(Star):
             self._save_hash_index()
         return removed, deleted_examples
 
+    def _prepare_generated_output_dir(self) -> Path:
+        output_dir = self.plugin_data_dir / "generated"
+        removed = cleanup_generated_files(output_dir)
+        if removed:
+            logger.info(f"[Gallery] 已清理 {removed} 个过期/超额生成图片缓存。")
+        return output_dir
+
     def _iter_recent_images(self, count: int = 10) -> list[Path]:
         """按文件修改时间倒序返回最近上传的 N 张图片（排除 generated 目录）。"""
         generated_dir = self.plugin_data_dir / "generated"
@@ -4883,8 +4895,7 @@ class Main(Star):
             label_y = y + thumb_size + max(4, int(round(5 * scale)))
             drawer.text((x + max(6, int(round(8 * scale))), label_y), label, fill=(25, 25, 25), font=font)
 
-        output_dir = self.plugin_data_dir / "generated"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"{_sanitize_component(category)}_all_{int(time.time() * 1000)}.png"
         canvas.save(
             output_path,
@@ -5027,8 +5038,7 @@ class Main(Star):
 
             canvas.alpha_composite(row_card, (x, y))
 
-        output_dir = self.plugin_data_dir / "generated"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"category_list_{int(time.time() * 1000)}.png"
         canvas.convert("RGB").save(output_path, format="PNG")
         return output_path
@@ -5113,8 +5123,7 @@ class Main(Star):
 
             canvas.alpha_composite(row_card, (x, y))
 
-        output_dir = self.plugin_data_dir / "generated"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"alias_list_{int(time.time() * 1000)}.png"
         canvas.convert("RGB").save(output_path, format="PNG")
         return output_path
@@ -5311,8 +5320,7 @@ class Main(Star):
             canvas.alpha_composite(section, (padding, y_cursor))
             y_cursor += section_h + section_gap
 
-        output_dir = self.plugin_data_dir / "generated"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"help_{int(time.time() * 1000)}.png"
         canvas.convert("RGB").save(output_path, format="PNG")
         return output_path
