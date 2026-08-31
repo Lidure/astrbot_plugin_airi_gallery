@@ -1,0 +1,42 @@
+name: cleanup-v21112-force-upload-indent
+
+on:
+  push:
+    branches:
+      - hardening/v21112-remote-consistency
+    paths:
+      - '.github/scripts/cleanup_v21112_force_upload_indent.py'
+      - '.github/workflows/_cleanup-v21112-force-upload-indent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/v21112-remote-consistency
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Apply review cleanup
+        run: python .github/scripts/cleanup_v21112_force_upload_indent.py
+      - name: Verify focused contracts
+        run: python -m pytest tests/test_v21112_remote_consistency.py tests/test_v21112_release_contract.py -q
+      - name: Verify full suite
+        run: python -m pytest tests -q
+      - name: Verify syntax
+        run: python -m py_compile main.py gallery_safety.py gallery_diagnostics.py
+      - name: Commit cleanup and remove temporary artifacts
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/scripts/cleanup_v21112_force_upload_indent.py .github/workflows/_cleanup-v21112-force-upload-indent.yml
+          git add main.py
+          git commit -m 'style: normalize force upload failure branches'
+          git push origin HEAD:hardening/v21112-remote-consistency
