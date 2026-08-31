@@ -17,22 +17,21 @@ class FakeLogger:
         pass
 
 
-def _main_method_node(name: str, *, async_method: bool):
-    tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
-    expected = ast.AsyncFunctionDef if async_method else ast.FunctionDef
+def _main_method_node(name: str, *, async_method: bool | None = None):
+    source = Path("main.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == "Main":
-            method = next(
-                (
-                    item
-                    for item in node.body
-                    if isinstance(item, expected) and item.name == name
-                ),
-                None,
-            )
-            assert method is not None, f"Main.{name} is missing"
-            method.decorator_list = []
-            return method
+            for item in node.body:
+                if item.name != name if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) else True:
+                    continue
+                if async_method is True and not isinstance(item, ast.AsyncFunctionDef):
+                    continue
+                if async_method is False and not isinstance(item, ast.FunctionDef):
+                    continue
+                item.decorator_list = []
+                return item
+            raise AssertionError(f"Main.{name} is missing")
     raise AssertionError("Main class is missing")
 
 
@@ -55,16 +54,9 @@ def _load_sync_method(name: str, **extra_namespace):
 
 
 def _method_block(source: str, name: str) -> str:
-    async_marker = f"    async def {name}"
-    sync_marker = f"    def {name}"
-    if async_marker in source:
-        block = source.split(async_marker, 1)[1]
-    else:
-        block = source.split(sync_marker, 1)[1]
-    next_async = block.find("\n    async def ")
-    next_sync = block.find("\n    def ")
-    stops = [pos for pos in (next_async, next_sync) if pos >= 0]
-    return block[: min(stops)] if stops else block
+    node = _main_method_node(name)
+    lines = source.splitlines()
+    return "\n".join(lines[node.lineno - 1 : node.end_lineno])
 
 
 def test_consistent_delete_keeps_local_file_when_remote_delete_fails(tmp_path):
