@@ -4094,6 +4094,9 @@ class Main(Star):
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限执行此操作。"))
+            return
         category_dir = self._resolve_existing_category_dir(category)
         if not category_dir:
             await event.send(
