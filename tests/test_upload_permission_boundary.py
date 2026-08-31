@@ -1,9 +1,8 @@
 import ast
+import asyncio
 import types
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
-
-import pytest
 
 
 class FakeResult:
@@ -47,8 +46,7 @@ def _load_handle_upload():
     return namespace["_handle_upload"]
 
 
-@pytest.mark.asyncio
-async def test_handle_upload_rejects_before_any_image_or_storage_work():
+def test_handle_upload_rejects_before_any_image_or_storage_work():
     plugin = types.SimpleNamespace()
     plugin._is_allowed = lambda event: False
     plugin._get_reply_images = AsyncMock(side_effect=AssertionError("must not extract"))
@@ -58,7 +56,7 @@ async def test_handle_upload_rejects_before_any_image_or_storage_work():
     event = FakeEvent()
 
     handle_upload = types.MethodType(_load_handle_upload(), plugin)
-    await handle_upload(event, "szk")
+    asyncio.run(handle_upload(event, "szk"))
 
     assert event.plain_messages == ["没有权限执行此操作。"]
     plugin._get_reply_images.assert_not_awaited()
