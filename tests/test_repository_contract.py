@@ -159,6 +159,19 @@ def test_diagnostics_command_access_matches_permission_configuration():
     assert "| `/画廊检查` | 管理员 |" not in readme
 
 
+def test_message_dispatch_dedupe_requires_permission_before_deleting_files():
+    source = Path("main.py").read_text(encoding="utf-8")
+    branch = source.split('elif kind == "dedupe_gallery":', 1)[1].split(
+        'elif kind == "delete":', 1
+    )[0]
+
+    permission_guard = branch.find("if not self._is_allowed(event):")
+    destructive_call = branch.find("await self._dedupe_gallery(")
+    assert permission_guard != -1
+    assert destructive_call != -1
+    assert permission_guard < destructive_call
+
+
 def test_gallery_diagnostics_command_and_lifecycle_are_wired():
     tree = parsed_main()
     commands = registered_filter_commands(tree)
