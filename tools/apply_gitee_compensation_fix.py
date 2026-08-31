@@ -14,55 +14,64 @@ for node in ast.walk(tree):
 if method is None:
     raise SystemExit("transaction method missing")
 
-start = method.lineno - 1
-end = method.end_lineno
+
+def has_attr_call(expr: ast.AST, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Attribute) and node.attr == name
+        for node in ast.walk(expr)
+    )
 
 
-def find_line(fragment: str) -> int:
-    matches = [
-        index
-        for index in range(start, end)
-        if fragment in lines[index]
-    ]
-    if len(matches) != 1:
-        raise SystemExit(f"line anchor mismatch: {fragment}: {matches}")
-    return matches[0]
+def has_name(expr: ast.AST, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Name) and node.id == name
+        for node in ast.walk(expr)
+    )
 
+upload_failure = None
+manifest_failure = None
+for node in ast.walk(method):
+    if not isinstance(node, ast.If):
+        continue
+    if has_attr_call(node.test, "_git_push_file"):
+        upload_failure = node
+    if has_name(node.test, "manifest_refresh_needed") and has_attr_call(
+        node.test, "_publish_gallery_manifest"
+    ):
+        manifest_failure = node
 
-def replace_indented_block(fragment: str, replacement: list[str]) -> None:
-    index = find_line(fragment)
-    indent = len(lines[index]) - len(lines[index].lstrip(" "))
-    block_end = index + 1
-    while block_end < len(lines):
-        text = lines[block_end]
-        if not text.strip():
-            block_end += 1
-            continue
-        next_indent = len(text) - len(text.lstrip(" "))
-        if next_indent <= indent:
-            break
-        block_end += 1
-    lines[index:block_end] = replacement
+if upload_failure is None or manifest_failure is None:
+    raise SystemExit("transaction semantic AST anchors missing")
 
+replacements = [
+    (
+        upload_failure,
+        [
+            "            if not self._git_push_file(str(local_path)):\n",
+            "                compensate_gitee_partial_uploads()\n",
+            "                return False\n",
+        ],
+    ),
+    (
+        manifest_failure,
+        [
+            "        if manifest_refresh_needed and not self._publish_gallery_manifest():\n",
+            "            compensate_gitee_partial_uploads()\n",
+            "            return False\n",
+        ],
+    ),
+]
+for node, replacement in sorted(
+    replacements, key=lambda item: item[0].lineno, reverse=True
+):
+    lines[node.lineno - 1 : node.end_lineno] = replacement
 
-replace_indented_block(
-    "if manifest_refresh_needed and not self._publish_gallery_manifest():",
-    [
-        "        if manifest_refresh_needed and not self._publish_gallery_manifest():\n",
-        "            compensate_gitee_partial_uploads()\n",
-        "            return False\n",
-    ],
-)
-replace_indented_block(
-    "if not self._git_push_file(str(local_path)):",
-    [
-        "            if not self._git_push_file(str(local_path)):\n",
-        "                compensate_gitee_partial_uploads()\n",
-        "                return False\n",
-    ],
-)
-
-anchor = find_line("pushed_paths: list[Path] = []")
+anchor_matches = [
+    index for index, line in enumerate(lines) if "pushed_paths: list[Path] = []" in line
+]
+if len(anchor_matches) != 1:
+    raise SystemExit(f"pushed_paths anchor mismatch: {anchor_matches}")
+anchor = anchor_matches[0]
 helper = [
     "        def compensate_gitee_partial_uploads() -> None:\n",
     "            pushed_set = set(pushed_paths)\n",
