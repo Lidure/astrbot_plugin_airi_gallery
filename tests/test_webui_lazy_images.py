@@ -1,15 +1,90 @@
 import asyncio
+import importlib
+import sys
+import types
 from pathlib import Path
 
 
+def _identity_decorator(*args, **kwargs):
+    def decorate(function):
+        return function
+
+    return decorate
+
+
+def _load_main(monkeypatch, tmp_path):
+    astrbot = types.ModuleType("astrbot")
+    api = types.ModuleType("astrbot.api")
+    event = types.ModuleType("astrbot.api.event")
+    message_components = types.ModuleType("astrbot.api.message_components")
+    star = types.ModuleType("astrbot.api.star")
+    core = types.ModuleType("astrbot.core")
+    utils = types.ModuleType("astrbot.core.utils")
+    astrbot_path = types.ModuleType("astrbot.core.utils.astrbot_path")
+    agent = types.ModuleType("astrbot.core.agent")
+    tool = types.ModuleType("astrbot.core.agent.tool")
+
+    class FilterStub:
+        EventMessageType = types.SimpleNamespace(ALL="all")
+        command = staticmethod(_identity_decorator)
+        event_message_type = staticmethod(_identity_decorator)
+
+    class StarStub:
+        def __init__(self, context):
+            self.context = context
+
+    class FunctionToolStub:
+        def __init__(self, **kwargs):
+            pass
+
+    api.logger = types.SimpleNamespace(
+        debug=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
+        info=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    event.AstrMessageEvent = object
+    event.filter = FilterStub
+    message_components.Image = object
+    message_components.Reply = object
+    star.Context = object
+    star.Star = StarStub
+    astrbot_path.get_astrbot_plugin_data_path = lambda: str(tmp_path)
+    tool.FunctionTool = FunctionToolStub
+
+    astrbot.api = api
+    api.event = event
+    api.message_components = message_components
+    api.star = star
+    astrbot.core = core
+    core.utils = utils
+    utils.astrbot_path = astrbot_path
+    core.agent = agent
+    agent.tool = tool
+
+    for name, module in {
+        "astrbot": astrbot,
+        "astrbot.api": api,
+        "astrbot.api.event": event,
+        "astrbot.api.message_components": message_components,
+        "astrbot.api.star": star,
+        "astrbot.core": core,
+        "astrbot.core.utils": utils,
+        "astrbot.core.utils.astrbot_path": astrbot_path,
+        "astrbot.core.agent": agent,
+        "astrbot.core.agent.tool": tool,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.delitem(sys.modules, "main", raising=False)
+    return importlib.import_module("main")
+
+
 def test_category_page_api_returns_names_without_reading_image_bodies(
-    main_module, monkeypatch, tmp_path
+    monkeypatch, tmp_path
 ):
     from quart import Quart
 
-    monkeypatch.setattr(
-        main_module, "get_astrbot_plugin_data_path", lambda: str(tmp_path)
-    )
+    main_module = _load_main(monkeypatch, tmp_path)
 
     class ContextStub:
         def add_llm_tools(self, *_args):
