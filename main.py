@@ -103,6 +103,7 @@ try:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        should_preserve_local_sync_content,
         validate_image_payload,
         verified_remote_sha,
     )
@@ -145,6 +146,7 @@ except ImportError:
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
+        should_preserve_local_sync_content,
         validate_image_payload,
         verified_remote_sha,
     )
@@ -2714,18 +2716,27 @@ class Main(Star):
         removed = int(result.get("removed", 0) or 0)
         local_only = tuple(result.get("remaining_local_only") or ())
         remote_only = tuple(result.get("remaining_remote_only") or ())
+        content_conflicts = tuple(result.get("content_conflicts") or ())
         base = f"同步完成：新增 {synced} 张，移除 {removed} 张。"
-        if not local_only and not remote_only:
-            return base + "\n本地与 GitHub 图片路径已一致。"
+        if not local_only and not remote_only and not content_conflicts:
+            return base + "\n本地与 GitHub 图片路径和内容已一致。"
 
-        diff = GalleryPathDifference(local_only=local_only, remote_only=remote_only)
-        details = cls._format_gallery_path_difference(diff)
+        details: list[str] = []
+        if local_only or remote_only:
+            diff = GalleryPathDifference(local_only=local_only, remote_only=remote_only)
+            details.append(cls._format_gallery_path_difference(diff))
+        if content_conflicts:
+            preview = "、".join(content_conflicts[:5])
+            suffix = f" 等 {len(content_conflicts)} 项" if len(content_conflicts) > 5 else ""
+            details.append(f"内容冲突：{preview}{suffix}")
+
         return (
             base
             + "\n同步后仍未完全一致："
-            + details
+            + "；".join(details)
             + "\n仅本地项目会保留以避免误删；要保留请执行 /推送到远程，不需要则删除本地文件后再次 /立即同步。"
-            + "仅 GitHub 项目表示本次下载未完成，可再次执行 /立即同步。"
+            + " 同路径内容冲突表示本地文件已被修改或无法安全确认；要以远端为准，请先备份并删除对应本地文件，再执行 /立即同步。"
+            + " 仅 GitHub 项目表示本次下载未完成，可再次执行 /立即同步。"
         )
 
     def _git_sync_from_remote(self) -> dict[str, object]:
@@ -2738,6 +2749,7 @@ class Main(Star):
             "failed": False,
             "remaining_local_only": (),
             "remaining_remote_only": (),
+            "content_conflicts": (),
         }
         if not self._git_sync_enabled:
             result["failed"] = True
@@ -2765,6 +2777,7 @@ class Main(Star):
                     remote_images[git_path] = entry
 
             synced = 0
+            content_conflicts: list[str] = []
             for git_path, info in remote_images.items():
                 local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
                 remote_sha = str(info.get("sha", ""))
@@ -2775,21 +2788,30 @@ class Main(Star):
                     try:
                         with self._hash_index_lock:
                             entry = self._hash_index.get(git_path)
-                        if verified_remote_sha(entry) == remote_sha:
-                            self._sha_cache[git_path] = remote_sha
-                            continue
-                        content = local_path.read_bytes()
-                        if git_blob_sha(content) == remote_sha:
-                            self._sha_cache[git_path] = remote_sha
-                            self._remember_verified_remote_content(
-                                git_path, content, remote_sha, save=False
-                            )
-                            continue
-                    except OSError:
-                        pass
+                        local_content = local_path.read_bytes()
+                    except OSError as exc:
+                        content_conflicts.append(git_path)
+                        logger.warning(
+                            f"[Git Sync] 本地内容无法读取，为避免覆盖予以保留: {git_path}: {exc}"
+                        )
+                        continue
+
+                    if git_blob_sha(local_content) == remote_sha:
+                        self._sha_cache[git_path] = remote_sha
+                        self._remember_verified_remote_content(
+                            git_path, local_content, remote_sha, save=False
+                        )
+                        continue
+                    if should_preserve_local_sync_content(
+                        local_content, entry, remote_sha
+                    ):
+                        content_conflicts.append(git_path)
+                        logger.warning(
+                            f"[Git Sync] 本地内容已修改，为避免覆盖予以保留: {git_path}"
+                        )
+                        continue
                 else:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
-
                 content = self._git_get_file(git_path)
                 if content is None:
                     logger.warning(f"[Git Sync] 未能同步远端图片：{git_path}")
@@ -2805,6 +2827,8 @@ class Main(Star):
                 )
                 synced += 1
                 result["synced"] = synced
+
+            result["content_conflicts"] = tuple(sorted(content_conflicts))
 
             local_image_paths = {
                 path
@@ -2871,6 +2895,11 @@ class Main(Star):
 
             if synced:
                 logger.info(f"[Git Sync] 从远程同步了 {synced} 个文件。")
+            if content_conflicts:
+                logger.warning(
+                    "[Git Sync] 同路径内容冲突已保留本地文件："
+                    + "、".join(sorted(content_conflicts)[:5])
+                )
             if not remaining.is_clean:
                 logger.warning(
                     "[Git Sync] 同步后路径集合仍有差异："
