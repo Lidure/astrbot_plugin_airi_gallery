@@ -1296,13 +1296,10 @@ class Main(Star):
                 "rejected": [self._upload_decision_json(decision)],
             }, 200
 
-        if self._git_sync_enabled:
-            pushed = await asyncio.to_thread(self._git_push_file, str(target))
-            manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
-            if not manifest_ok:
-                if pushed:
-                    await asyncio.to_thread(self._git_delete_remote_file, str(target))
-                self._rollback_stored_image(target, category)
+        committed = await asyncio.to_thread(
+            self._push_staged_upload_transaction, [target], category
+        )
+        if not committed:
                 return {"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚"}, 502
         self._forget_api_similar_upload(force_token)
         return {"ok": True, "count": 1, "files": [target.name], "rejected": []}, 200
@@ -1358,6 +1355,7 @@ class Main(Star):
                 return jsonify({"ok": False, "error": "远程查重失败，为避免重复，本次未上传"}), 503
 
             uploaded: list[str] = []
+            staged_paths: list[Path] = []
             rejected: list[dict] = []
             for name, validated in validated_images:
                 image_bytes = validated.content
@@ -1386,16 +1384,16 @@ class Main(Star):
                         )
                     rejected.append(detail)
                     continue
-                if self._git_sync_enabled:
-                    pushed = await asyncio.to_thread(self._git_push_file, str(target))
-                    manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
-                    if not manifest_ok:
-                        if pushed:
-                            await asyncio.to_thread(self._git_delete_remote_file, str(target))
-                        self._rollback_stored_image(target, category)
-                        return jsonify({"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚", "files": uploaded}), 502
-                uploaded.append(target.name)
+                staged_paths.append(target)
                 remote_max_index = max(remote_max_index, int(target.stem))
+
+            if staged_paths:
+                committed = await asyncio.to_thread(
+                    self._push_staged_upload_transaction, staged_paths, category
+                )
+                if not committed:
+                    return jsonify({"ok": False, "error": "远程上传事务失败，本批本地写入已全部回滚", "files": []}), 502
+                uploaded = [path.name for path in staged_paths]
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
             logger.error(f"上传API错误: {exc}")
@@ -1504,6 +1502,7 @@ class Main(Star):
                 return jsonify({"ok": False, "error": "远程查重失败，为避免重复，本次未上传"}), 503
 
             uploaded: list[str] = []
+            staged_paths: list[Path] = []
             rejected: list[dict] = []
             for name, validated in validated_images:
                 image_bytes = validated.content
@@ -1532,16 +1531,16 @@ class Main(Star):
                         )
                     rejected.append(detail)
                     continue
-                if self._git_sync_enabled:
-                    pushed = await asyncio.to_thread(self._git_push_file, str(target))
-                    manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
-                    if not manifest_ok:
-                        if pushed:
-                            await asyncio.to_thread(self._git_delete_remote_file, str(target))
-                        self._rollback_stored_image(target, category)
-                        return jsonify({"ok": False, "error": "远程上传或感知索引更新失败，本地写入已回滚", "files": uploaded}), 502
-                uploaded.append(target.name)
+                staged_paths.append(target)
                 remote_max_index = max(remote_max_index, int(target.stem))
+
+            if staged_paths:
+                committed = await asyncio.to_thread(
+                    self._push_staged_upload_transaction, staged_paths, category
+                )
+                if not committed:
+                    return jsonify({"ok": False, "error": "远程上传事务失败，本批本地写入已全部回滚", "files": []}), 502
+                uploaded = [path.name for path in staged_paths]
             return jsonify({"ok": True, "count": len(uploaded), "files": uploaded, "rejected": rejected})
         except Exception as exc:
             logger.error(f"公开上传API错误: {exc}")
@@ -2456,21 +2455,63 @@ class Main(Star):
         status, _ = self._git_request("PATCH", url, json_body={"sha": commit_sha, "force": False})
         return status == 200
 
+    def _git_github_create_only_paths_exist(
+        self, tree_sha: str, paths: set[str]
+    ) -> bool | None:
+        """检查固定 GitHub tree 中是否已存在 create-only 路径。
+
+        返回 True 表示至少一个路径已存在；False 表示已完整证明全部不存在；
+        None 表示无法完整证明，调用方必须 fail-closed。
+        """
+        if not paths:
+            return False
+        if self._git_platform() != "github" or not str(tree_sha).strip():
+            return None
+        base = self._git_api_base()
+        owner = self._git_owner()
+        repo = self._git_repo()
+        url = f"{base}/repos/{owner}/{repo}/git/trees/{tree_sha}"
+        status, data = self._git_request(
+            "GET", url, params={"recursive": "1"}, timeout=60
+        )
+        if status != 200 or not isinstance(data, dict):
+            logger.warning(
+                f"[Git Sync] 无法确认 GitHub create-only 路径占用状态 (HTTP {status})。"
+            )
+            return None
+        if data.get("truncated"):
+            logger.warning("[Git Sync] GitHub recursive tree 被截断，拒绝执行 create-only 提交。")
+            return None
+        existing = {
+            str(entry.get("path", ""))
+            for entry in data.get("tree", [])
+            if isinstance(entry, dict) and str(entry.get("path", "")).strip()
+        }
+        return bool(existing.intersection(paths))
+
     def _git_commit_github_batch(
         self,
         items: list[tuple[str, bytes, str]],
         message: str,
+        create_only_paths: set[str] | None = None,
     ) -> bool:
-        """把一批文件作为一个 GitHub commit 提交。
-
-        items: [(git_path, content, blob_sha), ...]
-        """
+        """把一批文件作为一个 GitHub commit 提交，并保护 create-only 路径。"""
         with self._git_mutation_lock:
             head = self._git_get_head_commit_and_tree()
             if not head:
                 return False
             parent_sha, base_tree_sha = head
-    
+
+            collision = False
+            if create_only_paths:
+                collision = self._git_github_create_only_paths_exist(
+                    base_tree_sha, create_only_paths
+                )
+            if collision is not False:
+                if collision:
+                    logger.warning("[Git Sync] 新上传编号已被远程占用，拒绝覆盖。")
+                return False
+
             tree_entries = [
                 {
                     "path": git_path,
@@ -2483,35 +2524,61 @@ class Main(Star):
             tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
             if not tree_sha:
                 return False
-    
+
             commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
             if not commit_sha:
                 return False
-    
+
             if self._git_update_github_ref(commit_sha):
                 for git_path, _, blob_sha in items:
                     self._sha_cache[git_path] = blob_sha
                 return True
-    
+
             logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
             head = self._git_get_head_commit_and_tree()
             if not head:
                 return False
             parent_sha, base_tree_sha = head
+
+            # PATCH 响应丢失时，分支实际上可能已经移动到刚创建的 commit。
+            if parent_sha == commit_sha:
+                for git_path, _, blob_sha in items:
+                    self._sha_cache[git_path] = blob_sha
+                return True
+
+            retry_collision = False
+            if create_only_paths:
+                retry_collision = self._git_github_create_only_paths_exist(
+                    base_tree_sha, create_only_paths
+                )
+            if retry_collision is not False:
+                if retry_collision:
+                    logger.warning("[Git Sync] 重试前发现新上传编号已被远程占用，拒绝覆盖。")
+                return False
+
             tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
             if not tree_sha:
                 return False
-            commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
-            if not commit_sha:
+            retry_commit_sha = self._git_create_github_commit(
+                message, tree_sha, parent_sha
+            )
+            if not retry_commit_sha:
                 return False
-            if not self._git_update_github_ref(commit_sha):
-                return False
-    
+            if not self._git_update_github_ref(retry_commit_sha):
+                refreshed = self._git_get_head_commit_and_tree()
+                if not refreshed or refreshed[0] != retry_commit_sha:
+                    return False
+
             for git_path, _, blob_sha in items:
                 self._sha_cache[git_path] = blob_sha
             return True
 
-    def _git_push_batch_github(self, items: list[tuple[str, bytes]]) -> bool:
+    def _git_push_batch_github(
+        self,
+        items: list[tuple[str, bytes]],
+        *,
+        create_only_paths: set[str] | None = None,
+    ) -> bool:
         """GitHub 批量推送：多个文件共用一个 commit。"""
         if not items:
             return True
@@ -2522,12 +2589,16 @@ class Main(Star):
                 return False
             blob_sha = self._git_create_github_blob(content)
             if not blob_sha:
-                logger.warning(f"[Git Sync] 批量 blob 创建失败，准备回退逐文件推送: {git_path}")
+                logger.warning(f"[Git Sync] 批量 blob 创建失败: {git_path}")
                 return False
             blob_items.append((git_path, content, blob_sha))
 
-        message = f"Sync {len(blob_items)} gallery images"
-        return self._git_commit_github_batch(blob_items, message)
+        message = f"Sync {len(blob_items)} gallery files"
+        return self._git_commit_github_batch(
+            blob_items,
+            message,
+            create_only_paths=create_only_paths,
+        )
 
     def _git_push_pending_items(self, items: list[tuple[str, bytes]]) -> tuple[int, int, int]:
         """推送一批待处理文件，返回 (成功数, 失败数, 跳过数)。"""
@@ -3695,6 +3766,93 @@ class Main(Star):
             self._invalidate_category_hash_cache(category)
             self._forget_file_hash(path)
 
+    def _rollback_staged_uploads(
+        self, staged_paths: list[Path], category: str
+    ) -> None:
+        """回滚同一逻辑上传事务中已经写入本地的全部候选。"""
+        for path in reversed(staged_paths):
+            self._rollback_stored_image(path, category)
+
+    def _push_staged_upload_transaction(
+        self, staged_paths: list[Path], category: str
+    ) -> bool:
+        """提交一批已落盘图片；GitHub 将图片与感知索引放进同一 commit。"""
+        if not staged_paths:
+            return True
+        if not self._git_sync_enabled:
+            return True
+        if self._git_push_cancelled or (
+            hasattr(self, "_shutdown_event") and self._shutdown_event.is_set()
+        ):
+            self._rollback_staged_uploads(staged_paths, category)
+            return False
+
+        image_items: list[tuple[str, bytes]] = []
+        image_paths: set[str] = set()
+        try:
+            for local_path in staged_paths:
+                git_path = self._to_git_path(str(local_path))
+                if not git_path:
+                    raise ValueError(f"无法解析远程路径: {local_path}")
+                content = local_path.read_bytes()
+                image_items.append((git_path, content))
+                image_paths.add(git_path)
+        except (OSError, ValueError) as exc:
+            logger.warning(f"[Git Sync] 准备上传事务失败: {exc}")
+            self._rollback_staged_uploads(staged_paths, category)
+            return False
+
+        if self._git_platform() == "github":
+            manifest_payload = json.dumps(
+                self._gallery_manifest_payload(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            transaction_items = image_items + [
+                (GALLERY_INDEX_PATH, manifest_payload)
+            ]
+            committed = self._git_push_batch_github(
+                transaction_items,
+                create_only_paths=image_paths,
+            )
+            if not committed:
+                self._rollback_staged_uploads(staged_paths, category)
+                return False
+
+            try:
+                for git_path, content in image_items:
+                    remote_sha = self._sha_cache.get(git_path, "")
+                    self._remember_verified_remote_content(
+                        git_path, content, remote_sha, save=False
+                    )
+            finally:
+                self._save_hash_index()
+            return True
+
+        # Gitee 没有等价的 Git Data 单提交路径：串行写入并在失败时补偿。
+        with self._git_mutation_lock:
+            pushed_paths: list[Path] = []
+            for local_path in staged_paths:
+                if self._git_push_cancelled or not self._git_push_file(str(local_path)):
+                    for pushed_path in reversed(pushed_paths):
+                        self._git_delete_remote_file(str(pushed_path))
+                    self._rollback_staged_uploads(staged_paths, category)
+                    return False
+                pushed_paths.append(local_path)
+
+            manifest_ok = self._publish_gallery_manifest()
+            if manifest_ok:
+                return True
+
+            for pushed_path in reversed(pushed_paths):
+                self._git_delete_remote_file(str(pushed_path))
+            self._rollback_staged_uploads(staged_paths, category)
+            # 若索引 PUT 的响应丢失但服务端已写入，回滚本地后再发布一次用于修复。
+            if not self._publish_gallery_manifest():
+                logger.warning("[Git Sync] Gitee 上传补偿后感知索引修复失败，请稍后执行立即同步。")
+            return False
+
     async def _delete_image_consistently(self, image_path: Path, category: str) -> bool:
         """远端启用时先确认远端删除成功，再提交本地删除。"""
         if self._git_sync_enabled:
@@ -4181,13 +4339,10 @@ class Main(Star):
                 self._pending_similar_uploads.pop(key, None)
             await self._send_upload_decision_hint(event, decision)
             return
-        if self._git_sync_enabled:
-            pushed = await asyncio.to_thread(self._git_push_file, str(target))
-            manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
-            if not manifest_ok:
-                if pushed:
-                    await asyncio.to_thread(self._git_delete_remote_file, str(target))
-                self._rollback_stored_image(target, category)
+        committed = await asyncio.to_thread(
+            self._push_staged_upload_transaction, [target], category
+        )
+        if not committed:
                 await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
                 return
         with self._pending_similar_upload_lock:
@@ -4227,6 +4382,7 @@ class Main(Star):
             return
 
         uploaded: list[str] = []
+        staged_paths: list[Path] = []
         exact_count = 0
         similar_count = 0
         invalid_count = 0
@@ -4268,17 +4424,17 @@ class Main(Star):
                     break
                 continue
 
-            if self._git_sync_enabled:
-                pushed = await asyncio.to_thread(self._git_push_file, str(target_path))
-                manifest_ok = pushed and await asyncio.to_thread(self._publish_gallery_manifest)
-                if not manifest_ok:
-                    if pushed:
-                        await asyncio.to_thread(self._git_delete_remote_file, str(target_path))
-                    self._rollback_stored_image(target_path, category_name)
-                    await event.send(event.plain_result("远程上传或感知索引更新失败，本地写入已回滚。"))
-                    break
-            uploaded.append(target_path.name)
+            staged_paths.append(target_path)
             remote_max_index = max(remote_max_index, int(target_path.stem))
+
+        if staged_paths:
+            committed = await asyncio.to_thread(
+                self._push_staged_upload_transaction, staged_paths, category_name
+            )
+            if not committed:
+                await event.send(event.plain_result("远程上传事务失败，本批本地写入已全部回滚。"))
+                return
+            uploaded = [path.name for path in staged_paths]
 
         parts = [f"成功上传 {len(uploaded)} 张到【{category_name}】"]
         if exact_count:
