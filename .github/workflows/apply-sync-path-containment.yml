@@ -1,0 +1,49 @@
+name: Apply sync path containment
+
+on:
+  push:
+    branches:
+      - hardening/sync-path-containment
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact path containment edit
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("main.py")
+          source = path.read_text(encoding="utf-8")
+          old = '                local_path = self.gallery_root.parent / git_path.replace("/", os.sep)\n                remote_sha = str(info.get("sha", ""))'
+          new = "\n".join([
+              "                local_path = resolve_gallery_local_path(self.gallery_root.parent, git_path)",
+              "                if local_path is None:",
+              "                    logger.warning(",
+              '                        f"[Git Sync] 本地路径越界或经过符号链接，已跳过: {git_path}"',
+              "                    )",
+              "                    continue",
+              '                remote_sha = str(info.get("sha", ""))',
+          ])
+          if source.count(old) != 1:
+              raise SystemExit("sync local path construction target not found exactly once")
+          path.write_text(source.replace(old, new, 1), encoding="utf-8")
+          Path(".github/workflows/apply-sync-path-containment.yml").unlink()
+
+      - name: Commit scoped hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: contain pull sync writes inside gallery root"
+          git push origin HEAD:${GITHUB_REF_NAME}
