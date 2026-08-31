@@ -2779,7 +2779,12 @@ class Main(Star):
             synced = 0
             content_conflicts: list[str] = []
             for git_path, info in remote_images.items():
-                local_path = self.gallery_root.parent / git_path.replace("/", os.sep)
+                local_path = resolve_gallery_local_path(self.gallery_root.parent, git_path)
+                if local_path is None:
+                    logger.warning(
+                        f"[Git Sync] 本地路径越界或经过符号链接，已跳过: {git_path}"
+                    )
+                    continue
                 remote_sha = str(info.get("sha", ""))
                 parts = Path(git_path).parts
                 category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
