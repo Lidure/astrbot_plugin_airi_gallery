@@ -1,82 +1,80 @@
 import asyncio
-import importlib
+import importlib.util
 import sys
 import types
 from pathlib import Path
 
 
-def _identity_decorator(*args, **kwargs):
-    def decorate(function):
-        return function
-
-    return decorate
-
-
 def _load_main(monkeypatch, tmp_path):
-    astrbot = types.ModuleType("astrbot")
-    api = types.ModuleType("astrbot.api")
-    event = types.ModuleType("astrbot.api.event")
-    message_components = types.ModuleType("astrbot.api.message_components")
-    star = types.ModuleType("astrbot.api.star")
-    core = types.ModuleType("astrbot.core")
-    utils = types.ModuleType("astrbot.core.utils")
-    astrbot_path = types.ModuleType("astrbot.core.utils.astrbot_path")
-    agent = types.ModuleType("astrbot.core.agent")
-    tool = types.ModuleType("astrbot.core.agent.tool")
+    for key in list(sys.modules):
+        if key == "main" or key == "astrbot" or key.startswith("astrbot."):
+            monkeypatch.delitem(sys.modules, key, raising=False)
 
-    class FilterStub:
-        EventMessageType = types.SimpleNamespace(ALL="all")
-        command = staticmethod(_identity_decorator)
-        event_message_type = staticmethod(_identity_decorator)
-
-    class StarStub:
+    class DummyStar:
         def __init__(self, context):
             self.context = context
 
-    class FunctionToolStub:
+    class DummyFunctionTool:
         def __init__(self, **kwargs):
-            pass
+            self.kwargs = kwargs
 
-    api.logger = types.SimpleNamespace(
-        debug=lambda *args, **kwargs: None,
-        error=lambda *args, **kwargs: None,
-        info=lambda *args, **kwargs: None,
-        warning=lambda *args, **kwargs: None,
+    class DummyFilter:
+        class EventMessageType:
+            ALL = object()
+
+        @staticmethod
+        def event_message_type(*_args, **_kwargs):
+            return lambda fn: fn
+
+        @staticmethod
+        def command(*_args, **_kwargs):
+            return lambda fn: fn
+
+    astrbot = types.ModuleType("astrbot")
+    astrbot_api = types.ModuleType("astrbot.api")
+    astrbot_api.logger = types.SimpleNamespace(
+        info=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        error=lambda *_args, **_kwargs: None,
+        debug=lambda *_args, **_kwargs: None,
     )
-    event.AstrMessageEvent = object
-    event.filter = FilterStub
-    message_components.Image = object
-    message_components.Reply = object
-    star.Context = object
-    star.Star = StarStub
+    astrbot_api_event = types.ModuleType("astrbot.api.event")
+    astrbot_api_event.AstrMessageEvent = type("AstrMessageEvent", (), {})
+    astrbot_api_event.filter = DummyFilter
+    astrbot_api_components = types.ModuleType("astrbot.api.message_components")
+    astrbot_api_components.Image = type("Image", (), {})
+    astrbot_api_components.Reply = type("Reply", (), {})
+    astrbot_api_star = types.ModuleType("astrbot.api.star")
+    astrbot_api_star.Context = type("Context", (), {})
+    astrbot_api_star.Star = DummyStar
+    astrbot_core = types.ModuleType("astrbot.core")
+    astrbot_core_utils = types.ModuleType("astrbot.core.utils")
+    astrbot_path = types.ModuleType("astrbot.core.utils.astrbot_path")
     astrbot_path.get_astrbot_plugin_data_path = lambda: str(tmp_path)
-    tool.FunctionTool = FunctionToolStub
+    astrbot_core_agent = types.ModuleType("astrbot.core.agent")
+    astrbot_core_agent_tool = types.ModuleType("astrbot.core.agent.tool")
+    astrbot_core_agent_tool.FunctionTool = DummyFunctionTool
 
-    astrbot.api = api
-    api.event = event
-    api.message_components = message_components
-    api.star = star
-    astrbot.core = core
-    core.utils = utils
-    utils.astrbot_path = astrbot_path
-    core.agent = agent
-    agent.tool = tool
-
-    for name, module in {
+    modules = {
         "astrbot": astrbot,
-        "astrbot.api": api,
-        "astrbot.api.event": event,
-        "astrbot.api.message_components": message_components,
-        "astrbot.api.star": star,
-        "astrbot.core": core,
-        "astrbot.core.utils": utils,
+        "astrbot.api": astrbot_api,
+        "astrbot.api.event": astrbot_api_event,
+        "astrbot.api.message_components": astrbot_api_components,
+        "astrbot.api.star": astrbot_api_star,
+        "astrbot.core": astrbot_core,
+        "astrbot.core.utils": astrbot_core_utils,
         "astrbot.core.utils.astrbot_path": astrbot_path,
-        "astrbot.core.agent": agent,
-        "astrbot.core.agent.tool": tool,
-    }.items():
+        "astrbot.core.agent": astrbot_core_agent,
+        "astrbot.core.agent.tool": astrbot_core_agent_tool,
+    }
+    for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.delitem(sys.modules, "main", raising=False)
-    return importlib.import_module("main")
+
+    spec = importlib.util.spec_from_file_location("main", Path("main.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["main"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_category_page_api_returns_names_without_reading_image_bodies(
