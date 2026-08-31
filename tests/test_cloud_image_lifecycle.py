@@ -35,6 +35,11 @@ def test_cloud_grid_deduplicates_inflight_fetches_and_ignores_stale_renders():
     assert "renderToken !== state.imageRenderToken" in load_block
     assert "getImageObjectUrl(file)" in load_block
 
+    pool_start = load_block.index("imagePool(() => withRetry(async () => {")
+    helper_pos = load_block.index("const blobUrl = await getImageObjectUrl(file);", pool_start)
+    guard_pos = load_block.index("if (renderToken !== state.imageRenderToken) return;", pool_start)
+    assert guard_pos < helper_pos
+
 
 def test_cloud_page_releases_blob_urls_on_unload_and_modal_close():
     assert "window.addEventListener('beforeunload'" in SOURCE
