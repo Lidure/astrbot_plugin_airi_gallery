@@ -1407,15 +1407,8 @@ class Main(Star):
             return jsonify({"ok": False, "error": "invalid path"}), 400
         if not img_path.exists() or not _is_image_file(img_path):
             return jsonify({"ok": False, "error": "文件不存在"})
-        img_path_str = str(img_path)
-        img_path.unlink()
-        self._invalidate_category_hash_cache(category)
-        self._forget_file_hash(img_path)
-        # Git 远程删除
-        if self._git_sync_enabled:
-            asyncio.get_event_loop().run_in_executor(
-                None, self._git_delete_remote_file, img_path_str
-            )
+        if not await self._delete_image_consistently(img_path, category):
+            return jsonify({"ok": False, "error": "远程删除失败，本地文件已保留"}), 502
         return jsonify({"ok": True})
 
     def _check_upload_token(self, token: str) -> bool:
@@ -2809,19 +2802,22 @@ class Main(Star):
             logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
         return False
 
-    def _git_delete_remote_file(self, local_abs_path: str) -> None:
-        """将本地文件的对应远程文件删除。"""
+    def _git_delete_remote_file(self, local_abs_path: str) -> bool:
+        """删除本地路径对应的远程文件，并把结果反馈给一致性调用方。"""
         if not self._git_sync_enabled:
-            return
+            return True
         git_path = self._to_git_path(local_abs_path)
         if not git_path:
-            return
+            return False
         try:
             ok = self._git_delete_file(git_path, f"Delete {git_path}")
             if ok:
                 logger.info(f"[Git Sync] 已从远程删除: {git_path}")
+                return True
+            return False
         except Exception as exc:
             logger.error(f"[Git Sync] 远程删除失败 {git_path}: {exc}")
+            return False
 
     @staticmethod
     def _git_blob_sha(content: bytes) -> str:
@@ -3646,6 +3642,30 @@ class Main(Star):
             self._invalidate_category_hash_cache(category)
             self._forget_file_hash(path)
 
+    async def _delete_image_consistently(self, image_path: Path, category: str) -> bool:
+        """远端启用时先确认远端删除成功，再提交本地删除。"""
+        if self._git_sync_enabled:
+            remote_ok = await asyncio.to_thread(
+                self._git_delete_remote_file, str(image_path)
+            )
+            if not remote_ok:
+                logger.warning(
+                    f"[Gallery] 远端删除失败，本地文件已保留: {image_path}"
+                )
+                return False
+
+        try:
+            image_path.unlink()
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            logger.warning(f"[Gallery] 本地删除失败 {image_path}: {exc}")
+            return False
+
+        self._invalidate_category_hash_cache(category)
+        self._forget_file_hash(image_path)
+        return True
+
     async def _dedupe_gallery(self, category: str | None = None) -> tuple[int, list[str]]:
         """删除重复内容，保留每个分类中首次出现的图片。"""
         if category:
@@ -3668,18 +3688,12 @@ class Main(Star):
                 if digest in seen_hashes:
                     rel = image_path.relative_to(self.gallery_root).as_posix()
                     git_path = self._to_git_path(str(image_path))
-                    image_path.unlink()
-                    self._invalidate_category_hash_cache(cat)
-                    self._forget_file_hash(image_path, save=False)
-                    if git_path:
-                        self._sha_cache.pop(git_path, None)
-                    if self._git_sync_enabled:
-                        asyncio.get_event_loop().run_in_executor(
-                            None, self._git_delete_remote_file, str(image_path)
-                        )
-                    removed += 1
-                    if len(deleted_examples) < 5:
-                        deleted_examples.append(rel)
+                    if await self._delete_image_consistently(image_path, cat):
+                        if git_path:
+                            self._sha_cache.pop(git_path, None)
+                        removed += 1
+                        if len(deleted_examples) < 5:
+                            deleted_examples.append(rel)
                     continue
                 seen_hashes.add(digest)
             self._save_hash_index()
@@ -4226,31 +4240,32 @@ class Main(Star):
         deleted_names: list[str] = []
         missing_numbers: list[str] = []
 
+        failed_names: list[str] = []
         for index in numbers:
             image_path = self._find_by_index(index)
             if not image_path:
                 missing_numbers.append(str(index))
                 continue
-            deleted_names.append(image_path.name)
-            image_path_str = str(image_path)
-            image_path.unlink()
-            self._invalidate_category_hash_cache(image_path.parent.name)
-            self._forget_file_hash(image_path)
-            # Git 远程删除（异步）
-            if self._git_sync_enabled:
-                asyncio.get_event_loop().run_in_executor(
-                    None, self._git_delete_remote_file, image_path_str
-                )
+            if await self._delete_image_consistently(
+                image_path, image_path.parent.name
+            ):
+                deleted_names.append(image_path.name)
+            else:
+                failed_names.append(image_path.name)
 
-        if deleted_names and missing_numbers:
-            message = (
-                f"已删除：{'、'.join(deleted_names)}\n"
-                f"未找到：{'、'.join(missing_numbers)}"
+        message_parts: list[str] = []
+        if deleted_names:
+            message_parts.append(f"已删除：{'、'.join(deleted_names)}")
+        if missing_numbers:
+            message_parts.append(f"未找到：{'、'.join(missing_numbers)}")
+        if failed_names:
+            message_parts.append(
+                f"删除失败并已保留本地文件：{'、'.join(failed_names)}"
             )
-        elif deleted_names:
-            message = f"已删除：{'、'.join(deleted_names)}"
+        if message_parts:
+            message = "\n".join(message_parts)
         else:
-            message = f"未找到编号为 {'、'.join(missing_numbers)} 的图片或表情包。"
+            message = "没有可删除的图片或表情包。"
 
         await event.send(event.plain_result(message))
 
