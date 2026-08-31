@@ -67,7 +67,7 @@ def test_reply_image_collector_uses_raw_onebot_fallback_and_releases_v21110():
     assert "_get_reply_onebot_image_refs" in block
     assert "_materialize_quoted_image_ref" in block
     assert "OneBotClient" in source
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.11"' in source
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.12"' in source
 
 
 def test_onebot_raw_message_fallback_only_runs_after_normal_sources_are_empty():
