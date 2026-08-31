@@ -17,6 +17,11 @@ let state = {
   shaCache: {},           // path -> sha
   treeFetched: false,
   imageCache: {},         // path -> blob URL
+  imageLoadPromises: {},  // path -> in-flight Promise<blob URL>
+  imageCacheEpoch: 0,     // invalidates fetches across repository/config resets
+  imageRenderToken: 0,    // prevents stale page renders from mutating the current grid
+  activeImagePaths: new Set(),
+  previewObjectUrls: {},  // pending upload signature -> blob URL
   galleryIndex: null,      // gallery_index.json perceptual hashes, lazy-loaded
   pendingDeletedPaths: new Set(), // successful deletes hidden until remote tree confirms absence
 };
@@ -156,6 +161,8 @@ function confirm2(text, options = {}) {
       confirmNo.classList.remove('is-hidden');
       confirmYes.textContent = '确认';
       confirmNo.textContent = '取消';
+      confirmImg.removeAttribute('src');
+      if (imageUrl) revokeObjectUrl(imageUrl);
       resolve(value);
     };
     confirmYes.onclick = () => finish(true);
@@ -184,6 +191,80 @@ function createPool(maxConcurrent) {
   };
 }
 const imagePool = createPool(4);
+
+function revokeObjectUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('blob:')) return;
+  try { URL.revokeObjectURL(url); } catch {}
+}
+
+function clearImageCache() {
+  state.imageCacheEpoch++;
+  state.imageRenderToken++;
+  state.activeImagePaths.clear();
+  for (const [path, url] of Object.entries(state.imageCache)) {
+    revokeObjectUrl(url);
+    delete state.imageCache[path];
+  }
+  for (const path of Object.keys(state.imageLoadPromises)) {
+    delete state.imageLoadPromises[path];
+  }
+}
+
+function pruneImageCache(keepPaths = new Set()) {
+  state.activeImagePaths = new Set(keepPaths);
+  for (const [path, url] of Object.entries(state.imageCache)) {
+    if (keepPaths.has(path)) continue;
+    revokeObjectUrl(url);
+    delete state.imageCache[path];
+  }
+}
+
+async function getImageObjectUrl(file) {
+  const path = file.path;
+  const cached = state.imageCache[path];
+  if (cached) return cached;
+  const inflight = state.imageLoadPromises[path];
+  if (inflight) return inflight;
+
+  const epoch = state.imageCacheEpoch;
+  const promise = (async () => {
+    const buffer = await getFileContent(path);
+    const blobUrl = URL.createObjectURL(new Blob([buffer], { type: imageMime(path) }));
+    if (epoch !== state.imageCacheEpoch || !state.activeImagePaths.has(path)) {
+      revokeObjectUrl(blobUrl);
+      return '';
+    }
+    state.imageCache[path] = blobUrl;
+    return blobUrl;
+  })();
+  state.imageLoadPromises[path] = promise;
+  try {
+    return await promise;
+  } finally {
+    if (state.imageLoadPromises[path] === promise) delete state.imageLoadPromises[path];
+  }
+}
+
+function clearPreviewObjectUrls() {
+  for (const [signature, url] of Object.entries(state.previewObjectUrls)) {
+    revokeObjectUrl(url);
+    delete state.previewObjectUrls[signature];
+  }
+}
+
+function reconcilePreviewObjectUrls() {
+  const active = new Set(state.pendingFiles.map(item => item.signature));
+  for (const [signature, url] of Object.entries(state.previewObjectUrls)) {
+    if (active.has(signature)) continue;
+    revokeObjectUrl(url);
+    delete state.previewObjectUrls[signature];
+  }
+  for (const item of state.pendingFiles) {
+    if (!state.previewObjectUrls[item.signature]) {
+      state.previewObjectUrls[item.signature] = URL.createObjectURL(item.file);
+    }
+  }
+}
 
 async function withRetry(fn, maxRetries = 2) {
   let lastErr;
@@ -546,15 +627,7 @@ function similarRemoteMatches(index, perceptualHashValue, limit = 3) {
 async function previewUrlForPath(path) {
   for (const cat of state.categories) {
     const file = cat.files.find(item => item.path === path);
-    if (!file) continue;
-    if (useImageProxy()) return imageProxyUrl(file);
-    let blobUrl = state.imageCache[path];
-    if (!blobUrl) {
-      const buffer = await getFileContent(path);
-      blobUrl = URL.createObjectURL(new Blob([buffer], { type: imageMime(path) }));
-      state.imageCache[path] = blobUrl;
-    }
-    return blobUrl;
+    if (file && useImageProxy()) return imageProxyUrl(file);
   }
   const buffer = await getFileContent(path);
   return URL.createObjectURL(new Blob([buffer], { type: imageMime(path) }));
@@ -740,8 +813,10 @@ async function hideDeletedPathImmediately(path) {
 // UI: Grid (load images for current page)
 // ──────────────────────────────────────────────
 async function loadCategoryImages() {
+  const renderToken = ++state.imageRenderToken;
   const cat = state.categories.find(c => c.name === state.currentCat);
   if (!cat) {
+    pruneImageCache(new Set());
     gridEl.innerHTML = '<div class="empty"><div class="icon">📂</div>选择一个分类查看图片</div>';
     return;
   }
@@ -752,6 +827,7 @@ async function loadCategoryImages() {
 
   const start = (state.currentPage - 1) * state.perPage;
   const pageFiles = cat.files.slice(start, start + state.perPage);
+  pruneImageCache(new Set(pageFiles.map(file => file.path)));
 
   if (!pageFiles.length) {
     gridEl.innerHTML = '<div class="empty"><div class="icon">🍃</div>该分类暂无图片</div>';
@@ -813,14 +889,9 @@ async function loadCategoryImages() {
     } else {
       // Load image via Contents API with concurrency pool & retry
       imagePool(() => withRetry(async () => {
-      let blobUrl = state.imageCache[file.path];
-      if (!blobUrl) {
-        const buf = await getFileContent(file.path);
-        const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
-        const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
-        blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
-        state.imageCache[file.path] = blobUrl;
-      }
+      if (renderToken !== state.imageRenderToken) return;
+      const blobUrl = await getImageObjectUrl(file);
+      if (!blobUrl || renderToken !== state.imageRenderToken) return;
       div.innerHTML = '';
       const img = document.createElement('img');
       img.src = blobUrl; img.loading = 'lazy';
@@ -828,6 +899,7 @@ async function loadCategoryImages() {
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
       })).catch((err) => {
+      if (renderToken !== state.imageRenderToken) return;
       console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
       div.replaceChildren();
       const errorBox = document.createElement('div');
@@ -850,14 +922,8 @@ async function loadCategoryImages() {
           mask.classList.add('show');
           return;
         }
-        let blobUrl = state.imageCache[file.path];
-        if (!blobUrl) {
-          const buf = await getFileContent(file.path);
-          const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
-          const ct = { '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp', '.bmp':'image/bmp' }[ext] || 'image/png';
-          blobUrl = URL.createObjectURL(new Blob([buf], { type: ct }));
-          state.imageCache[file.path] = blobUrl;
-        }
+        const blobUrl = await getImageObjectUrl(file);
+        if (!blobUrl) return;
         mimg.src = blobUrl;
         mask.classList.add('show');
       } catch { toast('无法加载图片', false); }
@@ -893,7 +959,7 @@ perPageInput.onchange = () => {
   perPageInput.value = v;
   if (v !== state.perPage) {
     state.perPage = v; state.currentPage = 1;
-    state.imageCache = {};
+    clearImageCache();
     loadCategoryImages();
   }
 };
@@ -961,6 +1027,7 @@ async function addFiles(fl) {
 }
 
 function renderPreview() {
+  reconcilePreviewObjectUrls();
   previewEl.innerHTML = '';
   if (!state.pendingFiles.length) {
     previewEl.classList.add('is-hidden'); upActions.classList.add('is-hidden'); return;
@@ -972,7 +1039,7 @@ function renderPreview() {
     const d = document.createElement('div');
     d.className = 'preview-item';
     const img = document.createElement('img');
-    img.src = URL.createObjectURL(item.file);
+    img.src = state.previewObjectUrls[item.signature];
     img.alt = item.file.name || '待上传图片';
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -1130,7 +1197,7 @@ upBtn.onclick = async () => {
     renderPreview();
 
     if (uploaded > 0) {
-      state.imageCache = {};
+      clearImageCache();
       await syncFromRemote();
     }
     toast(
@@ -1204,7 +1271,7 @@ saveCfgBtn.onclick = () => {
   settingsPanel.classList.remove('show');
   // Reset state and reconnect
   state.shaCache = {};
-  state.imageCache = {};
+  clearImageCache();
   state.categories = [];
   state.currentCat = '';
   state.galleryIndex = null;
@@ -1246,7 +1313,7 @@ testCfgBtn.onclick = async () => {
 syncBtn.onclick = async () => {
   if (!config.owner || !config.repo) { toast('请先配置仓库信息', false); settingsPanel.classList.add('show'); return; }
   if (!hasReadConfig()) { toast('请先配置可读取的仓库信息', false); settingsPanel.classList.add('show'); return; }
-  state.imageCache = {};
+  clearImageCache();
   await syncFromRemote();
   if (state.connected) toast('同步完成');
 };
@@ -1254,8 +1321,18 @@ syncBtn.onclick = async () => {
 // ──────────────────────────────────────────────
 // Modal
 // ──────────────────────────────────────────────
-closeBtn.onclick = () => mask.classList.remove('show');
-mask.onclick = e => { if (e.target === mask) mask.classList.remove('show'); };
+function closeImageModal() {
+  mask.classList.remove('show');
+  mimg.removeAttribute('src');
+}
+closeBtn.onclick = closeImageModal;
+mask.onclick = e => { if (e.target === mask) closeImageModal(); };
+
+window.addEventListener('beforeunload', () => {
+  closeImageModal();
+  clearImageCache();
+  clearPreviewObjectUrls();
+});
 
 // ──────────────────────────────────────────────
 // Theme toggle
