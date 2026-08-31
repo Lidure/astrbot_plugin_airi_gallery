@@ -17,6 +17,8 @@ jobs:
         with:
           ref: perf/cloud-request-lifecycle
           fetch-depth: 0
+      - name: Install patch test dependency
+        run: python -m pip install pytest
       - name: Apply patch
         run: python tools/_tmp_patch_cloud_request_lifecycle.py
       - name: Verify focused regression tests
