@@ -4,7 +4,7 @@
 
 **Goal:** Release v2.11.11 with authoritative chat-upload permission checks, fail-closed public writes, safer Cloud credentials/DOM handling, bounded upload validation, content-derived image formats, and correct GitHub throttling classification.
 
-**Architecture:** Keep AstrBot command/API registration in `main.py`, but move pure upload-validation and GitHub-status classification rules into `gallery_safety.py` so they can be behavior-tested without AstrBot. Cloud page inline application code is split into static `app.js`/`style.css` so a meaningful CSP can forbid inline script execution. No renumber algorithm changes are allowed in this release.
+**Architecture:** Keep AstrBot command/API registration in `main.py`, but move pure upload-validation and GitHub-status classification rules into `gallery_safety.py` so they can be behavior-tested without AstrBot. Split the Cloud page inline application code into static `app.js`/`style.css` so a meaningful CSP can forbid inline script execution. Do not change the renumber algorithm.
 
 **Tech Stack:** Python 3.10/3.12, AstrBot plugin APIs, Pillow, requests, Quart, vanilla JavaScript, Cloudflare Workers/Assets, pytest.
 
@@ -26,7 +26,7 @@
 ### Task 1: Make `_handle_upload()` the authoritative permission boundary
 
 **Files:**
-- Modify: `main.py` — `_handle_upload()` and only redundant upload-entry permission plumbing if needed
+- Modify: `main.py` — `_handle_upload()`
 - Create: `tests/test_upload_permission_boundary.py`
 
 **Interfaces:**
@@ -35,9 +35,30 @@
 
 - [ ] **Step 1: Write the failing behavior test**
 
-Create `tests/test_upload_permission_boundary.py` with a minimal `Main` test double created via `object.__new__(Main)`. Stub `_is_allowed` to `False`, stub `_get_reply_images` to raise if called, and provide an event stub recording `send()` calls. Assert `_handle_upload()` sends `没有权限执行此操作。`, never calls `_get_reply_images`, and never resolves/creates a category.
+Create `tests/test_upload_permission_boundary.py` with a minimal event stub:
 
 ```python
+from unittest.mock import AsyncMock, Mock
+import pytest
+from main import Main
+
+
+class FakeResult:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class FakeEvent:
+    def __init__(self):
+        self.plain_messages: list[str] = []
+
+    def plain_result(self, text: str):
+        return FakeResult(text)
+
+    async def send(self, result):
+        self.plain_messages.append(result.text)
+
+
 @pytest.mark.asyncio
 async def test_handle_upload_rejects_before_any_image_or_storage_work():
     plugin = object.__new__(Main)
@@ -50,6 +71,7 @@ async def test_handle_upload_rejects_before_any_image_or_storage_work():
 
     assert event.plain_messages == ["没有权限执行此操作。"]
     plugin._get_reply_images.assert_not_awaited()
+    plugin._resolve_existing_category_dir.assert_not_called()
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -72,8 +94,6 @@ Do not rely on the command decorator or top-level message dispatcher for correct
 
 - [ ] **Step 4: Run focused upload tests**
 
-Run:
-
 ```bash
 python -m pytest tests/test_upload_permission_boundary.py tests/test_upload_dedup.py tests/test_upload_candidate_dedup.py tests/test_qq_sticker_reply_upload.py -v
 ```
@@ -92,18 +112,22 @@ git commit -m "fix: enforce chat upload permissions at handler boundary"
 ### Task 2: Make public upload authentication fail closed
 
 **Files:**
-- Modify: `main.py` — `_check_upload_token()`, `_api_pub_upload()`, public-write authentication handling
+- Modify: `main.py` — `_check_upload_token()`, `_api_pub_upload()`
 - Modify: `_conf_schema.json` — upload-token wording
 - Create: `tests/test_public_upload_auth.py`
 
 **Interfaces:**
 - Produces: `_check_upload_token(token: str) -> bool` using `secrets.compare_digest`
 - Empty configured token always returns `False`
-- `_api_pub_upload()` returns HTTP 403 when public writes are disabled or token mismatches
+- `_api_pub_upload()` returns HTTP 403 before image parsing when public writes are disabled or token mismatches
 
-- [ ] **Step 1: Write RED tests for empty/matching/mismatching tokens**
+- [ ] **Step 1: Write RED token tests**
 
 ```python
+import secrets
+from main import Main
+
+
 def test_empty_public_token_disables_writes():
     plugin = object.__new__(Main)
     plugin.config = {"upload_token": ""}
@@ -112,15 +136,20 @@ def test_empty_public_token_disables_writes():
 
 
 def test_public_token_uses_compare_digest(monkeypatch):
-    called = []
-    monkeypatch.setattr(secrets, "compare_digest", lambda a, b: called.append((a, b)) or True)
+    called: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        secrets,
+        "compare_digest",
+        lambda left, right: called.append((left, right)) or True,
+    )
     plugin = object.__new__(Main)
     plugin.config = {"upload_token": "secret"}
+
     assert plugin._check_upload_token("candidate") is True
     assert called == [("candidate", "secret")]
 ```
 
-Add an async endpoint test asserting disabled public upload returns `{ok:false}` with status 403 before image parsing.
+Add an endpoint test using Quart request context that posts `{"token":"","category":"szk","images":[]}` while configured token is empty and asserts status `403` before any upload helper is called.
 
 - [ ] **Step 2: Run RED**
 
@@ -130,8 +159,6 @@ Expected: FAIL because empty token currently returns `True` and comparison uses 
 
 - [ ] **Step 3: Implement fail-closed token checking**
 
-Use the already-imported `secrets` module:
-
 ```python
 def _check_upload_token(self, token: str) -> bool:
     expected = str(self.config.get("upload_token", "")).strip()
@@ -140,7 +167,7 @@ def _check_upload_token(self, token: str) -> bool:
     return secrets.compare_digest(str(token), expected)
 ```
 
-Return a stable public-upload-disabled error when `expected` is empty. Do not add an anonymous-write flag in this release.
+When configured token is empty, `_api_pub_upload()` returns a stable `公开上传未启用` error with HTTP 403. Do not add an anonymous-write flag in this release.
 
 - [ ] **Step 4: Update configuration copy**
 
@@ -148,15 +175,8 @@ Change the `upload_token` hint from “留空则无需密钥” to “留空将�
 
 - [ ] **Step 5: Run focused tests and commit**
 
-Run:
-
 ```bash
 python -m pytest tests/test_public_upload_auth.py tests/test_repository_contract.py -v
-```
-
-Then:
-
-```bash
 git add main.py _conf_schema.json tests/test_public_upload_auth.py
 git commit -m "fix: disable unauthenticated public gallery writes"
 ```
@@ -171,7 +191,6 @@ git commit -m "fix: disable unauthenticated public gallery writes"
 - Create: `tests/test_upload_payload_validation.py`
 
 **Interfaces:**
-- Produce immutable dataclass:
 
 ```python
 @dataclass(frozen=True)
@@ -181,31 +200,57 @@ class ValidatedImagePayload:
     format_name: str
     width: int
     height: int
+
+
+def validate_image_payload(
+    content: bytes,
+    *,
+    max_bytes: int = 20 * 1024 * 1024,
+    max_pixels: int = 40_000_000,
+) -> ValidatedImagePayload:
+    ...
 ```
 
-- Produce:
+The implementation body above is intentionally defined by Steps 3–4; the exact public signature is fixed. Supported mapping: `JPEG -> .jpg`, `PNG -> .png`, `GIF -> .gif`, `WEBP -> .webp`, `BMP -> .bmp`, `TIFF -> .tiff`. Invalid/empty/unsupported/oversized payloads raise `ValueError`.
+
+- [ ] **Step 1: Write concrete pure validation tests**
+
+Use this helper in the test module:
 
 ```python
-def validate_image_payload(content: bytes, *, max_bytes: int = 20 * 1024 * 1024,
-                           max_pixels: int = 40_000_000) -> ValidatedImagePayload
+from io import BytesIO
+from PIL import Image
+from gallery_safety import validate_image_payload
+
+
+def encoded_image(fmt: str, size=(4, 4)) -> bytes:
+    stream = BytesIO()
+    Image.new("RGBA", size, (255, 0, 0, 255)).save(stream, format=fmt)
+    return stream.getvalue()
+
+
+def test_real_gif_stays_gif():
+    result = validate_image_payload(encoded_image("GIF"))
+    assert result.extension == ".gif"
+    assert result.format_name == "GIF"
+
+
+def test_png_content_wins_over_source_name_concerns():
+    result = validate_image_payload(encoded_image("PNG"))
+    assert result.extension == ".png"
+
+
+def test_payload_over_limit_is_rejected():
+    with pytest.raises(ValueError, match="too large"):
+        validate_image_payload(b"x" * 11, max_bytes=10)
+
+
+def test_malformed_image_is_rejected():
+    with pytest.raises(ValueError):
+        validate_image_payload(b"not-an-image")
 ```
 
-- Supported format mapping: `JPEG -> .jpg`, `PNG -> .png`, `GIF -> .gif`, `WEBP -> .webp`, `BMP -> .bmp`, `TIFF -> .tiff`
-- Raise `ValueError` for empty/too-large/undecodable/unsupported/oversized-pixel payloads
-
-- [ ] **Step 1: Write pure validation tests**
-
-Generate small images in-memory with Pillow. Include:
-
-```python
-def test_real_gif_stays_gif(): ...
-def test_filename_does_not_override_detected_png(): ...
-def test_payload_over_20_mib_is_rejected(): ...
-def test_pixel_area_over_40_mp_is_rejected_without_storage(): ...
-def test_malformed_image_is_rejected(): ...
-```
-
-For the pixel test, monkeypatch `PIL.Image.open` to return an object exposing a `size` above the limit so the test does not allocate a huge bitmap.
+For pixel area, monkeypatch `PIL.Image.open` with a context-manager fake exposing `format="PNG"`, `size=(10000, 5000)`, and `verify()`; assert `ValueError` before any decode/storage call.
 
 - [ ] **Step 2: Verify RED**
 
@@ -215,29 +260,27 @@ Expected: FAIL because `validate_image_payload` does not exist and chat GIF curr
 
 - [ ] **Step 3: Implement `validate_image_payload()`**
 
-Use Pillow to identify format and dimensions before any gallery write. Treat Pillow decompression-bomb errors/warnings converted to errors as invalid input. Do not transcode; preserve original validated bytes.
+Use Pillow to identify format and dimensions before gallery write. Convert Pillow decompression-bomb warnings to errors inside this validation scope. Call `verify()` for structural validation, reject `width * height > max_pixels`, and return the untouched original bytes plus canonical extension. Do not transcode.
 
 - [ ] **Step 4: Route all upload surfaces through the validator**
 
 For `_api_upload_images()` and `_api_pub_upload()`:
 
-1. reject `images` unless it is a list with `1..UPLOAD_BATCH_MAX` entries;
-2. base64-decode each item with validation enabled (`b64decode(..., validate=True)` after stripping an optional data-URL prefix);
-3. maintain `request_decoded_bytes`, rejecting once it exceeds `100 * 1024 * 1024`;
+1. require `images` to be a list with `1..UPLOAD_BATCH_MAX` entries;
+2. strip an optional `data:*;base64,` prefix and decode with `b64decode(payload, validate=True)`;
+3. accumulate decoded request bytes and reject above `100 * 1024 * 1024`;
 4. call `validate_image_payload()` before fingerprinting;
 5. pass `validated.extension` to `_store_unique_image()`.
 
-For chat `_handle_upload()`, validate the already-downloaded bytes and use the detected extension. Remove the special-case `if suffix == ".gif": suffix = ".jpg"`.
+For chat `_handle_upload()`, validate downloaded bytes and use `validated.extension`. Remove `if suffix == ".gif": suffix = ".jpg"`.
 
-Malformed/oversized API payloads return 400/413, not 500.
+Malformed input returns 400; byte/pixel limits return 413.
 
 - [ ] **Step 5: Run upload regressions**
 
 ```bash
 python -m pytest tests/test_upload_payload_validation.py tests/test_upload_dedup.py tests/test_upload_candidate_dedup.py tests/test_qq_sticker_reply_upload.py -v
 ```
-
-Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
@@ -251,46 +294,50 @@ git commit -m "fix: validate upload payloads and preserve real image formats"
 ### Task 4: Classify GitHub auth, permission, and rate-limit failures correctly
 
 **Files:**
-- Modify: `gallery_safety.py` — pure GitHub response classifier
+- Modify: `gallery_safety.py`
 - Modify: `main.py` — `_git_request()`
 - Create: `tests/test_github_http_classification.py`
 
 **Interfaces:**
-- Produce:
 
 ```python
-def classify_github_http_failure(status: int, headers: Mapping[str, object], body: object) -> str:
-    # returns one of: auth, permission, rate_limit, conflict, transport, other
+def classify_github_http_failure(
+    status: int,
+    headers: Mapping[str, object],
+    body: object,
+) -> str:
+    # return: auth | permission | rate_limit | conflict | transport | other
+    raise NotImplementedError
 ```
 
-- `_git_request()` disables `_git_sync_enabled` only for `auth`/confirmed `permission`, never `rate_limit`
+The signature and return vocabulary are fixed; Step 3 supplies the real implementation.
 
-- [ ] **Step 1: Write classifier tests**
-
-Cover:
+- [ ] **Step 1: Write classifier RED tests**
 
 ```python
-401 -> auth
-403 + X-RateLimit-Remaining: 0 -> rate_limit
-403 + Retry-After -> rate_limit
-429 -> rate_limit
-403 without rate-limit evidence -> permission
-409/422 -> conflict
+@pytest.mark.parametrize(
+    ("status", "headers", "expected"),
+    [
+        (401, {}, "auth"),
+        (403, {"X-RateLimit-Remaining": "0"}, "rate_limit"),
+        (403, {"Retry-After": "30"}, "rate_limit"),
+        (429, {}, "rate_limit"),
+        (403, {}, "permission"),
+        (409, {}, "conflict"),
+        (422, {}, "conflict"),
+    ],
+)
+def test_github_failure_classification(status, headers, expected):
+    assert classify_github_http_failure(status, headers, {}) == expected
 ```
 
 - [ ] **Step 2: Verify RED**
 
 Run: `python -m pytest tests/test_github_http_classification.py -v`
 
-Expected: FAIL because all current 401/403 paths share one branch.
-
 - [ ] **Step 3: Implement classifier and integrate `_git_request()`**
 
-On `rate_limit`, preserve `_git_sync_enabled`, set `_GIT_REQUEST_STATE.failure = "rate_limit"`, and log reset/retry information from `Retry-After` or `X-RateLimit-Reset`.
-
-On 401 set `auth`; on non-rate-limit 403 set `permission`; only those may disable runtime sync when `disable_on_auth_failure=True`.
-
-Keep existing 409/422 body diagnostics.
+On `rate_limit`, preserve `_git_sync_enabled`, set `_GIT_REQUEST_STATE.failure = "rate_limit"`, and log `Retry-After` or `X-RateLimit-Reset`. On 401 set `auth`; on non-rate-limit 403 set `permission`; only those two may disable runtime sync when `disable_on_auth_failure=True`. Keep existing 409/422 body diagnostics.
 
 - [ ] **Step 4: Run Git/sync safety tests**
 
@@ -310,62 +357,69 @@ git commit -m "fix: preserve git sync during GitHub rate limits"
 ### Task 5: Remove Cloud DOM injection sinks and durable PAT storage
 
 **Files:**
-- Modify: `pages/zz_cloud/index.html` — markup only, external asset references
+- Modify: `pages/zz_cloud/index.html`
 - Create: `pages/zz_cloud/app.js`
 - Create: `pages/zz_cloud/style.css`
 - Modify: `pages/zz_cloud/_headers`
 - Modify: `tests/test_repository_contract.py`
+- Modify: `tests/test_v2114_integration_contract.py`
 - Create: `tests/test_cloud_security_contract.py`
 
 **Interfaces:**
-- Persistent `localStorage` record contains only `platform`, `owner`, `repo`, `branch`
-- Runtime `config.token` is populated only from the current password input/session and is not serialized
-- Dynamic remote strings are inserted with `textContent`/DOM nodes, not template `innerHTML`
-- CSP forbids inline scripts: `script-src 'self'`
+- Persistent localStorage record contains only `platform`, `owner`, `repo`, `branch`
+- Runtime `config.token` exists only in current page memory
+- Dynamic remote strings use `textContent`/DOM nodes
+- CSP includes `script-src 'self'` and no inline script requirement
 
 - [ ] **Step 1: Add RED security contract tests**
 
-Assert:
-
 ```python
-html = Path("pages/zz_cloud/index.html").read_text()
-js = Path("pages/zz_cloud/app.js").read_text() if Path(...).exists() else ""
-headers = Path("pages/zz_cloud/_headers").read_text()
+from pathlib import Path
 
-assert "<script>" not in html
-assert "<style>" not in html
-assert "localStorage.setItem(LS_KEY, JSON.stringify(cfg))" not in js
-assert "token:" not in the object passed to localStorage
-assert "cat.name}<" not in js
-assert "script-src 'self'" in headers
+
+def test_cloud_page_has_external_assets_and_nonpersistent_pat():
+    html = Path("pages/zz_cloud/index.html").read_text(encoding="utf-8")
+    js_path = Path("pages/zz_cloud/app.js")
+    js = js_path.read_text(encoding="utf-8") if js_path.exists() else ""
+    headers = Path("pages/zz_cloud/_headers").read_text(encoding="utf-8")
+
+    assert "<script>" not in html
+    assert "<style>" not in html
+    assert 'src="./app.js"' in html
+    assert 'href="./style.css"' in html
+    assert "localStorage.setItem(LS_KEY, JSON.stringify(cfg))" not in js
+    assert "function persistentConfig" in js
+    assert "cat.name}<" not in js
+    assert "script-src 'self'" in headers
 ```
 
-Add Node syntax check for the external Cloud JS.
+Add the existing Node syntax test for `pages/zz_cloud/app.js` after the file exists.
 
 - [ ] **Step 2: Verify RED**
 
 Run: `python -m pytest tests/test_cloud_security_contract.py tests/test_repository_contract.py -v`
 
-Expected: FAIL because current Cloud app is inline, stores token in localStorage, and interpolates category names into `innerHTML`.
-
 - [ ] **Step 3: Split Cloud static assets**
 
-Move the existing `<style>` body unchanged into `pages/zz_cloud/style.css` and the existing application `<script>` body into `pages/zz_cloud/app.js`. Reference them with:
+Move the current `<style>` body byte-for-byte into `pages/zz_cloud/style.css` and current application `<script>` body into `pages/zz_cloud/app.js`, then reference:
 
 ```html
 <link rel="stylesheet" href="./style.css">
 <script type="module" src="./app.js"></script>
 ```
 
-Keep external behavior unchanged before security edits.
+Run `node --check pages/zz_cloud/app.js` immediately after extraction before security edits.
 
 - [ ] **Step 4: Make config persistence tokenless**
 
-Implement:
-
 ```javascript
 function persistentConfig(cfg) {
-  return { platform: cfg.platform, owner: cfg.owner, repo: cfg.repo, branch: cfg.branch };
+  return {
+    platform: cfg.platform,
+    owner: cfg.owner,
+    repo: cfg.repo,
+    branch: cfg.branch,
+  };
 }
 
 function saveConfig(cfg) {
@@ -374,30 +428,26 @@ function saveConfig(cfg) {
 }
 ```
 
-`loadConfig()` never loads a token. Reloading the page returns to read-only mode until a token is entered again.
+`loadConfig()` never loads a token. Reload returns to read-only mode until token input is entered again.
 
-- [ ] **Step 5: Replace dynamic HTML interpolation**
+- [ ] **Step 5: Replace remote/user-dependent HTML interpolation**
 
-For category tabs, counters, filenames, errors, and status labels sourced from Git/GitHub, construct nodes and assign `textContent`. Keep only static constant `innerHTML` snippets where no remote/user value is interpolated; prefer `replaceChildren()` for all touched render functions.
+For category tabs, counts, filenames, status text and error text, create elements with `document.createElement`, assign dynamic values through `textContent`, and append with `append`/`replaceChildren`. Static constant markup may remain only where it contains no user/remote value.
 
 - [ ] **Step 6: Add CSP**
 
-In `_headers`, add at minimum:
+Add to `_headers`:
 
 ```text
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https://raw.githubusercontent.com; connect-src 'self' https://api.github.com https://gitee.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
 ```
 
-Adjust allowed origins only if the existing Cloud app demonstrably requires another fixed origin.
-
-- [ ] **Step 7: Run Cloud tests and Node syntax check**
+- [ ] **Step 7: Run Cloud tests**
 
 ```bash
 python -m pytest tests/test_cloud_security_contract.py tests/test_repository_contract.py tests/test_v2114_integration_contract.py -v
 node --check pages/zz_cloud/app.js
 ```
-
-Expected: PASS.
 
 - [ ] **Step 8: Commit**
 
@@ -411,27 +461,22 @@ git commit -m "fix: harden cloud gallery credentials and DOM rendering"
 ### Task 6: Release v2.11.11 and run the full gate
 
 **Files:**
-- Modify: `main.py` — `CURRENT_PLUGIN_VERSION`
+- Modify: `main.py`
 - Modify: `metadata.yaml`
 - Modify: `README.md`
-- Modify: version-pinned tests that intentionally validate packaging metadata
+- Modify: version-pinned packaging tests
 
-**Interfaces:**
-- Produces release `v2.11.11`
+- [ ] **Step 1: Update release-contract test first**
 
-- [ ] **Step 1: Write/update release-contract test first**
-
-Update `test_release_version_is_*_everywhere` to assert `v2.11.11` in metadata, README badge/changelog, and `CURRENT_PLUGIN_VERSION`.
+Rename/update the release test to assert exactly `v2.11.11` in metadata, README badge, newest changelog heading, and `CURRENT_PLUGIN_VERSION`.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `python -m pytest tests/test_repository_contract.py::test_release_version_is_2_11_11_everywhere -v`
+Run the renamed release test alone. Expected: FAIL while production metadata is still v2.11.10.
 
-Expected: FAIL while production metadata is still v2.11.10.
+- [ ] **Step 3: Update release metadata and README**
 
-- [ ] **Step 3: Update release metadata and README changelog**
-
-Add concise v2.11.11 notes covering permission enforcement, public-write fail-closed, upload validation/format correctness, GitHub rate-limit behavior, and Cloud PAT/DOM hardening.
+Add v2.11.11 notes for upload permission enforcement, public-write fail-closed behavior, upload limits/format correctness, GitHub rate-limit handling, and Cloud PAT/DOM hardening.
 
 - [ ] **Step 4: Run complete tests**
 
@@ -442,11 +487,9 @@ node --check pages/gallery/app.js
 node --check pages/zz_cloud/app.js
 ```
 
-Expected: all tests pass.
+- [ ] **Step 5: Require final-head CI/Cloudflare preview**
 
-- [ ] **Step 5: Push branch and require CI/Cloudflare preview**
-
-Require Python 3.10 success, Python 3.12 success, and Cloudflare preview success on the final branch head before PR merge.
+Python 3.10, Python 3.12 and Cloudflare preview must all be successful on the exact PR head.
 
 - [ ] **Step 6: Commit release metadata**
 
@@ -457,4 +500,4 @@ git commit -m "chore: release v2.11.11"
 
 - [ ] **Step 7: PR review invariants**
 
-Before merge verify the patch does **not** modify `_github_commit_renumber`, global renumber mapping semantics, `/看全部` rendering behavior, dHash threshold, or QQ sticker fallback behavior.
+Before merge verify no patch touches `_github_commit_renumber`, global renumber mapping semantics, `/看全部` rendering behavior, dHash threshold, or QQ sticker fallback behavior.
