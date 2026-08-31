@@ -2646,20 +2646,33 @@ class Main(Star):
         return success, failed, skipped
 
     def _git_delete_file(self, path: str, message: str) -> bool:
-        """删除远程仓库中的文件，SHA 缓存为空时会主动查询远程。"""
+        """删除远程文件；无法确认远端当前 SHA 时必须 fail-closed。"""
         with self._git_mutation_lock:
-            sha = self._sha_cache.get(path)
-            if not sha:
-                sha = self._git_fetch_file_sha(path)
-                if not sha:
-                    logger.info(f"[Git Sync] 跳过删除 {path}：远程文件不存在或无法获取 SHA。")
-                    return True
-    
             base = self._git_api_base()
             owner = self._git_owner()
             repo = self._git_repo()
             branch = self._git_branch()
             url = f"{base}/repos/{owner}/{repo}/contents/{path}"
+
+            sha = self._sha_cache.get(path)
+            if not sha:
+                status, data = self._git_request(
+                    "GET", url, params={"ref": branch}
+                )
+                if status == 404:
+                    self._sha_cache.pop(path, None)
+                    logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
+                    return True
+                if status != 200 or not isinstance(data, dict):
+                    logger.error(
+                        f"[Git Sync] 无法确认删除目标 {path} 的远程 SHA (HTTP {status})"
+                    )
+                    return False
+                sha = str(data.get("sha", "")).strip()
+                if not sha:
+                    logger.error(f"[Git Sync] 删除目标 {path} 的远程响应缺少 SHA。")
+                    return False
+                self._sha_cache[path] = sha
     
             if self._git_platform() == "gitee":
                 body = {"message": message, "sha": sha}
