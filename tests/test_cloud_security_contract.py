@@ -26,6 +26,16 @@ def test_cloud_page_uses_external_assets_and_csp_without_inline_code():
     assert "frame-ancestors 'none'" in headers
 
 
+def test_cloud_csp_allows_every_explicit_remote_fetch_origin():
+    js = (CLOUD_DIR / "app.js").read_text(encoding="utf-8")
+    headers = (CLOUD_DIR / "_headers").read_text(encoding="utf-8")
+
+    assert "https://api.github.com" in js
+    assert "https://gitee.com/api/v5" in js
+    assert "https://raw.githubusercontent.com/" in js
+    assert "connect-src 'self' https://api.github.com https://gitee.com https://raw.githubusercontent.com" in headers
+
+
 def test_cloud_persistent_config_never_serializes_write_token():
     js = (CLOUD_DIR / "app.js").read_text(encoding="utf-8")
 
