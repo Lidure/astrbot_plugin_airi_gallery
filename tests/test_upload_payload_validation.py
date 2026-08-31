@@ -100,5 +100,6 @@ def test_main_routes_chat_and_both_web_uploads_through_content_validation():
 
     assert "validate_image_payload(image_bytes)" in handle_upload
     assert 'if suffix == ".gif"' not in handle_upload
-    assert "decode_upload_image_batch(images" in internal_upload
-    assert "decode_upload_image_batch(images" in public_upload
+    for block in (internal_upload, public_upload):
+        assert "decode_upload_image_batch(" in block
+        assert "images, max_count=UPLOAD_BATCH_MAX" in " ".join(block.split())
