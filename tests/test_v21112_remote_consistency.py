@@ -48,7 +48,7 @@ def _load_sync_method(name: str, **extra_namespace):
     method = _main_method_node(name, async_method=False)
     module = ast.Module(body=[method], type_ignores=[])
     ast.fix_missing_locations(module)
-    namespace = {"logger": FakeLogger(), **extra_namespace}
+    namespace = {"logger": FakeLogger(), "Path": Path, **extra_namespace}
     exec(compile(module, "main.py", "exec"), namespace)
     return namespace[name]
 
