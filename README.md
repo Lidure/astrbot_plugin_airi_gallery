@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.12-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.13-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -339,6 +339,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.13
+
+- **去重权限边界** 修复通用消息分发路径可绕过 `use_permission` 直接执行 `/去重图库` 的问题；现在任何去重扫描/删除开始前都会先校验管理员或白名单权限，未授权用户只收到拒绝提示，不会进入图库去重删除流程。
+
 ### v2.11.12
 
 - **删除事务一致性** 普通图片删除改为远端删除成功后才提交本地删除；远端失败会保留本地文件，Web、聊天命令和去重入口统一使用同一安全路径。

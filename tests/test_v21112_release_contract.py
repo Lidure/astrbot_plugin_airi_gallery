@@ -3,15 +3,12 @@ from pathlib import Path
 import yaml
 
 
-def test_v21112_version_is_consistent_everywhere():
-    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
-    main_source = Path("main.py").read_text(encoding="utf-8")
+def test_v21112_release_remains_in_changelog():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert metadata["version"] == "v2.11.12"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.12"' in main_source
-    assert "Version-v2.11.12-pink" in readme
-    assert "## 🚀 更新日志\n### v2.11.12" in readme
+    assert "### v2.11.12" in readme
+    assert "删除事务一致性" in readme
+    assert "GitHub 原子上传" in readme
 
 
 def test_v21112_readme_documents_remote_consistency_guarantees():

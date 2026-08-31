@@ -167,7 +167,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.12"
+CURRENT_PLUGIN_VERSION = "v2.11.13"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -683,13 +683,16 @@ class Main(Star):
             elif kind == "force_similar_upload":
                 await self._handle_force_similar_upload(event)
             elif kind == "dedupe_gallery":
-                removed, details = await self._dedupe_gallery(str(payload) if payload else None)
-                if payload:
-                    await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))
+                if not self._is_allowed(event):
+                    await event.send(event.plain_result("没有权限执行此操作。"))
                 else:
-                    await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
-                if details:
-                    await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
+                    removed, details = await self._dedupe_gallery(str(payload) if payload else None)
+                    if payload:
+                        await event.send(event.plain_result(f"已清理《{payload}》重复图片 {removed} 张。"))
+                    else:
+                        await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
+                    if details:
+                        await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
             elif kind == "delete":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
