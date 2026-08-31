@@ -39,6 +39,9 @@ let aliases = [];
 let aliasesLoaded = false;
 let aliasesDirty = false;
 const imgCache = {};
+let gridImageObserver = null;
+let modalObjectUrl = "";
+const uploadPreviewObjectUrls = new Set();
 
 const galleryViewTab = $("view-gallery-tab");
 const aliasesViewTab = $("view-aliases-tab");
@@ -121,6 +124,101 @@ function makeBlobUrl(data, contentType) {
   }
 }
 
+function releasePreviewObjectUrls(urls) {
+  for (const url of urls) {
+    try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale URLs */ }
+  }
+  urls.clear();
+}
+
+function releaseModalObjectUrl() {
+  if (!modalObjectUrl) return;
+  try { URL.revokeObjectURL(modalObjectUrl); } catch (error) { /* ignore stale URLs */ }
+  modalObjectUrl = "";
+}
+
+function setModalImagePayload(data, alt) {
+  const url = makeBlobUrl(data?.data, data?.content_type);
+  if (!url) return false;
+  releaseModalObjectUrl();
+  modalObjectUrl = url;
+  modalImage.src = url;
+  modalImage.alt = alt;
+  mask.classList.add("show");
+  closeBtn.focus();
+  return true;
+}
+
+function revokeGridImageUrl(image) {
+  const url = image?.dataset?.objectUrl || "";
+  if (!url) return;
+  try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale URLs */ }
+  delete image.dataset.objectUrl;
+}
+
+function releaseGridImageResources() {
+  if (gridImageObserver) {
+    gridImageObserver.disconnect();
+    gridImageObserver = null;
+  }
+  for (const image of grid.querySelectorAll("img[data-object-url]")) {
+    revokeGridImageUrl(image);
+    image.removeAttribute("src");
+  }
+}
+
+async function loadGridImage(image) {
+  if (!image?.isConnected) return;
+  if (image.dataset.loadState === "loading" || image.dataset.loadState === "loaded") return;
+  const category = image.dataset.category || "";
+  const name = image.dataset.name || "";
+  if (!category || !name) return;
+  image.dataset.loadState = "loading";
+  try {
+    const data = await apiGet("category_image", { category, name });
+    const url = makeBlobUrl(data?.data, data?.content_type);
+    if (!url) throw new Error("图片数据为空");
+    if (!image.isConnected || image.dataset.category !== category || image.dataset.name !== name) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    revokeGridImageUrl(image);
+    image.dataset.objectUrl = url;
+    image.src = url;
+    image.dataset.loadState = "loaded";
+  } catch (error) {
+    if (image.isConnected) image.dataset.loadState = "failed";
+    console.warn("[gallery] failed to lazy-load image", category, name, error);
+  }
+}
+
+function observeGridImage(image) {
+  if (typeof window.IntersectionObserver !== "function") {
+    void loadGridImage(image);
+    return;
+  }
+  if (!gridImageObserver) {
+    gridImageObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        gridImageObserver?.unobserve(entry.target);
+        void loadGridImage(entry.target);
+      }
+    }, { rootMargin: "400px 0px" });
+  }
+  gridImageObserver.observe(image);
+}
+
+async function openImagePreview(category, name) {
+  try {
+    const data = await apiGet("category_image", { category, name });
+    if (!setModalImagePayload(data, name)) throw new Error("图片数据为空");
+  } catch (error) {
+    console.warn("[gallery] failed to load image preview", category, name, error);
+    showMsg("图片预览加载失败", false);
+  }
+}
+
 async function loadCats() {
   try {
     const data = await apiGet("categories");
@@ -190,6 +288,7 @@ function clearImageCache(category = "") {
 
 async function loadImgs() {
   if (!currentCat) {
+    releaseGridImageResources();
     grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>';
     pager.hidden = true;
     return;
@@ -200,6 +299,7 @@ async function loadImgs() {
     renderPagination();
     return;
   }
+  releaseGridImageResources();
   grid.innerHTML = '<div class="empty">加载中...</div>';
   try {
     const data = await apiGet("category_images", {
@@ -215,6 +315,7 @@ async function loadImgs() {
     renderGrid(imgCache[cacheKey]);
     renderPagination();
   } catch (error) {
+    releaseGridImageResources();
     grid.innerHTML = '<div class="empty">加载失败，请稍后重试</div>';
     pager.hidden = true;
   }
@@ -222,6 +323,7 @@ async function loadImgs() {
 
 function renderGrid(data) {
   const images = data.imgs;
+  releaseGridImageResources();
   grid.replaceChildren();
   if (!images.length) {
     const empty = document.createElement("div");
@@ -240,8 +342,11 @@ function renderGrid(data) {
 
     const image = document.createElement("img");
     image.loading = "lazy";
+    image.decoding = "async";
     image.alt = name;
-    image.src = makeBlobUrl(item.data, item.ct);
+    image.dataset.category = currentCat;
+    image.dataset.name = name;
+    image.dataset.loadState = "idle";
 
     const badge = document.createElement("span");
     badge.className = "badge";
@@ -256,9 +361,10 @@ function renderGrid(data) {
       event.stopPropagation();
       deleteButton.disabled = true;
       try {
-        const result = await apiPost("delete_image", { category: currentCat, name });
+        const category = image.dataset.category;
+        const result = await apiPost("delete_image", { category, name });
         if (result?.ok === false) throw new Error(result.error || "删除失败");
-        clearImageCache(currentCat);
+        clearImageCache(category);
         await loadImgs();
         showMsg(`已删除 ${name}`);
       } catch (error) {
@@ -268,10 +374,7 @@ function renderGrid(data) {
     });
 
     const openPreview = () => {
-      modalImage.src = makeBlobUrl(item.data, item.ct);
-      modalImage.alt = name;
-      mask.classList.add("show");
-      closeBtn.focus();
+      void openImagePreview(image.dataset.category, name);
     };
     imageItem.addEventListener("click", openPreview);
     imageItem.addEventListener("keydown", event => {
@@ -283,6 +386,7 @@ function renderGrid(data) {
 
     imageItem.append(image, badge, deleteButton);
     grid.appendChild(imageItem);
+    observeGridImage(image);
   }
 }
 
@@ -355,6 +459,7 @@ function addFiles(fileList) {
 }
 
 function renderPreview() {
+  releasePreviewObjectUrls(uploadPreviewObjectUrls);
   preview.replaceChildren();
   preview.hidden = pendingFiles.length === 0;
   upActions.hidden = pendingFiles.length === 0;
@@ -363,7 +468,9 @@ function renderPreview() {
     const item = document.createElement("div");
     item.className = "preview-item";
     const image = document.createElement("img");
-    image.src = URL.createObjectURL(file);
+    const objectUrl = URL.createObjectURL(file);
+    uploadPreviewObjectUrls.add(objectUrl);
+    image.src = objectUrl;
     image.alt = file.name;
     const removeButton = document.createElement("button");
     removeButton.type = "button";
@@ -405,16 +512,7 @@ function matchText(match, includeSimilarity = true) {
 async function showMatchPreview(match) {
   const location = parseGalleryMatchPath(match?.path);
   if (!location) return;
-  try {
-    const data = await apiGet("category_image", location);
-    const url = makeBlobUrl(data.data, data.content_type);
-    if (!url) return;
-    modalImage.src = url;
-    modalImage.alt = location.name;
-    mask.classList.add("show");
-  } catch (error) {
-    console.warn("[gallery] failed to load dedup preview", error);
-  }
+  await openImagePreview(location.category, location.name);
 }
 
 async function encodeUploadFile(file) {
@@ -659,6 +757,9 @@ aliasReloadBtn.addEventListener("click", async () => {
 });
 
 window.addEventListener("beforeunload", event => {
+  releaseGridImageResources();
+  releasePreviewObjectUrls(uploadPreviewObjectUrls);
+  releaseModalObjectUrl();
   if (!aliasesDirty) return;
   event.preventDefault();
   event.returnValue = "";
@@ -667,6 +768,7 @@ window.addEventListener("beforeunload", event => {
 function closePreview() {
   mask.classList.remove("show");
   modalImage.removeAttribute("src");
+  releaseModalObjectUrl();
 }
 
 closeBtn.addEventListener("click", closePreview);
