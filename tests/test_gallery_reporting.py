@@ -67,3 +67,62 @@ def test_renumber_report_preserves_failure_empty_and_remote_success_messages():
     assert gallery_reporting.format_renumber_report(
         {"ok": True, "total": "4", "renamed": "2", "remote": True}
     ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件；本地与 GitHub 编号一致。"
+
+
+def test_upload_decision_serialization_preserves_public_api_shape_and_rounding():
+    fingerprint = gallery_safety.ImageFingerprint(
+        content_hash="content",
+        blob_sha="blob",
+        perceptual_hash="0123456789abcdef",
+    )
+    exact = gallery_safety.UploadMatch(
+        path="gallery/airi/12.png",
+        number=12,
+        similarity=1.0,
+        distance=0,
+    )
+    similar = gallery_safety.UploadMatch(
+        path="gallery/miku/custom.png",
+        number=None,
+        similarity=0.93456789,
+        distance=4,
+    )
+    decision = gallery_safety.IndexedUploadDecision(
+        allowed=False,
+        reason="similar",
+        fingerprint=fingerprint,
+        exact_match=exact,
+        similar_matches=(similar,),
+    )
+
+    assert gallery_reporting.serialize_upload_decision(decision) == {
+        "reason": "similar",
+        "exact_match": {
+            "path": "gallery/airi/12.png",
+            "number": 12,
+            "similarity": 1.0,
+            "distance": 0,
+        },
+        "similar_matches": [
+            {
+                "path": "gallery/miku/custom.png",
+                "number": None,
+                "similarity": 0.934568,
+                "distance": 4,
+            }
+        ],
+    }
+
+
+def test_upload_match_label_prefers_number_and_falls_back_to_path():
+    numbered = gallery_safety.UploadMatch(
+        path="gallery/airi/12.png", number=12, similarity=1.0, distance=0
+    )
+    unnumbered = gallery_safety.UploadMatch(
+        path="gallery/airi/custom.png", number=None, similarity=0.876, distance=8
+    )
+
+    assert gallery_reporting.format_upload_match_label(numbered) == "#12（100.0%）"
+    assert gallery_reporting.format_upload_match_label(unnumbered) == (
+        "gallery/airi/custom.png（87.6%）"
+    )
