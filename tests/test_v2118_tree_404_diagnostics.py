@@ -1,38 +1,91 @@
-from pathlib import Path
+from unittest.mock import Mock
+
+import gallery_remote
+from gallery_remote import GalleryRemote
 
 
-def _main_source() -> str:
-    return Path("main.py").read_text(encoding="utf-8")
+class LoggerStub:
+    def __init__(self):
+        self.warning_messages = []
+
+    def warning(self, message, *args, **kwargs):
+        self.warning_messages.append(str(message))
+
+    def info(self, *args, **kwargs):
+        pass
+
+    def error(self, *args, **kwargs):
+        pass
 
 
-def test_tree_404_is_only_retryable_after_base_tree_verification():
-    source = _main_source()
-    create_block = source.split("    def _git_create_github_tree", 1)[1].split("\n    def ", 1)[0]
-    verify_block = source.split("    def _git_verify_github_tree_exists", 1)[1].split("\n    def ", 1)[0]
-
-    assert "def _git_verify_github_tree_exists" in source
-    assert "status == 404" in create_block
-    assert "base_tree_sha" in create_block
-    assert "self._git_verify_github_tree_exists(base_tree_sha)" in create_block
-    assert "verified_404" in create_block
-    assert "disable_on_auth_failure=False" in verify_block
-    assert "404" not in next(
-        line for line in source.splitlines()
-        if line.startswith("GITHUB_TREE_CREATE_RETRY_STATUSES = ")
+def _remote(logger=None):
+    return GalleryRemote(
+        {
+            "git_platform": "github",
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+        },
+        logger=logger,
     )
 
 
-def test_tree_failure_log_contains_body_base_and_mutation_context():
-    source = _main_source()
-    create_block = source.split("    def _git_create_github_tree", 1)[1].split("\n    def ", 1)[0]
-    delta_block = source.split("    def _git_apply_category_tree_delta", 1)[1].split("\n    def ", 1)[0]
+def test_tree_404_is_only_retryable_after_base_tree_verification(monkeypatch):
+    remote = _remote()
+    remote.request = Mock(
+        side_effect=[
+            (404, {"message": "tree endpoint transient failure"}),
+            (200, {"sha": "base-tree"}),
+            (201, {"sha": "new-tree"}),
+        ]
+    )
+    monkeypatch.setattr(gallery_remote.time, "sleep", lambda _: None)
 
-    assert "context: str = \"\"" in create_block
-    assert "body=" in create_block
-    assert "base_tree=" in create_block
-    assert "context=" in create_block
-    assert "category: str" in delta_block
-    assert 'phase_name = "delete"' in delta_block
-    assert 'phase_name = "upsert"' in delta_block
-    assert "batch=" in delta_block
-    assert "context=context" in delta_block
+    assert remote.create_github_tree("base-tree", [{"path": "1.jpg"}]) == "new-tree"
+    verify_call = remote.request.call_args_list[1]
+    assert verify_call.args[0] == "GET"
+    assert verify_call.kwargs["disable_on_auth_failure"] is False
+    assert 404 not in gallery_remote.GITHUB_TREE_CREATE_RETRY_STATUSES
+
+    unverified = _remote()
+    unverified.request = Mock(
+        side_effect=[
+            (404, {"message": "missing tree"}),
+            (404, {"message": "still missing"}),
+        ]
+    )
+    assert unverified.create_github_tree("missing-tree", [{"path": "1.jpg"}]) is None
+    assert unverified.request.call_count == 2
+
+
+def test_tree_failure_log_contains_body_base_and_mutation_context(monkeypatch):
+    logger = LoggerStub()
+    remote = _remote(logger)
+    remote.request = Mock(return_value=(503, {"message": "gateway down"}))
+    monkeypatch.setattr(gallery_remote.time, "sleep", lambda _: None)
+
+    assert remote.create_github_tree(
+        "base-tree",
+        [{"path": "1.jpg"}],
+        context="category=airi phase=upsert batch=1/1",
+    ) is None
+
+    joined = "\n".join(logger.warning_messages)
+    assert "body={'message': 'gateway down'}" in joined
+    assert "base_tree=base-tree" in joined
+    assert "context=category=airi phase=upsert batch=1/1" in joined
+
+    calls = []
+    delta = _remote()
+    delta.create_github_tree = lambda base, entries, context="": (
+        calls.append((base, list(entries), context)) or "next-tree"
+    )
+    result = delta.apply_category_tree_delta(
+        "airi",
+        "base-tree",
+        ({"path": "old.jpg", "sha": None},),
+        ({"path": "new.jpg", "sha": "blob"},),
+    )
+    assert result == "next-tree"
+    assert "phase=upsert" in calls[0][2]
+    assert "batch=1/1" in calls[0][2]
+    assert "phase=delete" in calls[1][2]
