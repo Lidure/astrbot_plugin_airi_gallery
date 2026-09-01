@@ -19,3 +19,4 @@ def test_remote_gallery_image_path_does_not_reinterpret_backslashes_as_separator
 
     assert classifier(r"gallery\airi\1.jpg", IMAGE_SUFFIXES) is False
     assert classifier(r"gallery/airi\1.jpg", IMAGE_SUFFIXES) is False
+    assert classifier(r"gallery/airi/nested\2.jpg", IMAGE_SUFFIXES) is False
