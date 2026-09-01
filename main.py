@@ -474,6 +474,10 @@ class Main(Star):
             ensure_perceptual_index=self._ensure_perceptual_index,
             manifest_path=GALLERY_INDEX_PATH,
             manifest_algorithm=GALLERY_INDEX_ALGORITHM,
+            remote_manifest_reader=self._read_remote_perceptual_manifest,
+            manifest_payload_factory=self._gallery_manifest_payload,
+            manifest_publisher=self._publish_gallery_manifest,
+            rollback_stored_image=self._rollback_stored_image,
         )
         self._diagnostic_task: asyncio.Task | None = None
         self._diagnostic_update_cache = UpdateProbeCache(
@@ -2071,21 +2075,8 @@ class Main(Star):
     def _prepare_remote_upload_guard(
         self, category: str
     ) -> tuple[bool, tuple[IndexedImage, ...], int]:
-        """Snapshot remote exact + perceptual state before an upload."""
-        del category  # dedup is global; the argument remains for API compatibility.
-        if not self._git_sync_enabled:
-            return True, (), 0
-        tree = self._git_list_tree()
-        if tree is None:
-            return False, (), 0
-        manifest_ok, manifest = self._read_remote_perceptual_manifest(tree)
-        if not manifest_ok:
-            return False, (), 0
-        return (
-            True,
-            indexed_images_from_remote_tree(tree, manifest, IMAGE_SUFFIXES),
-            remote_gallery_max_index(tree, IMAGE_SUFFIXES),
-        )
+        """Compatibility delegate; GallerySync owns remote upload admission snapshots."""
+        return self.sync.prepare_remote_upload_guard(category)
 
     def _git_get_file(self, path: str) -> bytes | None:
         return self._remote_service().get_file(path)
@@ -2170,25 +2161,9 @@ class Main(Star):
         *,
         create_only_paths: set[str] | None = None,
     ) -> bool:
-        """GitHub 批量推送：多个文件共用一个 commit。"""
-        if not items:
-            return True
-
-        blob_items: list[tuple[str, bytes, str]] = []
-        for git_path, content in items:
-            if self._git_push_cancelled:
-                return False
-            blob_sha = self._git_create_github_blob(content)
-            if not blob_sha:
-                logger.warning(f"[Git Sync] 批量 blob 创建失败: {git_path}")
-                return False
-            blob_items.append((git_path, content, blob_sha))
-
-        message = f"Sync {len(blob_items)} gallery files"
-        return self._git_commit_github_batch(
-            blob_items,
-            message,
-            create_only_paths=create_only_paths,
+        """Compatibility delegate; GallerySync owns GitHub content batching."""
+        return self.sync.push_github_items(
+            items, create_only_paths=create_only_paths
         )
 
     def _git_push_pending_items(self, items: list[tuple[str, bytes]]) -> tuple[int, int, int]:
@@ -2227,25 +2202,8 @@ class Main(Star):
         return self.sync.sync_from_remote()
 
     def _git_push_file(self, local_abs_path: str) -> bool:
-        """Push one newly admitted local image without overwriting a raced cloud path."""
-        if not self._git_sync_enabled:
-            return False
-        git_path = self._to_git_path(local_abs_path)
-        if not git_path:
-            return False
-        try:
-            content = Path(local_abs_path).read_bytes()
-            uploaded, remote_sha = self._git_put_file(
-                git_path, content, f"Upload {git_path}", create_only=True
-            )
-            if uploaded:
-                if remote_sha:
-                    self._remember_verified_remote_content(git_path, content, remote_sha)
-                logger.info(f"[Git Sync] 已推送到远程: {git_path}")
-                return True
-        except Exception as exc:
-            logger.error(f"[Git Sync] 推送文件失败 {git_path}: {exc}")
-        return False
+        """Compatibility delegate; GallerySync owns create-only single-file pushes."""
+        return self.sync.push_file_create_only(local_abs_path)
 
     def _git_delete_remote_file(self, local_abs_path: str) -> bool:
         """删除本地路径对应的远程文件，并把结果反馈给一致性调用方。"""
@@ -2861,100 +2819,8 @@ class Main(Star):
     def _push_staged_upload_transaction(
         self, staged_paths: list[Path], category: str
     ) -> bool:
-        """提交一批已落盘图片；GitHub 将图片与感知索引放进同一 commit。"""
-        if not staged_paths:
-            return True
-        if not self._git_sync_enabled:
-            return True
-        if self._git_push_cancelled or (
-            hasattr(self, "_shutdown_event") and self._shutdown_event.is_set()
-        ):
-            self._rollback_staged_uploads(staged_paths, category)
-            return False
-
-        image_items: list[tuple[str, bytes]] = []
-        image_paths: set[str] = set()
-        try:
-            for local_path in staged_paths:
-                git_path = self._to_git_path(str(local_path))
-                if not git_path:
-                    raise ValueError(f"无法解析远程路径: {local_path}")
-                content = local_path.read_bytes()
-                image_items.append((git_path, content))
-                image_paths.add(git_path)
-        except (OSError, ValueError) as exc:
-            logger.warning(f"[Git Sync] 准备上传事务失败: {exc}")
-            self._rollback_staged_uploads(staged_paths, category)
-            return False
-
-        if self._git_platform() == "github":
-            manifest_payload = json.dumps(
-                self._gallery_manifest_payload(),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            transaction_items = image_items + [
-                (GALLERY_INDEX_PATH, manifest_payload)
-            ]
-            self._git_ref_update_outcome = None
-            committed = self._git_push_batch_github(
-                transaction_items,
-                create_only_paths=image_paths,
-            )
-            if not committed:
-                ref_outcome = getattr(self, "_git_ref_update_outcome", None)
-                if ref_outcome == "uncertain":
-                    logger.warning(
-                        "[Git Sync] GitHub ref 更新结果不确定，已保留本地 staged 文件，"
-                        "避免远端可能已成功时制造远端孤儿；请立即同步核对。"
-                    )
-                else:
-                    self._rollback_staged_uploads(staged_paths, category)
-                return False
-
-            try:
-                for git_path, content in image_items:
-                    remote_sha = self._sha_cache.get(git_path, "")
-                    self._remember_verified_remote_content(
-                        git_path, content, remote_sha, save=False
-                    )
-            finally:
-                self._save_hash_index()
-            return True
-
-        # Gitee 没有等价的 Git Data 单提交路径：串行写入并在失败时补偿。
-        with self._git_mutation_lock:
-            pushed_paths: list[Path] = []
-
-            def compensate_gitee_partial_uploads() -> None:
-                pushed_set = set(pushed_paths)
-                for pushed_path in reversed(pushed_paths):
-                    if self._git_delete_remote_file(str(pushed_path)):
-                        self._rollback_stored_image(pushed_path, category)
-                    else:
-                        logger.error(
-                            f"[Git Sync] Gitee 补偿删除失败，已保留对应本地文件避免远端孤儿: {pushed_path}"
-                        )
-                for staged_path in staged_paths:
-                    if staged_path not in pushed_set:
-                        self._rollback_stored_image(staged_path, category)
-                if pushed_paths and not self._publish_gallery_manifest():
-                    logger.warning(
-                        "[Git Sync] Gitee 一致性补偿后的感知索引修复失败，请立即同步核对。"
-                    )
-            for local_path in staged_paths:
-                if self._git_push_cancelled or not self._git_push_file(str(local_path)):
-                    compensate_gitee_partial_uploads()
-                    return False
-                pushed_paths.append(local_path)
-
-            manifest_ok = self._publish_gallery_manifest()
-            if manifest_ok:
-                return True
-
-            compensate_gitee_partial_uploads()
-            return False
+        """Compatibility delegate; GallerySync owns the staged upload transaction."""
+        return self.sync.push_staged_upload_transaction(staged_paths, category)
 
     async def _delete_image_consistently(self, image_path: Path, category: str) -> bool:
         """远端启用时先删远端；提交本地删除前重新确认仍是原文件。"""

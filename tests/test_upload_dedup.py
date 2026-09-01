@@ -103,12 +103,13 @@ def test_remote_max_index_covers_all_categories_for_global_numbering():
 
 
 def test_main_upload_paths_use_dual_remote_guard_when_git_sync_is_enabled():
-    source = Path("main.py").read_text(encoding="utf-8")
+    main_source = Path("main.py").read_text(encoding="utf-8")
+    sync_source = Path("gallery_sync.py").read_text(encoding="utf-8")
 
-    assert "_prepare_remote_upload_guard" in source
-    assert "evaluate_upload_dedup" in source
-    assert "remote_gallery_max_index" in source
-    assert "远程查重失败" in source
-    assert "create_only=True" in source
-    assert "_rollback_stored_image" in source
-    assert "run_in_executor(\n                    None, self._git_push_file" not in source
+    assert "_prepare_remote_upload_guard" in main_source
+    assert "evaluate_upload_dedup" in main_source
+    assert "远程查重失败" in main_source
+    assert "remote_gallery_max_index" in sync_source
+    assert "create_only=True" in sync_source
+    assert "_rollback_stored_image" in main_source
+    assert "run_in_executor(\n                    None, self._git_push_file" not in main_source

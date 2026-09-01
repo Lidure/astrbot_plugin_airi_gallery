@@ -189,15 +189,17 @@ def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
 
 
 def test_upload_transaction_commits_images_and_manifest_together_on_github():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = _method_block(source, "_push_staged_upload_transaction")
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    block = source.split("    def push_staged_upload_transaction", 1)[1].split(
+        "    def remap_renumber_state", 1
+    )[0]
 
-    assert "GALLERY_INDEX_PATH" in block
-    assert "_gallery_manifest_payload()" in block
-    assert "_git_push_batch_github(" in block
+    assert "self.manifest_path" in block
+    assert "self.manifest_payload_factory()" in block
+    assert "self.push_github_items(" in block
     assert "create_only_paths=image_paths" in block
-    assert "_publish_gallery_manifest" in block  # Gitee compensation path only.
-    assert "_git_delete_remote_file" in block
+    assert "self.manifest_publisher" in block  # Gitee compensation path only.
+    assert "self.delete_file" in block
 
 
 def test_all_upload_surfaces_use_one_staged_transaction_without_per_file_remote_commits():
