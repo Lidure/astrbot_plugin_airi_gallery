@@ -19,6 +19,18 @@ jobs:
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
       - run: python -m pytest tests -v
 
+  dependency-floor:
+    name: dependency-floor (3.10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install Pillow==10.0.0 requests==2.28.0 pytest pyyaml quart
+      - run: python -m pytest tests -v
+
   astrbot-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
