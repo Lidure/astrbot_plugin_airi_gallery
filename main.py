@@ -423,6 +423,7 @@ class Main(Star):
             sanitize_component=_sanitize_component,
             default_category=DEFAULT_CATEGORY,
             logger=logger,
+            perceptual_max_distance=PERCEPTUAL_MAX_DISTANCE,
         )
         self.store.load_hash_index()
         self.view_command_mode = self._resolve_view_command_mode()
@@ -458,7 +459,7 @@ class Main(Star):
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
 
         # Git 远程同步事务状态由 GallerySync 单独拥有；Main 仅保留兼容代理。
-        self._gallery_write_lock = threading.RLock()
+        self._gallery_write_lock = self.store.write_lock
         self.remote = GalleryRemote(
             self.config,
             logger=logger,
@@ -471,13 +472,11 @@ class Main(Star):
             image_suffixes=IMAGE_SUFFIXES,
             logger=logger,
             gallery_write_lock=self._gallery_write_lock,
-            ensure_perceptual_index=self._ensure_perceptual_index,
             manifest_path=GALLERY_INDEX_PATH,
             manifest_algorithm=GALLERY_INDEX_ALGORITHM,
             remote_manifest_reader=self._read_remote_perceptual_manifest,
             manifest_payload_factory=self._gallery_manifest_payload,
             manifest_publisher=self._publish_gallery_manifest,
-            rollback_stored_image=self._rollback_stored_image,
         )
         self._diagnostic_task: asyncio.Task | None = None
         self._diagnostic_update_cache = UpdateProbeCache(
@@ -1931,46 +1930,11 @@ class Main(Star):
         return self._remote_service().list_tree_at(tree_sha)
 
     def _ensure_perceptual_index(self) -> None:
-        """Fill missing perceptual hashes once and persist them in hash_index.json."""
-        changed = False
-        for image_path in self._iter_image_files():
-            key = self._hash_index_key(image_path)
-            if not key:
-                continue
-            try:
-                stat_data = self._hash_index_stat(image_path)
-            except FileNotFoundError:
-                continue
-            with self._hash_index_lock:
-                entry = self._hash_index.get(key)
-            if (
-                isinstance(entry, dict)
-                and entry.get("size") == stat_data["size"]
-                and entry.get("mtime_ns") == stat_data["mtime_ns"]
-                and entry.get("hash")
-                and entry.get("perceptual_hash")
-            ):
-                continue
-            try:
-                content = image_path.read_bytes()
-                digest = hashlib.sha256(content).hexdigest()
-                phash = perceptual_hash_from_bytes(content)
-            except Exception as exc:
-                logger.warning(f"计算感知哈希失败 {image_path}: {exc}")
-                continue
-            self._remember_file_hash(
-                image_path,
-                digest,
-                category=image_path.parent.name,
-                save=False,
-                perceptual_hash=phash,
-            )
-            changed = True
-        if changed:
-            self._save_hash_index()
+        """Compatibility delegate; GalleryStore owns local perceptual index repair."""
+        return self.store.ensure_perceptual_index()
 
     def _indexed_local_images(self) -> tuple[IndexedImage, ...]:
-        self._ensure_perceptual_index()
+        """Compatibility delegate; GalleryStore owns active local indexed images."""
         return self.store.indexed_local_images()
 
     def _gallery_manifest_payload(self) -> dict:
@@ -2700,61 +2664,16 @@ class Main(Star):
         min_index: int = 1,
         stop_on_similar: bool = False,
     ) -> list[tuple[Path | None, IndexedUploadDecision]]:
-        """Store one upload batch from a single local dedup/number snapshot."""
-        if not candidates:
-            return []
-
-        with self._gallery_write_lock:
-            local_records = list(self._indexed_local_images())
-            next_index = max(self._next_index(), max(1, int(min_index)))
-            outcomes: list[tuple[Path | None, IndexedUploadDecision]] = []
-            try:
-                for ext, image_bytes in candidates:
-                    candidate = compute_image_fingerprint(image_bytes)
-                    decision = evaluate_indexed_upload(
-                        candidate,
-                        local_records=local_records,
-                        remote_records=remote_records,
-                        remote_checked=remote_checked,
-                        perceptual_max_distance=PERCEPTUAL_MAX_DISTANCE,
-                        force_similar=False,
-                    )
-                    if not decision.allowed:
-                        outcomes.append((None, decision))
-                        if stop_on_similar and decision.reason == "similar":
-                            break
-                        continue
-
-                    target_path = category_dir / f"{next_index}{ext}"
-                    while target_path.exists():
-                        next_index += 1
-                        target_path = category_dir / f"{next_index}{ext}"
-
-                    target_path.write_bytes(image_bytes)
-                    self._invalidate_category_hash_cache(category)
-                    self._remember_file_hash(
-                        target_path,
-                        candidate.content_hash,
-                        category=category,
-                        save=False,
-                        perceptual_hash=candidate.perceptual_hash,
-                    )
-                    git_path = self._hash_index_key(target_path)
-                    if not git_path:
-                        raise RuntimeError(f"无法建立上传图片索引路径：{target_path}")
-                    local_records.append(
-                        IndexedImage(
-                            path=git_path,
-                            content_hash=candidate.content_hash,
-                            blob_sha=candidate.blob_sha,
-                            perceptual_hash=candidate.perceptual_hash,
-                        )
-                    )
-                    outcomes.append((target_path, decision))
-                    next_index += 1
-            finally:
-                self._save_hash_index()
-            return outcomes
+        """Compatibility delegate; GalleryStore owns batch admission/storage."""
+        return self.store.store_unique_image_batch(
+            category_dir,
+            category,
+            candidates,
+            remote_records=remote_records,
+            remote_checked=remote_checked,
+            min_index=min_index,
+            stop_on_similar=stop_on_similar,
+        )
 
     def _store_unique_image(
         self,
@@ -2769,45 +2688,22 @@ class Main(Star):
         force_similar: bool = False,
         fingerprint: ImageFingerprint | None = None,
     ) -> tuple[Path | None, IndexedUploadDecision]:
-        """Evaluate one fingerprint against both indexes, then optionally store it."""
-        with self._gallery_write_lock:
-            candidate = fingerprint or compute_image_fingerprint(image_bytes)
-            decision = evaluate_indexed_upload(
-                candidate,
-                local_records=self._indexed_local_images(),
-                remote_records=remote_records,
-                remote_checked=remote_checked,
-                perceptual_max_distance=PERCEPTUAL_MAX_DISTANCE,
-                force_similar=force_similar,
-            )
-            if not decision.allowed:
-                return None, decision
-
-            index = max(self._next_index(), max(1, int(min_index)))
-            target_path = category_dir / f"{index}{ext}"
-            while target_path.exists():
-                index += 1
-                target_path = category_dir / f"{index}{ext}"
-
-            target_path.write_bytes(image_bytes)
-            self._invalidate_category_hash_cache(category)
-            self._remember_file_hash(
-                target_path,
-                candidate.content_hash,
-                category=category,
-                perceptual_hash=candidate.perceptual_hash,
-            )
-            return target_path, decision
+        """Compatibility delegate; GalleryStore owns single-image admission/storage."""
+        return self.store.store_unique_image(
+            category_dir,
+            category,
+            ext,
+            image_bytes,
+            remote_records=remote_records,
+            remote_checked=remote_checked,
+            min_index=min_index,
+            force_similar=force_similar,
+            fingerprint=fingerprint,
+        )
 
     def _rollback_stored_image(self, path: Path, category: str) -> None:
-        """Remove a local candidate when its required remote push did not complete."""
-        with self._gallery_write_lock:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning(f"回滚上传文件失败 {path}: {exc}")
-            self._invalidate_category_hash_cache(category)
-            self._forget_file_hash(path)
+        """Compatibility delegate; GalleryStore owns staged local rollback."""
+        return self.store.rollback_stored_image(path, category)
 
     def _rollback_staged_uploads(
         self, staged_paths: list[Path], category: str

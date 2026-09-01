@@ -9,21 +9,31 @@ from collections.abc import Callable
 try:
     from .gallery_safety import (
         HASH_INDEX_VERSION,
+        ImageFingerprint,
         IndexedImage,
+        IndexedUploadDecision,
+        compute_image_fingerprint,
+        evaluate_indexed_upload,
         git_blob_sha,
         indexed_images_from_hash_index,
         merge_hash_entry,
         normalize_hash_index,
+        perceptual_hash_from_bytes,
         resolve_gallery_local_path,
     )
 except ImportError:
     from gallery_safety import (
         HASH_INDEX_VERSION,
+        ImageFingerprint,
         IndexedImage,
+        IndexedUploadDecision,
+        compute_image_fingerprint,
+        evaluate_indexed_upload,
         git_blob_sha,
         indexed_images_from_hash_index,
         merge_hash_entry,
         normalize_hash_index,
+        perceptual_hash_from_bytes,
         resolve_gallery_local_path,
     )
 
@@ -45,6 +55,8 @@ class GalleryStore:
         sanitize_component: Callable[[str], str] | None = None,
         default_category: str = "default",
         logger=None,
+        write_lock=None,
+        perceptual_max_distance: int = 6,
     ) -> None:
         self.plugin_data_dir = Path(plugin_data_dir)
         self.gallery_root = Path(gallery_root)
@@ -54,6 +66,8 @@ class GalleryStore:
         )
         self.default_category = default_category
         self.logger = logger
+        self.write_lock = write_lock or threading.RLock()
+        self.perceptual_max_distance = max(0, int(perceptual_max_distance))
 
         self.hash_index_path = self.plugin_data_dir / "hash_index.json"
         self.hash_index: dict[str, dict] = {}
@@ -326,7 +340,160 @@ class GalleryStore:
     def invalidate_category_hash_cache(self, category: str) -> None:
         self.category_hash_cache.pop(self._sanitize(category), None)
 
+    def ensure_perceptual_index(self) -> None:
+        """Fill missing local perceptual hashes and persist the shared index."""
+        changed = False
+        for image_path in self.iter_image_files():
+            key = self.hash_index_key(image_path)
+            if not key:
+                continue
+            with self.hash_index_lock:
+                entry = self.hash_index.get(key)
+            if (
+                isinstance(entry, dict)
+                and entry.get("hash")
+                and entry.get("perceptual_hash")
+            ):
+                continue
+            try:
+                content = image_path.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+                perceptual_hash = perceptual_hash_from_bytes(content)
+            except Exception as exc:
+                self._log_warning(f"计算感知哈希失败 {image_path}: {exc}")
+                continue
+            self.remember_file_hash(
+                image_path,
+                digest,
+                category=image_path.parent.name,
+                save=False,
+                perceptual_hash=perceptual_hash,
+            )
+            changed = True
+        if changed:
+            self.save_hash_index()
+
+    def store_unique_image_batch(
+        self,
+        category_dir: Path,
+        category: str,
+        candidates: list[tuple[str, bytes]],
+        *,
+        remote_records: tuple[IndexedImage, ...] = (),
+        remote_checked: bool = True,
+        min_index: int = 1,
+        stop_on_similar: bool = False,
+    ) -> list[tuple[Path | None, IndexedUploadDecision]]:
+        """Store one upload batch from one local dedup and numbering snapshot."""
+        if not candidates:
+            return []
+        with self.write_lock:
+            local_records = list(self.indexed_local_images())
+            next_index = max(self.next_index(), max(1, int(min_index)))
+            outcomes: list[tuple[Path | None, IndexedUploadDecision]] = []
+            try:
+                for ext, image_bytes in candidates:
+                    candidate = compute_image_fingerprint(image_bytes)
+                    decision = evaluate_indexed_upload(
+                        candidate,
+                        local_records=local_records,
+                        remote_records=remote_records,
+                        remote_checked=remote_checked,
+                        perceptual_max_distance=self.perceptual_max_distance,
+                        force_similar=False,
+                    )
+                    if not decision.allowed:
+                        outcomes.append((None, decision))
+                        if stop_on_similar and decision.reason == "similar":
+                            break
+                        continue
+
+                    target_path = category_dir / f"{next_index}{ext}"
+                    while target_path.exists():
+                        next_index += 1
+                        target_path = category_dir / f"{next_index}{ext}"
+
+                    target_path.write_bytes(image_bytes)
+                    self.invalidate_category_hash_cache(category)
+                    self.remember_file_hash(
+                        target_path,
+                        candidate.content_hash,
+                        category=category,
+                        save=False,
+                        perceptual_hash=candidate.perceptual_hash,
+                    )
+                    git_path = self.hash_index_key(target_path)
+                    if not git_path:
+                        raise RuntimeError(f"无法建立上传图片索引路径：{target_path}")
+                    local_records.append(
+                        IndexedImage(
+                            path=git_path,
+                            content_hash=candidate.content_hash,
+                            blob_sha=candidate.blob_sha,
+                            perceptual_hash=candidate.perceptual_hash,
+                        )
+                    )
+                    outcomes.append((target_path, decision))
+                    next_index += 1
+            finally:
+                self.save_hash_index()
+            return outcomes
+
+    def store_unique_image(
+        self,
+        category_dir: Path,
+        category: str,
+        ext: str,
+        image_bytes: bytes,
+        *,
+        remote_records: tuple[IndexedImage, ...] = (),
+        remote_checked: bool = True,
+        min_index: int = 1,
+        force_similar: bool = False,
+        fingerprint: ImageFingerprint | None = None,
+    ) -> tuple[Path | None, IndexedUploadDecision]:
+        """Evaluate one upload against local/remote indexes and store when allowed."""
+        with self.write_lock:
+            candidate = fingerprint or compute_image_fingerprint(image_bytes)
+            decision = evaluate_indexed_upload(
+                candidate,
+                local_records=self.indexed_local_images(),
+                remote_records=remote_records,
+                remote_checked=remote_checked,
+                perceptual_max_distance=self.perceptual_max_distance,
+                force_similar=force_similar,
+            )
+            if not decision.allowed:
+                return None, decision
+
+            index = max(self.next_index(), max(1, int(min_index)))
+            target_path = category_dir / f"{index}{ext}"
+            while target_path.exists():
+                index += 1
+                target_path = category_dir / f"{index}{ext}"
+
+            target_path.write_bytes(image_bytes)
+            self.invalidate_category_hash_cache(category)
+            self.remember_file_hash(
+                target_path,
+                candidate.content_hash,
+                category=category,
+                perceptual_hash=candidate.perceptual_hash,
+            )
+            return target_path, decision
+
+    def rollback_stored_image(self, path: Path, category: str) -> None:
+        """Remove a local staged upload and its index/cache state."""
+        with self.write_lock:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                self._log_warning(f"回滚上传文件失败 {path}: {exc}")
+            self.invalidate_category_hash_cache(category)
+            self.forget_file_hash(path)
+
     def indexed_local_images(self) -> tuple[IndexedImage, ...]:
+        self.ensure_perceptual_index()
         with self.hash_index_lock:
             snapshot = dict(self.hash_index)
         active: list[IndexedImage] = []

@@ -1,91 +1,38 @@
 import hashlib
-import importlib.util
-import sys
-import threading
-import types
 from pathlib import Path
 
-
-def _load_main(monkeypatch):
-    for key in list(sys.modules):
-        if key == "main" or key == "astrbot" or key.startswith("astrbot."):
-            monkeypatch.delitem(sys.modules, key, raising=False)
-
-    class DummyStar:
-        def __init__(self, context):
-            self.context = context
-
-    class DummyFunctionTool:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    class DummyFilter:
-        class EventMessageType:
-            ALL = object()
-
-        @staticmethod
-        def event_message_type(*_args, **_kwargs):
-            return lambda fn: fn
-
-        @staticmethod
-        def command(*_args, **_kwargs):
-            return lambda fn: fn
-
-    modules = {
-        "astrbot": types.ModuleType("astrbot"),
-        "astrbot.api": types.ModuleType("astrbot.api"),
-        "astrbot.api.event": types.ModuleType("astrbot.api.event"),
-        "astrbot.api.message_components": types.ModuleType("astrbot.api.message_components"),
-        "astrbot.api.star": types.ModuleType("astrbot.api.star"),
-        "astrbot.core": types.ModuleType("astrbot.core"),
-        "astrbot.core.utils": types.ModuleType("astrbot.core.utils"),
-        "astrbot.core.utils.astrbot_path": types.ModuleType("astrbot.core.utils.astrbot_path"),
-        "astrbot.core.agent": types.ModuleType("astrbot.core.agent"),
-        "astrbot.core.agent.tool": types.ModuleType("astrbot.core.agent.tool"),
-    }
-    modules["astrbot.api"].logger = types.SimpleNamespace(
-        info=lambda *_args, **_kwargs: None,
-        warning=lambda *_args, **_kwargs: None,
-        error=lambda *_args, **_kwargs: None,
-        debug=lambda *_args, **_kwargs: None,
-    )
-    modules["astrbot.api.event"].AstrMessageEvent = type("AstrMessageEvent", (), {})
-    modules["astrbot.api.event"].filter = DummyFilter
-    modules["astrbot.api.message_components"].Image = type("Image", (), {})
-    modules["astrbot.api.message_components"].Reply = type("Reply", (), {})
-    modules["astrbot.api.star"].Context = type("Context", (), {})
-    modules["astrbot.api.star"].Star = DummyStar
-    modules["astrbot.core.utils.astrbot_path"].get_astrbot_plugin_data_path = lambda: "/tmp"
-    modules["astrbot.core.agent.tool"].FunctionTool = DummyFunctionTool
-    for name, module in modules.items():
-        monkeypatch.setitem(sys.modules, name, module)
-
-    spec = importlib.util.spec_from_file_location("main", Path("main.py"))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["main"] = module
-    spec.loader.exec_module(module)
-    return module
+import gallery_store as gallery_store_module
+from gallery_safety import ImageFingerprint
+from gallery_store import GalleryStore
 
 
-def _fingerprint(main_module, content: bytes):
+def _fingerprint(content: bytes) -> ImageFingerprint:
     digest = hashlib.sha256(content).hexdigest()
     perceptual = {
         b"a": "0000000000000000",
         b"b": "ffffffffffffffff",
         b"c": "aaaaaaaaaaaaaaaa",
     }.get(content, "5555555555555555")
-    return main_module.ImageFingerprint(
+    return ImageFingerprint(
         content_hash=digest,
         blob_sha=f"blob-{digest}",
         perceptual_hash=perceptual,
     )
 
 
-def _make_plugin(main_module, monkeypatch, tmp_path):
-    plugin = object.__new__(main_module.Main)
-    plugin._gallery_write_lock = threading.RLock()
+def _make_store(monkeypatch, tmp_path):
+    gallery_root = tmp_path / "gallery"
+    category_dir = gallery_root / "airi"
+    category_dir.mkdir(parents=True)
+    store = GalleryStore(
+        tmp_path,
+        gallery_root,
+        image_suffixes={".png", ".jpg"},
+    )
     counters = {"local_snapshot": 0, "next_index": 0, "save": 0}
     remembers = []
+    real_remember = store.remember_file_hash
+    real_save = store.save_hash_index
 
     def indexed_local_images():
         counters["local_snapshot"] += 1
@@ -97,33 +44,34 @@ def _make_plugin(main_module, monkeypatch, tmp_path):
 
     def remember(path, digest, category=None, save=True, perceptual_hash=None):
         remembers.append((path.name, digest, category, save, perceptual_hash))
+        return real_remember(
+            path,
+            digest,
+            category=category,
+            save=save,
+            perceptual_hash=perceptual_hash,
+        )
 
-    plugin._indexed_local_images = indexed_local_images
-    plugin._next_index = next_index
-    plugin._invalidate_category_hash_cache = lambda _category: None
-    plugin._remember_file_hash = remember
-    plugin._hash_index_key = lambda path: f"gallery/airi/{path.name}"
-    plugin._save_hash_index = lambda *args, **kwargs: counters.__setitem__(
-        "save", counters["save"] + 1
-    )
+    def save_hash_index(force=False):
+        counters["save"] += 1
+        return real_save(force=force)
+
+    monkeypatch.setattr(store, "indexed_local_images", indexed_local_images)
+    monkeypatch.setattr(store, "next_index", next_index)
+    monkeypatch.setattr(store, "remember_file_hash", remember)
+    monkeypatch.setattr(store, "save_hash_index", save_hash_index)
     monkeypatch.setattr(
-        main_module,
+        gallery_store_module,
         "compute_image_fingerprint",
-        lambda content: _fingerprint(main_module, content),
+        _fingerprint,
     )
-
-    category_dir = tmp_path / "gallery" / "airi"
-    category_dir.mkdir(parents=True)
-    return plugin, category_dir, counters, remembers
+    return store, category_dir, counters, remembers
 
 
 def test_batch_storage_reuses_one_local_snapshot_and_number_cursor(monkeypatch, tmp_path):
-    main_module = _load_main(monkeypatch)
-    plugin, category_dir, counters, remembers = _make_plugin(
-        main_module, monkeypatch, tmp_path
-    )
+    store, category_dir, counters, remembers = _make_store(monkeypatch, tmp_path)
 
-    outcomes = plugin._store_unique_image_batch(
+    outcomes = store.store_unique_image_batch(
         category_dir,
         "airi",
         [(".png", b"a"), (".png", b"b"), (".png", b"c")],
@@ -146,10 +94,9 @@ def test_batch_storage_reuses_one_local_snapshot_and_number_cursor(monkeypatch, 
 def test_batch_storage_adds_accepted_items_to_snapshot_for_in_batch_dedup(
     monkeypatch, tmp_path
 ):
-    main_module = _load_main(monkeypatch)
-    plugin, category_dir, counters, _ = _make_plugin(main_module, monkeypatch, tmp_path)
+    store, category_dir, counters, _ = _make_store(monkeypatch, tmp_path)
 
-    outcomes = plugin._store_unique_image_batch(
+    outcomes = store.store_unique_image_batch(
         category_dir,
         "airi",
         [(".png", b"a"), (".jpg", b"a")],
