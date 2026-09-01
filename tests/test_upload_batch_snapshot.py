@@ -6,6 +6,7 @@ from gallery_safety import ImageFingerprint
 from gallery_store import GalleryStore
 
 
+# Batch admission/storage snapshots belong to GalleryStore; Main only routes upload surfaces.
 def _fingerprint(content: bytes) -> ImageFingerprint:
     digest = hashlib.sha256(content).hexdigest()
     perceptual = {
