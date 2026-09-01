@@ -5,15 +5,12 @@ import base64 as b64mod
 import hashlib
 import json
 import math
-import os
 import random
 import re
 import secrets
-import shutil
 import threading
 import time
 from pathlib import Path
-from urllib.parse import quote
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -30,40 +27,16 @@ except Exception:
 try:
     from .gallery_diagnostics import (
         GalleryDiagnostics,
-        DiagnosticItem,
-        DiagnosticReport,
-        GitProbeResult,
-        LocalDiagnosticContext,
-        UpdateProbeCache,
-        UpdateProbeResult,
-        check_git_configuration,
         coerce_bounded_int,
         coerce_strict_bool,
-        coerce_strict_int,
-        evaluate_git_probe,
-        evaluate_update_probe,
         normalize_identifier_list,
-        parse_metadata_version,
-        run_local_diagnostics,
     )
 except ImportError:
     from gallery_diagnostics import (
         GalleryDiagnostics,
-        DiagnosticItem,
-        DiagnosticReport,
-        GitProbeResult,
-        LocalDiagnosticContext,
-        UpdateProbeCache,
-        UpdateProbeResult,
-        check_git_configuration,
         coerce_bounded_int,
         coerce_strict_bool,
-        coerce_strict_int,
-        evaluate_git_probe,
-        evaluate_update_probe,
         normalize_identifier_list,
-        parse_metadata_version,
-        run_local_diagnostics,
     )
 
 try:
@@ -152,7 +125,6 @@ except ImportError:
 try:
     from .gallery_rendering import (
         draw_cute_background as _draw_cute_background,
-        interpolate_color as _interpolate_color,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
         text_size as _text_size,
@@ -161,7 +133,6 @@ try:
 except ImportError:
     from gallery_rendering import (
         draw_cute_background as _draw_cute_background,
-        interpolate_color as _interpolate_color,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
         text_size as _text_size,
@@ -182,7 +153,6 @@ def _paste_corner_overlay(
 
 try:
     from .gallery_safety import (
-        HASH_INDEX_VERSION,
         GalleryPathDifference,
         ImageFingerprint,
         IndexedImage,
@@ -191,42 +161,22 @@ try:
         RemoteDeleteReport,
         UploadMatch,
         UploadPayloadTooLarge,
-        build_global_renumber_plan,
-        build_renumbered_category_entries,
-        build_category_tree_delta_entries,
-        compare_gallery_paths,
-        collect_remote_category_blob_shas,
-        classify_github_http_failure,
-        compute_image_fingerprint,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
-        evaluate_indexed_upload,
-        evaluate_upload_dedup,
         git_blob_sha,
-        indexed_images_from_hash_index,
-        indexed_images_from_remote_tree,
         is_remote_gallery_image_path,
-        matches_verified_remote_content,
-        merge_hash_entry,
-        remote_gallery_max_index,
-        normalize_hash_index,
         normalize_perceptual_manifest,
-        perceptual_hash_from_bytes,
         present_remote_delete_report,
         read_bool_flag,
-        remote_put_result,
         resolve_gallery_category_dir,
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
-        should_preserve_local_sync_content,
         validate_image_payload,
-        verified_remote_sha,
     )
 except ImportError:
     from gallery_safety import (
-        HASH_INDEX_VERSION,
         GalleryPathDifference,
         ImageFingerprint,
         IndexedImage,
@@ -235,38 +185,19 @@ except ImportError:
         RemoteDeleteReport,
         UploadMatch,
         UploadPayloadTooLarge,
-        build_global_renumber_plan,
-        build_renumbered_category_entries,
-        build_category_tree_delta_entries,
-        compare_gallery_paths,
-        collect_remote_category_blob_shas,
-        classify_github_http_failure,
-        compute_image_fingerprint,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
-        evaluate_indexed_upload,
-        evaluate_upload_dedup,
         git_blob_sha,
-        indexed_images_from_hash_index,
-        indexed_images_from_remote_tree,
         is_remote_gallery_image_path,
-        matches_verified_remote_content,
-        merge_hash_entry,
-        remote_gallery_max_index,
-        normalize_hash_index,
         normalize_perceptual_manifest,
-        perceptual_hash_from_bytes,
         present_remote_delete_report,
         read_bool_flag,
-        remote_put_result,
         resolve_gallery_category_dir,
         resolve_gallery_image_path,
         resolve_gallery_local_path,
         select_remote_delete_candidates,
-        should_preserve_local_sync_content,
         validate_image_payload,
-        verified_remote_sha,
     )
 
 
@@ -725,7 +656,7 @@ class Main(Star):
             await event.send(event.plain_result("没有权限执行此操作。"))
             return
         try:
-            report = await asyncio.to_thread(self._run_gallery_diagnostics)
+            report = await asyncio.to_thread(self.diagnostics.run)
             await event.send(event.plain_result(report.render_chat()))
         except Exception as exc:
             logger.error(
@@ -1555,22 +1486,6 @@ class Main(Star):
     # ──────────────────────────────────────────────
     # Git 远程仓库同步
     # ──────────────────────────────────────────────
-
-    def _probe_gallery_git(self) -> GitProbeResult:
-        """Compatibility delegate; GalleryDiagnostics owns the Git probe."""
-        return self.diagnostics.probe_git()
-
-    def _probe_gallery_update(self) -> UpdateProbeResult:
-        """Compatibility delegate; GalleryDiagnostics owns the update probe/cache."""
-        return self.diagnostics.probe_update()
-
-    def _run_gallery_diagnostics(self) -> DiagnosticReport:
-        """Compatibility delegate; GalleryDiagnostics owns diagnostic orchestration."""
-        return self.diagnostics.run()
-
-    async def _run_startup_diagnostics(self) -> None:
-        """Compatibility delegate; GalleryDiagnostics owns startup diagnostic logging."""
-        return await self.diagnostics.run_startup()
 
     def _validate_git_config(self) -> None:
         """检查 Git 同步所需的配置是否完整，结果写入 self._git_sync_enabled。"""

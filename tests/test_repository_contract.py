@@ -176,15 +176,36 @@ def test_gallery_diagnostics_command_and_lifecycle_are_wired():
     tree = parsed_main()
     commands = registered_filter_commands(tree)
     names = function_names(tree)
+    diagnostics_tree = ast.parse(
+        Path("gallery_diagnostics.py").read_text(encoding="utf-8")
+    )
+    diagnostics_class = next(
+        node
+        for node in diagnostics_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "GalleryDiagnostics"
+    )
+    diagnostic_methods = {
+        node.name
+        for node in diagnostics_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
     assert "画廊检查" in commands
+    assert "cmd_gallery_diagnostics" in names
     assert {
-        "cmd_gallery_diagnostics",
         "_probe_gallery_git",
         "_probe_gallery_update",
         "_run_gallery_diagnostics",
         "_run_startup_diagnostics",
-    } <= names
+    }.isdisjoint(names)
+    assert {
+        "probe_git",
+        "probe_update",
+        "run",
+        "run_startup",
+        "start_background",
+        "stop_background",
+    } <= diagnostic_methods
 
 
 def test_diagnostic_git_requests_can_avoid_mutating_sync_enablement():
