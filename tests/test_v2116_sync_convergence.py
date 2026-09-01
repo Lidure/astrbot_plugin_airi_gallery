@@ -60,13 +60,10 @@ def test_sync_reports_any_remaining_path_difference_instead_of_false_zero_summar
 
 
 def test_import_gallery_mismatch_includes_concrete_difference_examples():
-    source = Path("main.py").read_text(encoding="utf-8")
-    renumber = source.split("    def _renumber_gallery_consistently_sync", 1)[1].split(
-        "    async def _renumber_gallery_consistently", 1
-    )[0]
+    renumber = inspect.getsource(GallerySync.renumber_gallery_consistently)
 
     assert "compare_gallery_paths" in renumber
-    assert "_format_gallery_path_difference" in renumber
+    assert "format_gallery_path_difference" in renumber
 
     details = gallery_reporting.format_gallery_path_difference(
         gallery_safety.GalleryPathDifference(
