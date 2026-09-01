@@ -1,8 +1,11 @@
 import pytest
 
 from gallery_commands import (
+    extract_view_all_target,
+    extract_view_target,
     normalize_match_text,
     parse_aliases,
+    parse_view_target,
     replace_command_aliases,
     resolve_gallery_category_query,
     sanitize_component,
@@ -81,3 +84,40 @@ def test_resolve_gallery_category_query_prefers_longest_fuzzy_match_then_alias()
 def test_resolve_gallery_category_query_returns_sanitized_alias_when_no_categories_exist():
     assert resolve_gallery_category_query("爱莉", [], {"爱莉": "Airi/表情"}) == "Airi_表情"
     assert resolve_gallery_category_query("", [], {}) == ""
+
+
+def test_extract_view_target_preserves_prefix_mode_boundary():
+    assert extract_view_target("/看看 airi", use_prefix=True) == "airi"
+    assert extract_view_target("/看602", use_prefix=True) == "602"
+    assert extract_view_target("看看 airi", use_prefix=True) is None
+
+    assert extract_view_target("看看 airi", use_prefix=False) == "airi"
+    assert extract_view_target("看602", use_prefix=False) == "602"
+    assert extract_view_target("/看看 airi", use_prefix=False) is None
+
+
+def test_extract_view_all_target_preserves_aliases_and_prefix_mode_boundary():
+    assert extract_view_all_target("/看全部 airi", use_prefix=True) == "airi"
+    assert extract_view_all_target("/看所有airi", use_prefix=True) == "airi"
+    assert extract_view_all_target("看全部 airi", use_prefix=True) is None
+
+    assert extract_view_all_target("看全部 airi", use_prefix=False) == "airi"
+    assert extract_view_all_target("看所有airi", use_prefix=False) == "airi"
+    assert extract_view_all_target("/看全部 airi", use_prefix=False) is None
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("100-110", ("range", (100, 110))),
+        ("100 ～ 110", ("range", (100, 110))),
+        ("110—100", ("range", (110, 100))),
+        ("cat 3", ("multiple", ("cat", 3))),
+        ("cat\t03", ("multiple", ("cat", 3))),
+        ("602", ("number", 602)),
+        ("cat3", ("category", "cat3")),
+        ("airi", ("category", "airi")),
+    ],
+)
+def test_parse_view_target_preserves_existing_range_number_and_category_rules(target, expected):
+    assert parse_view_target(target) == expected
