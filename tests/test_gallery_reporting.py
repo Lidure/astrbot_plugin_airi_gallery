@@ -114,6 +114,24 @@ def test_upload_decision_serialization_preserves_public_api_shape_and_rounding()
     }
 
 
+def test_upload_decision_serialization_preserves_empty_match_lists():
+    decision = gallery_safety.IndexedUploadDecision(
+        allowed=True,
+        reason="clean",
+        fingerprint=gallery_safety.ImageFingerprint(
+            content_hash="content",
+            blob_sha="blob",
+            perceptual_hash="0123456789abcdef",
+        ),
+    )
+
+    assert gallery_reporting.serialize_upload_decision(decision) == {
+        "reason": "clean",
+        "exact_match": None,
+        "similar_matches": [],
+    }
+
+
 def test_upload_match_label_prefers_number_and_falls_back_to_path():
     numbered = gallery_safety.UploadMatch(
         path="gallery/airi/12.png", number=12, similarity=1.0, distance=0
