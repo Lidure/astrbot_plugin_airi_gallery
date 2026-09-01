@@ -64,3 +64,6 @@ def test_renumber_report_preserves_failure_empty_and_remote_success_messages():
     assert gallery_reporting.format_renumber_report(
         {"ok": True, "total": 4, "renamed": 2, "remote": True}
     ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件；本地与 GitHub 编号一致。"
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": "4", "renamed": "2", "remote": True}
+    ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件；本地与 GitHub 编号一致。"
