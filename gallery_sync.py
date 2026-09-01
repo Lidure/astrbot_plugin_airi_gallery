@@ -193,6 +193,143 @@ class GallerySync:
             self._error(f"[Git Sync] 删除文件失败 {path} (HTTP {status})")
             return False
 
+    def _branch_tree_matches_items(
+        self,
+        tree_sha: str,
+        items: list[tuple[str, bytes, str]],
+    ) -> bool:
+        """Confirm a lost ref response only when every batch blob is present."""
+        if not str(tree_sha).strip():
+            return False
+        tree = self.remote.list_tree_at(tree_sha)
+        if tree is None:
+            return False
+        remote_blobs = {
+            str(entry.get("path", "")): str(entry.get("sha", "")).strip()
+            for entry in tree
+            if isinstance(entry, dict)
+            and entry.get("type") == "blob"
+            and str(entry.get("path", "")).strip()
+        }
+        return all(
+            remote_blobs.get(git_path) == blob_sha
+            for git_path, _, blob_sha in items
+        )
+
+    def _remember_batch_shas(self, items: list[tuple[str, bytes, str]]) -> None:
+        for git_path, _, blob_sha in items:
+            self.remote.sha_cache[git_path] = blob_sha
+
+    def commit_github_batch(
+        self,
+        items: list[tuple[str, bytes, str]],
+        message: str,
+        create_only_paths: set[str] | None = None,
+    ) -> bool:
+        """Commit one GitHub batch with fail-closed ref update convergence."""
+        with self.mutation_lock:
+            head = self.remote.get_head_commit_and_tree()
+            if not head:
+                return False
+            parent_sha, base_tree_sha = head
+
+            collision = False
+            if create_only_paths:
+                collision = self.remote.github_create_only_paths_exist(
+                    base_tree_sha, create_only_paths
+                )
+            if collision is not False:
+                if collision:
+                    self._warning("[Git Sync] 新上传编号已被远程占用，拒绝覆盖。")
+                return False
+
+            tree_entries = [
+                {
+                    "path": git_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": blob_sha,
+                }
+                for git_path, _, blob_sha in items
+            ]
+            tree_sha = self.remote.create_github_tree(base_tree_sha, tree_entries)
+            if not tree_sha:
+                return False
+
+            commit_sha = self.remote.create_github_commit(
+                message, tree_sha, parent_sha
+            )
+            if not commit_sha:
+                return False
+
+            if self.remote.update_github_ref(commit_sha):
+                self._remember_batch_shas(items)
+                return True
+
+            ref_outcome = self.remote.ref_update_outcome or "conflict"
+            if ref_outcome == "rejected":
+                self._warning(
+                    "[Git Sync] GitHub ref 更新被明确拒绝，本批次停止，不执行冲突重试。"
+                )
+                return False
+
+            head = self.remote.get_head_commit_and_tree()
+            if not head:
+                return False
+            parent_sha, base_tree_sha = head
+
+            if ref_outcome == "uncertain":
+                if parent_sha == commit_sha or self._branch_tree_matches_items(
+                    base_tree_sha, items
+                ):
+                    self._remember_batch_shas(items)
+                    return True
+                self._warning(
+                    "[Git Sync] GitHub ref 更新结果不确定且无法确认已生效，本批次停止。"
+                )
+                return False
+
+            if ref_outcome != "conflict":
+                self._warning(
+                    f"[Git Sync] GitHub ref 更新返回未知结果 {ref_outcome!r}，本批次停止。"
+                )
+                return False
+
+            self._info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
+            retry_collision = False
+            if create_only_paths:
+                retry_collision = self.remote.github_create_only_paths_exist(
+                    base_tree_sha, create_only_paths
+                )
+            if retry_collision is not False:
+                if retry_collision:
+                    self._warning("[Git Sync] 重试前发现新上传编号已被远程占用，拒绝覆盖。")
+                return False
+
+            tree_sha = self.remote.create_github_tree(base_tree_sha, tree_entries)
+            if not tree_sha:
+                return False
+            retry_commit_sha = self.remote.create_github_commit(
+                message, tree_sha, parent_sha
+            )
+            if not retry_commit_sha:
+                return False
+            if not self.remote.update_github_ref(retry_commit_sha):
+                retry_outcome = self.remote.ref_update_outcome or "conflict"
+                if retry_outcome != "uncertain":
+                    return False
+                refreshed = self.remote.get_head_commit_and_tree()
+                if not refreshed:
+                    return False
+                if (
+                    refreshed[0] != retry_commit_sha
+                    and not self._branch_tree_matches_items(refreshed[1], items)
+                ):
+                    return False
+
+            self._remember_batch_shas(items)
+            return True
+
     def cancel_push(self) -> None:
         self._git_push_cancelled = True
 
