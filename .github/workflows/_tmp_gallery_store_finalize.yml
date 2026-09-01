@@ -1,0 +1,42 @@
+name: Temporary Gallery Store Finalizer
+
+on:
+  push:
+    branches:
+      - refactor/gallery-store-service
+    paths:
+      - .github/workflows/_tmp_gallery_store_finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/gallery-store-service
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install focused test dependencies
+        run: python -m pip install pytest pyyaml quart Pillow requests
+      - name: Apply exact Main wiring patch
+        run: python _tmp_patch_gallery_store.py
+      - name: Verify syntax and focused store contracts
+        run: |
+          python -m py_compile main.py gallery_store.py
+          python -m pytest tests/test_gallery_store.py tests/test_gallery_store_main_wiring.py -v
+      - name: Remove temporary migration artifacts
+        run: |
+          rm _tmp_patch_gallery_store.py
+          rm .github/workflows/_tmp_gallery_store_finalize.yml
+      - name: Commit finalized production changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: wire gallery store ownership"
+          git push origin HEAD:refactor/gallery-store-service
