@@ -1,0 +1,121 @@
+name: Temporary v2.11.14 release patch
+
+on:
+  push:
+    branches:
+      - release/v2.11.14
+    paths:
+      - .github/workflows/_tmp_v21114_release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: release/v2.11.14
+      - name: Apply release metadata and documentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, got {count}: {old!r}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once("metadata.yaml", "version: v2.11.13", "version: v2.11.14")
+          replace_once(
+              "main.py",
+              'CURRENT_PLUGIN_VERSION = "v2.11.13"',
+              'CURRENT_PLUGIN_VERSION = "v2.11.14"',
+          )
+          replace_once(
+              "README.md",
+              "Version-v2.11.13-pink",
+              "Version-v2.11.14-pink",
+          )
+
+          release_notes = '''## 🚀 更新日志
+          ### v2.11.14
+
+          - **远端事务一致性** 完善 GitHub / Gitee 上传与删除的失败分类、过期 SHA 重试、响应丢失确认和补偿逻辑；远端状态不确定时默认保留本地数据，确认远端已完成后再收口本地状态，并自动清理已失效的远端感知哈希索引项。
+          - **同步与路径安全** 串行化远端快照到本地收敛过程，保护本地已修改文件，统一路径 containment 校验；Git tree 图片路径固定使用 POSIX 语义并拒绝反斜杠异常路径，避免 Windows / Linux 判断不一致。
+          - **批量性能与 Web 生命周期** 上传批次复用本地图库快照和编号游标，GitHub 合并批量提交；生成缓存加入 TTL / 容量清理，本地 Web UI 图片按需加载，Cloud 页面统一管理 Blob URL、请求取消、并发去重和写操作后的强制刷新。
+          - **CI 与可维护性** 增加 Python 3.10 / 3.12、最低依赖版本和真实 AstrBot runtime smoke 验证；将命令解析、配置解析、诊断、渲染和结果格式化等纯逻辑逐步从 `main.py` 拆分为可独立测试模块，保持原有上传、删除和同步事务语义。
+
+          ### v2.11.13'''.replace("          ", "")
+          replace_once(
+              "README.md",
+              "## 🚀 更新日志\n### v2.11.13",
+              release_notes,
+          )
+
+          repo_test = Path("tests/test_repository_contract.py")
+          text = repo_test.read_text(encoding="utf-8")
+          old = '''def test_release_version_is_2_11_13_everywhere():
+              metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
+              readme = Path("README.md").read_text(encoding="utf-8")
+              main_source = Path("main.py").read_text(encoding="utf-8")
+              badge = re.search(r"Version-(v\\d+\\.\\d+\\.\\d+)-pink", readme).group(1)
+              changelog = re.search(r"^### (v\\d+\\.\\d+\\.\\d+)$", readme, re.MULTILINE).group(1)
+
+              assert metadata["version"] == "v2.11.13"
+              assert badge == "v2.11.13"
+              assert changelog == "v2.11.13"
+              assert 'CURRENT_PLUGIN_VERSION = "v2.11.13"' in main_source
+          '''.replace("              ", "")
+          new = '''def test_release_version_is_2_11_14_everywhere():
+              metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
+              readme = Path("README.md").read_text(encoding="utf-8")
+              main_source = Path("main.py").read_text(encoding="utf-8")
+              badge = re.search(r"Version-(v\\d+\\.\\d+\\.\\d+)-pink", readme).group(1)
+              changelog = re.search(r"^### (v\\d+\\.\\d+\\.\\d+)$", readme, re.MULTILINE).group(1)
+
+              assert metadata["version"] == "v2.11.14"
+              assert badge == "v2.11.14"
+              assert changelog == "v2.11.14"
+              assert 'CURRENT_PLUGIN_VERSION = "v2.11.14"' in main_source
+          '''.replace("              ", "")
+          if text.count(old) != 1:
+              raise SystemExit("repository version contract block not found exactly once")
+          repo_test.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          Path("tests/test_v21113_release_contract.py").write_text(
+              '''from pathlib import Path
+
+
+def test_v21113_release_remains_in_changelog():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "### v2.11.13" in readme
+    assert "去重权限边界" in readme
+
+
+def test_v21113_readme_documents_dedupe_permission_fix():
+    readme = Path("README.md").read_text(encoding="utf-8")
+
+    assert "去重权限边界" in readme
+    assert "任何去重扫描/删除开始前都会先校验管理员或白名单权限" in readme
+''',
+              encoding="utf-8",
+          )
+          PY
+      - name: Install focused test dependencies
+        run: python -m pip install pytest pyyaml
+      - name: Run release contract tests
+        run: python -m pytest tests/test_repository_contract.py tests/test_v21113_release_contract.py tests/test_v21114_release_contract.py -q
+      - name: Remove temporary workflow and commit
+        run: |
+          rm .github/workflows/_tmp_v21114_release.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metadata.yaml main.py README.md tests/test_repository_contract.py tests/test_v21113_release_contract.py .github/workflows/_tmp_v21114_release.yml
+          git commit -m "release: v2.11.14"
+          git push origin HEAD:release/v2.11.14
