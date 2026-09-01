@@ -32,11 +32,11 @@ jobs:
               r"(?=\n    def _git_push_file\(self, local_abs_path: str\) -> bool:)",
               re.S,
           )
-          replacement = '''
-    def _git_sync_from_remote(self) -> dict[str, object]:
-        """Compatibility delegate; GallerySync owns pull convergence."""
-        return self.sync.sync_from_remote()
-'''
+          replacement = (
+              "\n    def _git_sync_from_remote(self) -> dict[str, object]:\n"
+              "        \"\"\"Compatibility delegate; GallerySync owns pull convergence.\"\"\"\n"
+              "        return self.sync.sync_from_remote()\n"
+          )
           updated, count = pattern.subn(replacement, source, count=1)
           if count != 1:
               raise SystemExit(f"expected exactly one Main pull block, replaced {count}")
@@ -80,10 +80,6 @@ jobs:
         shell: bash
         run: |
           git rm .github/workflows/_stage3a_pull_delegate.yml
-          if git diff --quiet -- main.py .github/workflows/_stage3a_pull_delegate.yml; then
-            echo "No patch to commit"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add main.py
