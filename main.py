@@ -2066,12 +2066,18 @@ class Main(Star):
                 logger.warning(f"[Gallery] 远程感知索引解析失败：{exc}")
                 return False, {}
 
+        stale = sorted(path for path in manifest if path not in remote_images)
+        if stale:
+            manifest = {
+                path: phash for path, phash in manifest.items() if path in remote_images
+            }
+
         missing = sorted(path for path in remote_images if not manifest.get(path))
-        if not missing:
+        if not missing and not stale:
             return True, manifest
 
-        # First upgrade after v2.11.3: reuse synchronized local files to build the
-        # small remote manifest. No remote image is decoded twice by this path.
+        # Reuse synchronized local files to fill missing hashes. Stale entries are
+        # removed at the same time so the manifest converges to the remote tree.
         local_records = {record.path: record for record in self._indexed_local_images()}
         for path in missing:
             record = local_records.get(path)
@@ -2096,8 +2102,12 @@ class Main(Star):
         uploaded, _ = self._git_put_file(
             GALLERY_INDEX_PATH,
             encoded,
-            "Build gallery perceptual index",
+            "Repair gallery perceptual index",
         )
+        if uploaded and stale:
+            logger.info(
+                f"[Gallery] 已从远程感知索引清理 {len(stale)} 条不存在的图片路径。"
+            )
         return (uploaded, manifest if uploaded else {})
 
     def _prepare_remote_upload_guard(
@@ -2731,6 +2741,31 @@ class Main(Star):
             branch = self._git_branch()
             url = f"{base}/repos/{owner}/{repo}/contents/{path}"
 
+            def confirm_uncertain_delete() -> bool:
+                """DELETE 响应不确定时，以随后一次 Contents GET 收敛真实远端状态。"""
+                self._sha_cache.pop(path, None)
+                confirm_status, confirm_data = self._git_request(
+                    "GET", url, params={"ref": branch}
+                )
+                if confirm_status == 404:
+                    logger.info(
+                        f"[Git Sync] 删除 {path} 响应不确定后确认远程已不存在。"
+                    )
+                    return True
+                if confirm_status == 200 and isinstance(confirm_data, dict):
+                    current_sha = str(confirm_data.get("sha", "")).strip()
+                    if current_sha:
+                        self._sha_cache[path] = current_sha
+                    logger.warning(
+                        f"[Git Sync] 删除 {path} 响应不确定后确认远程仍存在，已保留本地文件。"
+                    )
+                    return False
+                logger.error(
+                    f"[Git Sync] 删除 {path} 响应不确定且无法确认远程状态 "
+                    f"(HTTP {confirm_status})"
+                )
+                return False
+
             sha = self._sha_cache.get(path)
             if not sha:
                 status, data = self._git_request(
@@ -2764,6 +2799,8 @@ class Main(Star):
                 self._sha_cache.pop(path, None)
                 logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
                 return True
+            if status == 0 or status >= 500:
+                return confirm_uncertain_delete()
 
             if status in (409, 422):
                 self._sha_cache.pop(path, None)
@@ -2795,6 +2832,8 @@ class Main(Star):
                     if retry_status == 404:
                         logger.info(f"[Git Sync] 重试删除 {path} 时远程已不存在。")
                     return True
+                if retry_status == 0 or retry_status >= 500:
+                    return confirm_uncertain_delete()
                 logger.error(
                     f"[Git Sync] 使用刷新 SHA 重试删除失败 {path} "
                     f"(HTTP {retry_status})"
