@@ -22,9 +22,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply Stage 4 migration
-        run: python scripts/_stage4_upload_storage_patch.py
+        run: |
+          python scripts/_stage4_upload_storage_patch.py
+          python scripts/_stage4_upload_storage_test_patch.py
       - name: Remove temporary migration files
-        run: git rm scripts/_stage4_upload_storage_patch.py .github/workflows/_stage4_upload_storage_patch.yml
+        run: git rm scripts/_stage4_upload_storage_patch.py scripts/_stage4_upload_storage_test_patch.py .github/workflows/_stage4_upload_storage_patch.yml
       - name: Compile migrated modules
         run: python -m py_compile gallery_store.py gallery_sync.py main.py
       - name: Install test dependencies
