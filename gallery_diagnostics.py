@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import ipaddress
 import json
@@ -10,7 +11,7 @@ import threading
 import time
 import unicodedata
 from typing import Callable, Iterable, Mapping
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 LEVEL_LABELS = {"warning": "警告", "error": "错误", "update": "更新"}
@@ -860,3 +861,206 @@ def run_local_diagnostics(context: LocalDiagnosticContext) -> DiagnosticReport:
     git_items, _ = check_git_configuration(context.config)
     report.extend(git_items)
     return report
+
+class GalleryDiagnostics:
+    """Own diagnostic probes, update-cache state, and startup diagnostic lifecycle."""
+
+    def __init__(
+        self,
+        config: Mapping[str, object],
+        *,
+        gallery_root: Path,
+        hash_index_path: Path,
+        image_suffixes: frozenset[str],
+        remote,
+        current_version: str,
+        update_metadata_url: str,
+        update_cache_seconds: float = 600.0,
+        logger=None,
+    ) -> None:
+        self.config = config
+        self.gallery_root = Path(gallery_root)
+        self.hash_index_path = Path(hash_index_path)
+        self.image_suffixes = frozenset(str(suffix).lower() for suffix in image_suffixes)
+        self.remote = remote
+        self.current_version = str(current_version)
+        self.update_metadata_url = str(update_metadata_url)
+        self.logger = logger
+        self.update_cache = UpdateProbeCache(ttl_seconds=update_cache_seconds)
+        self.task: asyncio.Task | None = None
+
+    def _info(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.info(message)
+
+    def _warning(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.warning(message)
+
+    def _error(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.error(message)
+
+    def probe_git(self) -> GitProbeResult:
+        _, can_probe = check_git_configuration(self.config)
+        if not can_probe:
+            return GitProbeResult(0, None, None)
+
+        owner = quote(str(self.config.get("git_repo_owner", "")).strip(), safe="")
+        repository = quote(str(self.config.get("git_repo_name", "")).strip(), safe="")
+        branch = quote(str(self.config.get("git_branch", "main")).strip(), safe="")
+        repository_url = f"{self.remote.api_base()}/repos/{owner}/{repository}"
+
+        request_state = getattr(self.remote, "request_state", None)
+        if request_state is not None:
+            request_state.failure = None
+        repository_status, repository_body = self.remote.request(
+            "GET",
+            repository_url,
+            timeout=10,
+            disable_on_auth_failure=False,
+        )
+        repository_failure = (
+            getattr(request_state, "failure", None) if request_state is not None else None
+        )
+        if repository_status != 200:
+            return GitProbeResult(
+                repository_status,
+                None,
+                None,
+                repository_failure=repository_failure,
+            )
+
+        can_push = None
+        if isinstance(repository_body, dict):
+            permissions = repository_body.get("permissions")
+            if isinstance(permissions, dict) and isinstance(
+                permissions.get("push"), bool
+            ):
+                can_push = permissions["push"]
+
+        if request_state is not None:
+            request_state.failure = None
+        branch_status, _ = self.remote.request(
+            "GET",
+            f"{repository_url}/branches/{branch}",
+            timeout=10,
+            disable_on_auth_failure=False,
+        )
+        branch_failure = (
+            getattr(request_state, "failure", None) if request_state is not None else None
+        )
+        return GitProbeResult(
+            repository_status,
+            branch_status,
+            can_push,
+            repository_failure=repository_failure,
+            branch_failure=branch_failure,
+        )
+
+    def probe_update(self) -> UpdateProbeResult:
+        def load_update_probe() -> UpdateProbeResult:
+            import requests
+
+            try:
+                response = requests.get(self.update_metadata_url, timeout=10)
+            except requests.RequestException as exc:
+                return UpdateProbeResult(error=type(exc).__name__)
+
+            if response.status_code != 200:
+                return UpdateProbeResult(error=f"http_{response.status_code}")
+            return UpdateProbeResult(
+                latest_version=parse_metadata_version(response.text)
+            )
+
+        return self.update_cache.get_or_load(load_update_probe)
+
+    def run(self) -> DiagnosticReport:
+        report = run_local_diagnostics(
+            LocalDiagnosticContext(
+                gallery_root=self.gallery_root,
+                hash_index_path=self.hash_index_path,
+                config=self.config,
+                image_suffixes=self.image_suffixes,
+            )
+        )
+        _, can_probe = check_git_configuration(self.config)
+        if can_probe:
+            try:
+                report.extend(evaluate_git_probe(self.probe_git()))
+            except Exception:
+                report.add(
+                    DiagnosticItem(
+                        "git.internal",
+                        "warning",
+                        "Git 远程检查",
+                        "Git 远程检查发生内部错误。",
+                        "查看 AstrBot 日志后重新运行检查。",
+                    )
+                )
+        try:
+            report.extend(
+                evaluate_update_probe(self.current_version, self.probe_update())
+            )
+        except Exception:
+            report.add(
+                DiagnosticItem(
+                    "update.internal",
+                    "warning",
+                    "版本检查",
+                    "版本检查发生内部错误。",
+                    "稍后重新运行 /画廊检查。",
+                )
+            )
+        return report
+
+    async def run_startup(self) -> None:
+        try:
+            report = await asyncio.to_thread(self.run)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._error(f"[画廊检查] 启动诊断失败：{type(exc).__name__}")
+            return
+
+        actionable_items = [
+            item
+            for item in report.items
+            if item.level in {"warning", "error", "update"}
+        ]
+        log_lines = report.render_log_lines()
+        if not actionable_items:
+            for line in log_lines:
+                self._info(f"[画廊检查] {line}")
+            return
+        for item, line in zip(actionable_items, log_lines):
+            if item.level == "error":
+                self._error(f"[画廊检查] {line}")
+            else:
+                self._warning(f"[画廊检查] {line}")
+
+    def start_background(self) -> asyncio.Task:
+        if self.task is not None and not self.task.done():
+            return self.task
+        self.task = asyncio.create_task(self.run_startup())
+        return self.task
+
+    async def stop_background(self) -> None:
+        task = self.task
+        if task is None:
+            return
+        self.task = None
+        if task.done():
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+

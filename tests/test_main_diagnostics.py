@@ -47,6 +47,25 @@ def construct_plugin(main_module, monkeypatch, tmp_path, config):
     return main_module.Main(context, config), context
 
 
+def construct_diagnostics(main_module, tmp_path, config, *, remote=None):
+    remote = remote or main_module.GalleryRemote(
+        config,
+        logger=main_module.logger,
+        request_state=threading.local(),
+    )
+    return main_module.GalleryDiagnostics(
+        config,
+        gallery_root=tmp_path / "gallery",
+        hash_index_path=tmp_path / "hash_index.json",
+        image_suffixes=frozenset({".png", ".jpg"}),
+        remote=remote,
+        current_version=main_module.CURRENT_PLUGIN_VERSION,
+        update_metadata_url=main_module.UPDATE_METADATA_URL,
+        update_cache_seconds=main_module.UPDATE_CACHE_SECONDS,
+        logger=main_module.logger,
+    )
+
+
 def test_gallery_web_api_rejects_unauthenticated_image_delete(
     main_module, monkeypatch, tmp_path
 ):
@@ -413,22 +432,29 @@ def test_initialize_only_starts_git_for_real_boolean_true(
         plugin = object.__new__(main_module.Main)
         plugin.config = {"git_sync_enabled": value}
         plugin._git_sync_enabled = False
-        plugin._diagnostic_task = None
 
         async def normalize_gallery():
             calls.append("normalize")
 
-        async def run_diagnostics():
-            calls.append("diagnostics")
+        class DiagnosticsStub:
+            def __init__(self):
+                self.task = None
 
+            def start_background(self):
+                async def run():
+                    calls.append("diagnostics")
+
+                self.task = asyncio.create_task(run())
+                return self.task
+
+        plugin.diagnostics = DiagnosticsStub()
         plugin._normalize_gallery_tree = normalize_gallery
-        plugin._run_startup_diagnostics = run_diagnostics
         plugin._validate_git_config = lambda: calls.append("validate_git")
         plugin._git_startup_sync = lambda: calls.append("startup_sync")
         plugin._start_sync_timer = lambda: calls.append("timer")
 
         await main_module.Main.initialize(plugin)
-        await plugin._diagnostic_task
+        await plugin.diagnostics.task
 
         assert calls == ["normalize", "diagnostics"]
 
@@ -460,14 +486,21 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
             def start_background_sync(self):
                 background_starts.append(True)
 
+        class DiagnosticsStub:
+            def __init__(self):
+                self.task = None
+
+            def start_background(self):
+                async def run():
+                    diagnostics_ran.set()
+
+                self.task = asyncio.create_task(run())
+                return self.task
+
         async def normalize_gallery(self):
             pass
 
-        async def run_diagnostics(self):
-            diagnostics_ran.set()
-
         monkeypatch.setattr(main_module.Main, "_normalize_gallery_tree", normalize_gallery)
-        monkeypatch.setattr(main_module.Main, "_run_startup_diagnostics", run_diagnostics)
 
         plugin = object.__new__(main_module.Main)
         plugin.config = {
@@ -480,10 +513,10 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
             "git_sync_interval": object(),
         }
         plugin.sync = SyncStub()
-        plugin._diagnostic_task = None
+        plugin.diagnostics = DiagnosticsStub()
 
         await main_module.Main.initialize(plugin)
-        await plugin._diagnostic_task
+        await plugin.diagnostics.task
 
         assert background_starts == [True]
         assert diagnostics_ran.is_set()
@@ -548,10 +581,9 @@ def test_default_git_auth_failure_still_disables_sync(main_module, monkeypatch, 
     assert plugin._git_sync_enabled is False
 
 
-def test_git_probe_uses_two_get_requests_with_encoded_components(main_module):
+def test_git_probe_uses_two_get_requests_with_encoded_components(main_module, tmp_path):
     calls = []
-    plugin = object.__new__(main_module.Main)
-    plugin.config = {
+    config = {
         "git_sync_enabled": True,
         "git_platform": "github",
         "git_repo_owner": "owner/name",
@@ -559,17 +591,24 @@ def test_git_probe_uses_two_get_requests_with_encoded_components(main_module):
         "git_branch": "feature/check",
         "git_token": "token",
     }
-    plugin._git_api_base = lambda: "https://api.test"
 
-    def git_request(method, url, **kwargs):
-        calls.append((method, url, kwargs))
-        if len(calls) == 1:
-            return 200, {"permissions": {"push": True}}
-        return 200, {"name": "feature/check"}
+    class RemoteStub:
+        def __init__(self):
+            self.request_state = types.SimpleNamespace(failure=None)
 
-    plugin._git_request = git_request
+        def api_base(self):
+            return "https://api.test"
 
-    result = main_module.Main._probe_gallery_git(plugin)
+        def request(self, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if len(calls) == 1:
+                return 200, {"permissions": {"push": True}}
+            return 200, {"name": "feature/check"}
+
+    diagnostics = construct_diagnostics(
+        main_module, tmp_path, config, remote=RemoteStub()
+    )
+    result = diagnostics.probe_git()
 
     assert result.can_push is True
     assert calls == [
@@ -594,7 +633,7 @@ def test_git_probe_uses_two_get_requests_with_encoded_components(main_module):
     ],
 )
 def test_repository_probe_preserves_typed_transport_failure_and_short_circuits_branch(
-    main_module, monkeypatch, exception_name, expected_failure, expected_code
+    main_module, monkeypatch, tmp_path, exception_name, expected_failure, expected_code
 ):
     import requests
 
@@ -605,8 +644,7 @@ def test_repository_probe_preserves_typed_transport_failure_and_short_circuits_b
         raise getattr(requests, exception_name)("private transport detail")
 
     monkeypatch.setattr(requests, "request", failed_request)
-    plugin = object.__new__(main_module.Main)
-    plugin.config = {
+    config = {
         "git_sync_enabled": True,
         "git_platform": "github",
         "git_repo_owner": "owner",
@@ -614,9 +652,9 @@ def test_repository_probe_preserves_typed_transport_failure_and_short_circuits_b
         "git_branch": "main",
         "git_token": "token",
     }
-    plugin._git_sync_enabled = True
+    diagnostics = construct_diagnostics(main_module, tmp_path, config)
 
-    result = main_module.Main._probe_gallery_git(plugin)
+    result = diagnostics.probe_git()
     items = evaluate_git_probe(result)
 
     assert result.repository_failure == expected_failure
@@ -635,7 +673,7 @@ def test_repository_probe_preserves_typed_transport_failure_and_short_circuits_b
     ],
 )
 def test_branch_probe_preserves_typed_transport_failure(
-    main_module, monkeypatch, exception_name, expected_failure, expected_code
+    main_module, monkeypatch, tmp_path, exception_name, expected_failure, expected_code
 ):
     import requests
 
@@ -657,8 +695,7 @@ def test_branch_probe_preserves_typed_transport_failure(
         raise getattr(requests, exception_name)("private transport detail")
 
     monkeypatch.setattr(requests, "request", branch_failure)
-    plugin = object.__new__(main_module.Main)
-    plugin.config = {
+    config = {
         "git_sync_enabled": True,
         "git_platform": "github",
         "git_repo_owner": "owner",
@@ -666,9 +703,9 @@ def test_branch_probe_preserves_typed_transport_failure(
         "git_branch": "main",
         "git_token": "token",
     }
-    plugin._git_sync_enabled = True
+    diagnostics = construct_diagnostics(main_module, tmp_path, config)
 
-    result = main_module.Main._probe_gallery_git(plugin)
+    result = diagnostics.probe_git()
     items = evaluate_git_probe(result)
 
     assert result.repository_status == 200
@@ -681,11 +718,14 @@ def test_branch_probe_preserves_typed_transport_failure(
 def test_internal_diagnostic_fallbacks_are_chinese_and_actionable(
     main_module, monkeypatch, tmp_path
 ):
+    import gallery_diagnostics
+
     monkeypatch.setattr(
-        main_module, "run_local_diagnostics", lambda context: DiagnosticReport()
+        gallery_diagnostics,
+        "run_local_diagnostics",
+        lambda context: DiagnosticReport(),
     )
-    plugin = object.__new__(main_module.Main)
-    plugin.config = {
+    config = {
         "git_sync_enabled": True,
         "git_platform": "github",
         "git_repo_owner": "owner",
@@ -693,12 +733,11 @@ def test_internal_diagnostic_fallbacks_are_chinese_and_actionable(
         "git_branch": "main",
         "git_token": "token",
     }
-    plugin.gallery_root = tmp_path
-    plugin._hash_index_path = tmp_path / "hash_index.json"
-    plugin._probe_gallery_git = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
-    plugin._probe_gallery_update = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
+    diagnostics = construct_diagnostics(main_module, tmp_path, config)
+    diagnostics.probe_git = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
+    diagnostics.probe_update = lambda: (_ for _ in ()).throw(RuntimeError("secret"))
 
-    report = main_module.Main._run_gallery_diagnostics(plugin)
+    report = diagnostics.run()
 
     assert [item.code for item in report.items] == ["git.internal", "update.internal"]
     for item in report.items:
@@ -751,21 +790,34 @@ def test_terminate_cancels_and_awaits_diagnostic_task(main_module):
             async def stop_background_sync(self):
                 stop_background_sync()
 
-        plugin = types.SimpleNamespace(sync=SyncStub())
-        plugin._diagnostic_task = asyncio.create_task(active_diagnostic())
+        class DiagnosticsStub:
+            def __init__(self):
+                self.task = asyncio.create_task(active_diagnostic())
+
+            async def stop_background(self):
+                task = self.task
+                self.task = None
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        diagnostics = DiagnosticsStub()
+        plugin = types.SimpleNamespace(sync=SyncStub(), diagnostics=diagnostics)
         await task_started.wait()
 
         await main_module.Main.terminate(plugin)
 
         stop_background_sync.assert_called_once_with()
         assert task_cancelled.is_set()
-        assert plugin._diagnostic_task is None
+        assert diagnostics.task is None
 
     asyncio.run(scenario())
 
 
 def test_startup_diagnostics_logs_without_using_any_chat_send_path(
-    main_module, monkeypatch
+    main_module, monkeypatch, tmp_path
 ):
     logged = []
     report = DiagnosticReport(
@@ -792,13 +844,12 @@ def test_startup_diagnostics_logs_without_using_any_chat_send_path(
         "error",
         lambda message: logged.append(("error", message)),
     )
-    plugin = types.SimpleNamespace(
-        _run_gallery_diagnostics=lambda: report,
-        send=chat_send_trap,
-        event=types.SimpleNamespace(send=chat_send_trap),
-    )
+    diagnostics = construct_diagnostics(main_module, tmp_path, {})
+    diagnostics.run = lambda: report
+    diagnostics.send = chat_send_trap
+    diagnostics.event = types.SimpleNamespace(send=chat_send_trap)
 
-    asyncio.run(main_module.Main._run_startup_diagnostics(plugin))
+    asyncio.run(diagnostics.run_startup())
 
     assert [level for level, _ in logged] == ["warning", "error"]
     assert "Startup warning: warning detail" in logged[0][1]
