@@ -8,6 +8,8 @@ from gallery_remote import GalleryRemote
 from gallery_store import GalleryStore
 from gallery_sync import GallerySync
 
+# Stage 3A lifecycle semantics belong to GallerySync; Main only composes it.
+
 
 def _sync(tmp_path, *, interval=5):
     root = tmp_path / "gallery"
