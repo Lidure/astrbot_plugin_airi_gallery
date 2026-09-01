@@ -1,117 +1,73 @@
-import ast
-import threading
-import types
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
+
+from gallery_remote import GalleryRemote
+from gallery_store import GalleryStore
+from gallery_sync import GallerySync
 
 
-class FakeLogger:
-    def warning(self, *args, **kwargs):
-        pass
-
-    def error(self, *args, **kwargs):
-        pass
-
-    def info(self, *args, **kwargs):
-        pass
-
-
-def _load_sync_method(name: str):
-    source = Path("main.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "Main":
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == name:
-                    item.decorator_list = []
-                    module = ast.Module(body=[item], type_ignores=[])
-                    ast.fix_missing_locations(module)
-                    namespace = {"Path": Path, "logger": FakeLogger()}
-                    exec(compile(module, "main.py", "exec"), namespace)
-                    return namespace[name]
-    raise AssertionError(f"Main.{name} is missing")
+def _sync(tmp_path: Path):
+    root = tmp_path / "gallery"
+    root.mkdir(parents=True)
+    store = GalleryStore(tmp_path, root, image_suffixes={".png"})
+    remote = GalleryRemote({"git_platform": "gitee"})
+    sync = GallerySync(store, remote, remote.config, image_suffixes={".png"})
+    sync.set_sync_enabled(True)
+    sync.rollback_stored_image = Mock()
+    return sync, store
 
 
-def _plugin(*, push_file, delete_remote, publish_manifest, rollback_one, rollback_all):
-    return types.SimpleNamespace(
-        _git_sync_enabled=True,
-        _git_push_cancelled=False,
-        _shutdown_event=threading.Event(),
-        _git_mutation_lock=threading.RLock(),
-        _git_platform=lambda: "gitee",
-        _to_git_path=lambda path: f"gallery/airi/{Path(path).name}",
-        _git_push_file=push_file,
-        _git_delete_remote_file=delete_remote,
-        _publish_gallery_manifest=publish_manifest,
-        _rollback_stored_image=rollback_one,
-        _rollback_staged_uploads=rollback_all,
-    )
+def _image(store: GalleryStore, name: str, content: bytes) -> Path:
+    path = store.gallery_root / "airi" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
 
 
 def test_failed_gitee_compensation_keeps_matching_local_file_and_repairs_manifest(tmp_path):
-    first = tmp_path / "1.png"
-    second = tmp_path / "2.png"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
-
-    rollback_one = Mock()
-    rollback_all = Mock(side_effect=AssertionError("must not blindly roll back all local files"))
-    delete_remote = Mock(side_effect=lambda path: path != str(second))
-    publish_manifest = Mock(side_effect=[False, True])
-
-    plugin = _plugin(
-        push_file=Mock(return_value=True),
-        delete_remote=delete_remote,
-        publish_manifest=publish_manifest,
-        rollback_one=rollback_one,
-        rollback_all=rollback_all,
+    sync, store = _sync(tmp_path)
+    first = _image(store, "1.png", b"first")
+    second = _image(store, "2.png", b"second")
+    sync.push_file_create_only = Mock(return_value=True)
+    sync.delete_file = Mock(
+        side_effect=lambda path, message: path != "gallery/airi/2.png"
     )
+    sync.manifest_publisher = Mock(side_effect=[False, True])
 
-    push_transaction = types.MethodType(
-        _load_sync_method("_push_staged_upload_transaction"), plugin
+    assert sync.push_staged_upload_transaction([first, second], "airi") is False
+
+    assert sync.delete_file.call_args_list == [
+        call("gallery/airi/2.png", "Delete gallery/airi/2.png"),
+        call("gallery/airi/1.png", "Delete gallery/airi/1.png"),
+    ]
+    sync.rollback_stored_image.assert_called_once_with(first, "airi")
+    assert all(
+        item.args[0] != second for item in sync.rollback_stored_image.call_args_list
     )
-    result = push_transaction([first, second], "airi")
-
-    assert result is False
-    assert delete_remote.call_count == 2
-    rollback_one.assert_called_once_with(first, "airi")
-    assert all(call.args[0] != second for call in rollback_one.call_args_list)
-    rollback_all.assert_not_called()
-    assert publish_manifest.call_count == 2
+    assert sync.manifest_publisher.call_count == 2
 
 
 def test_partial_gitee_push_failure_preserves_remote_orphan_and_rolls_back_never_pushed(tmp_path):
-    first = tmp_path / "1.png"
-    second = tmp_path / "2.png"
-    first.write_bytes(b"first")
-    second.write_bytes(b"second")
+    sync, store = _sync(tmp_path)
+    first = _image(store, "1.png", b"first")
+    second = _image(store, "2.png", b"second")
+    sync.push_file_create_only = Mock(side_effect=[True, False])
+    sync.delete_file = Mock(return_value=False)
+    sync.manifest_publisher = Mock(return_value=True)
 
-    rollback_one = Mock()
-    rollback_all = Mock(side_effect=AssertionError("must not blindly roll back all local files"))
-    delete_remote = Mock(return_value=False)
-    publish_manifest = Mock(return_value=True)
+    assert sync.push_staged_upload_transaction([first, second], "airi") is False
 
-    plugin = _plugin(
-        push_file=Mock(side_effect=[True, False]),
-        delete_remote=delete_remote,
-        publish_manifest=publish_manifest,
-        rollback_one=rollback_one,
-        rollback_all=rollback_all,
+    sync.delete_file.assert_called_once_with(
+        "gallery/airi/1.png", "Delete gallery/airi/1.png"
     )
-
-    push_transaction = types.MethodType(
-        _load_sync_method("_push_staged_upload_transaction"), plugin
-    )
-    result = push_transaction([first, second], "airi")
-
-    assert result is False
-    delete_remote.assert_called_once_with(str(first))
-    rollback_one.assert_called_once_with(second, "airi")
-    rollback_all.assert_not_called()
-    publish_manifest.assert_called_once_with()
+    sync.rollback_stored_image.assert_called_once_with(second, "airi")
+    sync.manifest_publisher.assert_called_once_with()
 
 
 def test_upload_failure_messages_do_not_promise_full_local_rollback():
-    source = Path("main.py").read_text(encoding="utf-8")
+    source = (
+        Path("main.py").read_text(encoding="utf-8")
+        + Path("gallery_sync.py").read_text(encoding="utf-8")
+    )
     assert "本批本地写入已全部回滚" not in source
     assert "本地写入已回滚" not in source
