@@ -177,14 +177,10 @@ def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
     assert hasattr(sync.mutation_lock, "acquire")
 
     # Transaction bodies not yet migrated in Stage 3A still serialize through
-    # the service-owned lock. Remote delete is already a GallerySync delegate.
+    # the service-owned lock. Delete and GitHub batch/ref are service-owned.
     source = Path("main.py").read_text(encoding="utf-8")
-    for name in (
-        "_git_commit_github_batch",
-        "_github_commit_renumber",
-    ):
-        block = _method_block(source, name)
-        assert "with self._git_mutation_lock:" in block, name
+    block = _method_block(source, "_github_commit_renumber")
+    assert "with self._git_mutation_lock:" in block
 
 
 def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
@@ -232,16 +228,6 @@ def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
     assert clear.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is False
     assert colliding.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is True
     assert truncated.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is None
-
-
-def test_github_batch_rechecks_create_only_paths_after_ref_conflict():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = _method_block(source, "_git_commit_github_batch")
-
-    assert "create_only_paths: set[str] | None = None" in block
-    assert block.count("_git_github_create_only_paths_exist(") >= 2
-    assert "if collision is not False:" in block
-    assert "if retry_collision is not False:" in block
 
 
 def test_upload_transaction_commits_images_and_manifest_together_on_github():
