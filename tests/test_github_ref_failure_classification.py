@@ -1,6 +1,3 @@
-import ast
-import types
-from pathlib import Path
 from unittest.mock import Mock
 
 from gallery_remote import GalleryRemote
@@ -24,28 +21,6 @@ class FakeLogger:
 
 
 LOGGER = FakeLogger()
-
-
-def _load_main_method(name: str):
-    source = Path("main.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "Main":
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == name:
-                    item.decorator_list = []
-                    module = ast.Module(body=[item], type_ignores=[])
-                    ast.fix_missing_locations(module)
-                    namespace = {"logger": LOGGER}
-                    exec(compile(module, "main.py", "exec"), namespace)
-                    return namespace[name]
-    raise AssertionError(f"Main.{name} is missing")
-
-
-def _bind_main(plugin, *names):
-    for name in names:
-        setattr(plugin, name, types.MethodType(_load_main_method(name), plugin))
-    return plugin
 
 
 def test_ref_update_records_success_conflict_rejected_and_uncertain_outcomes():
@@ -158,26 +133,23 @@ def test_conflict_ref_update_still_rebuilds_once_on_fresh_head():
 
 
 def test_pending_batch_does_not_fallback_to_per_file_writes_after_rejected_or_uncertain_ref():
-    # _git_push_pending_items is intentionally still Main-owned until the later
-    # push-all migration in Stage 3A. Keep this compatibility contract here.
     for outcome in ("rejected", "uncertain"):
-        plugin = types.SimpleNamespace(
-            _git_platform=lambda: "github",
-            _git_push_cancelled=False,
-            _git_ref_update_outcome=None,
-            _save_hash_index=Mock(),
-            _remember_verified_remote_content=Mock(),
-            _git_put_file=Mock(return_value=(True, "remote-sha")),
-        )
+        remote = GalleryRemote({"git_platform": "github"})
+        store = Mock()
+        store.save_hash_index = Mock()
+        store.remember_verified_remote_content = Mock()
+        sync = GallerySync(store, remote, remote.config, logger=LOGGER)
+        sync.set_sync_enabled(True)
+        remote.create_github_blob = Mock(return_value="blob-image")
+        remote.put_file = Mock(return_value=(True, "remote-sha"))
 
-        def push_batch(items, plugin=plugin, outcome=outcome):
-            plugin._git_ref_update_outcome = outcome
+        def fail_batch(items, message, create_only_paths=None, outcome=outcome):
+            remote.ref_update_outcome = outcome
             return False
 
-        plugin._git_push_batch_github = Mock(side_effect=push_batch)
-        _bind_main(plugin, "_git_push_pending_items")
+        sync.commit_github_batch = Mock(side_effect=fail_batch)
 
-        result = plugin._git_push_pending_items([("gallery/airi/1.png", b"image")])
+        result = sync.push_pending_items([("gallery/airi/1.png", b"image")])
 
         assert result == (0, 1, 0)
-        plugin._git_put_file.assert_not_called()
+        remote.put_file.assert_not_called()
