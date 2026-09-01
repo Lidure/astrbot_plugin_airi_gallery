@@ -135,8 +135,8 @@ def test_remote_manifest_prunes_stale_deleted_paths_and_repairs_remote_index():
         "version": 1,
         "algorithm": GALLERY_INDEX_ALGORITHM,
         "files": {
-            "gallery/airi/1.png": {"perceptual_hash": "1111"},
-            "gallery/airi/deleted.png": {"perceptual_hash": "dead"},
+            "gallery/airi/1.png": {"perceptual_hash": "1111111111111111"},
+            "gallery/airi/deleted.png": {"perceptual_hash": "deaddeaddeaddead"},
         },
     }
     put_file = Mock(return_value=(True, "manifest-sha"))
@@ -155,7 +155,7 @@ def test_remote_manifest_prunes_stale_deleted_paths_and_repairs_remote_index():
     ok, manifest = read_manifest(tree)
 
     assert ok is True
-    assert manifest == {"gallery/airi/1.png": "1111"}
+    assert manifest == {"gallery/airi/1.png": "1111111111111111"}
     put_file.assert_called_once()
     repaired = json.loads(put_file.call_args.args[1].decode("utf-8"))
     assert set(repaired["files"]) == {"gallery/airi/1.png"}
@@ -165,7 +165,7 @@ def test_remote_manifest_does_not_republish_when_already_exact():
     manifest_payload = {
         "version": 1,
         "algorithm": GALLERY_INDEX_ALGORITHM,
-        "files": {"gallery/airi/1.png": {"perceptual_hash": "1111"}},
+        "files": {"gallery/airi/1.png": {"perceptual_hash": "1111111111111111"}},
     }
     put_file = Mock(return_value=(True, "manifest-sha"))
     plugin = types.SimpleNamespace(
@@ -183,5 +183,5 @@ def test_remote_manifest_does_not_republish_when_already_exact():
     ok, manifest = read_manifest(tree)
 
     assert ok is True
-    assert manifest == {"gallery/airi/1.png": "1111"}
+    assert manifest == {"gallery/airi/1.png": "1111111111111111"}
     put_file.assert_not_called()
