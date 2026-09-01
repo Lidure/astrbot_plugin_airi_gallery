@@ -114,3 +114,49 @@ def resolve_gallery_category_query(
         return candidates[0][2]
 
     return ""
+
+
+def match_view_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
+    if use_prefix:
+        return re.match(r"^/看(?:看)?\s*(.+)$", normalized)
+    if normalized.startswith("/"):
+        return None
+    return re.match(r"^看(?:看)?\s*(.+)$", normalized)
+
+
+def match_view_all_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
+    if use_prefix:
+        return re.match(r"^/(?:看全部|看所有)\s*(.+)$", normalized)
+    if normalized.startswith("/"):
+        return None
+    return re.match(r"^(?:看全部|看所有)\s*(.+)$", normalized)
+
+
+def extract_view_target(normalized: str, *, use_prefix: bool) -> str | None:
+    match = match_view_command(normalized, use_prefix=use_prefix)
+    if match is None:
+        return None
+    return match.group(1).strip()
+
+
+def extract_view_all_target(normalized: str, *, use_prefix: bool) -> str | None:
+    match = match_view_all_command(normalized, use_prefix=use_prefix)
+    if match is None:
+        return None
+    return match.group(1).strip()
+
+
+def parse_view_target(target: str) -> tuple[str, object]:
+    range_match = re.match(r"^(\d+)\s*[-~～—–]\s*(\d+)$", target)
+    if range_match:
+        return "range", (int(range_match.group(1)), int(range_match.group(2)))
+
+    many_match = re.match(r"^(.+?)\s+(\d+)$", target)
+    if many_match:
+        category = many_match.group(1).strip()
+        count = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
+        return "multiple", (category, count)
+
+    if target.isdigit():
+        return "number", int(target)
+    return "category", target
