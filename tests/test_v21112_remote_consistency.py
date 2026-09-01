@@ -176,11 +176,10 @@ def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
     assert remote.mutation_lock is sync.mutation_lock
     assert hasattr(sync.mutation_lock, "acquire")
 
-    # Until each transaction body is mechanically moved, Main compatibility
-    # delegates must still serialize through the service-owned lock.
+    # Transaction bodies not yet migrated in Stage 3A still serialize through
+    # the service-owned lock. Remote delete is already a GallerySync delegate.
     source = Path("main.py").read_text(encoding="utf-8")
     for name in (
-        "_git_delete_file",
         "_git_commit_github_batch",
         "_github_commit_renumber",
     ):
