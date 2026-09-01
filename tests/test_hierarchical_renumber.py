@@ -57,14 +57,14 @@ def test_build_renumbered_category_entries_rejects_cross_category_moves():
         raise AssertionError("cross-category renumber must be rejected")
 
 
-def test_main_renumber_uses_hierarchical_category_trees_and_reports_stage():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = source.split("    def _github_commit_renumber", 1)[1].split(
-        "    def _renumber_gallery_consistently_sync", 1
+def test_gallery_sync_renumber_uses_hierarchical_category_trees_and_reports_stage():
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    block = source.split("    def commit_github_renumber", 1)[1].split(
+        "    def renumber_gallery_consistently", 1
     )[0]
 
     assert "build_renumbered_category_entries" in block
-    assert "_git_apply_category_tree_delta" in block
+    assert "remote.apply_category_tree_delta" in block
     assert '"type": "tree"' in block
     assert "stage" in block
     assert "source_paths - final_targets" not in block
@@ -153,12 +153,12 @@ def test_large_category_tree_mutations_upsert_before_delete_without_version_bump
     assert "phase=delete" in second.kwargs["context"]
     assert gallery_remote.GITHUB_TREE_MUTATION_CHUNK_SIZE == 100
 
-    source = Path("main.py").read_text(encoding="utf-8")
-    renumber = source.split("    def _github_commit_renumber", 1)[1].split(
-        "    def _renumber_gallery_consistently_sync", 1
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    renumber = source.split("    def commit_github_renumber", 1)[1].split(
+        "    def renumber_gallery_consistently", 1
     )[0]
-    assert "self._git_apply_category_tree_delta(" in renumber
-    assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
+    assert "self.remote.apply_category_tree_delta(" in renumber
+    assert "create_github_tree_incrementally(list(category_entries))" not in renumber
 
 
 def test_category_tree_delta_replaces_same_path_without_deleting_it_first():
@@ -191,16 +191,16 @@ def test_category_tree_delta_replaces_same_path_without_deleting_it_first():
 
 
 def test_large_categories_mutate_existing_tree_instead_of_rebuilding_from_empty():
-    source = Path("main.py").read_text(encoding="utf-8")
-    renumber = source.split("    def _github_commit_renumber", 1)[1].split(
-        "    def _renumber_gallery_consistently_sync", 1
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    renumber = source.split("    def commit_github_renumber", 1)[1].split(
+        "    def renumber_gallery_consistently", 1
     )[0]
 
     assert "build_category_tree_delta_entries" in source
-    assert "_git_apply_category_tree_delta" in source
+    assert "remote.apply_category_tree_delta" in source
     assert 'tree_shas.get(f"gallery/{category}", "")' in renumber
-    assert "self._git_apply_category_tree_delta(" in renumber
-    assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
+    assert "self.remote.apply_category_tree_delta(" in renumber
+    assert "create_github_tree_incrementally(list(category_entries))" not in renumber
 
 
 # Delta renumber must preserve unchanged direct children while only mutating changed paths.

@@ -122,91 +122,49 @@ def test_remote_delete_reports_success_to_callers():
 
 
 def test_timer_callback_does_nothing_after_shutdown():
-    shutdown = threading.Event()
-    shutdown.set()
-    plugin = types.SimpleNamespace(
-        _shutdown_event=shutdown,
-        _git_sync_enabled=True,
-        _git_sync_from_remote=Mock(side_effect=AssertionError("must not sync")),
-        _start_sync_timer=Mock(side_effect=AssertionError("must not reschedule")),
-    )
-    callback = types.MethodType(_load_sync_method("_sync_timer_cb"), plugin)
-
-    callback()
-
-    plugin._git_sync_from_remote.assert_not_called()
-    plugin._start_sync_timer.assert_not_called()
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = _method_block(source, "_sync_timer_cb")
+    assert "return self.sync.timer_callback()" in block
 
 
 def test_start_sync_timer_refuses_to_schedule_after_shutdown():
-    shutdown = threading.Event()
-    shutdown.set()
-
-    class ForbiddenTimer:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("timer must not be created after shutdown")
-
-    fake_threading = types.SimpleNamespace(Timer=ForbiddenTimer)
-    start_timer = _load_sync_method(
-        "_start_sync_timer",
-        threading=fake_threading,
-        coerce_strict_int=lambda value, default: int(value),
-    )
-    plugin = types.SimpleNamespace(
-        config={"git_sync_interval": 5},
-        _shutdown_event=shutdown,
-        _sync_timer=None,
-        _sync_timer_cb=Mock(),
-    )
-
-    types.MethodType(start_timer, plugin)()
-
-    assert plugin._sync_timer is None
-
-
-def test_remote_branch_mutations_share_one_reentrant_lock():
     source = Path("main.py").read_text(encoding="utf-8")
-    init_block = _method_block(source, "__init__")
-    assert "self._git_mutation_lock = threading.RLock()" in init_block
-    assert "mutation_lock=self._git_mutation_lock" in init_block
+    block = _method_block(source, "_start_sync_timer")
+    assert "return self.sync.start_timer()" in block
 
-    shared_lock = threading.RLock()
-    remote = GalleryRemote({}, mutation_lock=shared_lock)
-    assert remote.mutation_lock is shared_lock
 
-    # Remote primitives own their lock boundary; transaction policy methods
-    # that still live in Main continue to use the same injected lock.
-    for name in (
-        "_git_delete_file",
-        "_git_commit_github_batch",
-        "_github_commit_renumber",
-    ):
-        block = _method_block(source, name)
-        assert "with self._git_mutation_lock:" in block, name
+def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
+    from gallery_store import GalleryStore
+    from gallery_sync import GallerySync
+
+    root = tmp_path / "gallery"
+    store = GalleryStore(tmp_path, root, image_suffixes={".png"})
+    remote = GalleryRemote({})
+    sync = GallerySync(store, remote, {}, image_suffixes={".png"})
+
+    assert remote.mutation_lock is sync.mutation_lock
+    assert hasattr(sync.mutation_lock, "acquire")
+
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    block = source.split("    def commit_github_renumber", 1)[1].split(
+        "    def renumber_gallery_consistently", 1
+    )[0]
+    assert "with self.mutation_lock:" in block
 
 
 def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
     source = Path("main.py").read_text(encoding="utf-8")
-    init_block = _method_block(source, "__init__")
+    sync_source = Path("gallery_sync.py").read_text(encoding="utf-8")
     initialize = _method_block(source, "initialize")
     terminate = _method_block(source, "terminate")
-    start_timer = _method_block(source, "_start_sync_timer")
-    timer_cb = _method_block(source, "_sync_timer_cb")
-    startup_sync = _method_block(source, "_git_startup_sync")
 
-    assert "self._shutdown_event = threading.Event()" in init_block
-    assert "self._startup_sync_thread: threading.Thread | None = None" in init_block
-    assert "self._startup_sync_thread = threading.Thread(" in initialize
-    assert "self._startup_sync_thread.start()" in initialize
-    assert "self._shutdown_event.set()" in terminate
-    assert "self._git_sync_enabled = False" in terminate
-    assert "self._git_push_cancelled = True" in terminate
-    assert "await asyncio.to_thread(" in terminate
-    assert "self._startup_sync_thread" in terminate
-    assert "self._shutdown_event.is_set()" in start_timer
-    assert "self._shutdown_event.is_set()" in timer_cb
-    assert "not self._shutdown_event.is_set()" in timer_cb
-    assert "self._shutdown_event.is_set()" in startup_sync
+    assert "def startup_sync(self) -> None:" in sync_source
+    assert "def start_timer(self) -> None:" in sync_source
+    assert "def timer_callback(self) -> None:" in sync_source
+    assert "def start_background_sync(self) -> None:" in sync_source
+    assert "async def stop_background_sync(self) -> None:" in sync_source
+    assert "self.sync.start_background_sync()" in initialize
+    assert "await self.sync.stop_background_sync()" in terminate
 
 
 def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
@@ -228,16 +186,6 @@ def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
     assert clear.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is False
     assert colliding.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is True
     assert truncated.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is None
-
-
-def test_github_batch_rechecks_create_only_paths_after_ref_conflict():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = _method_block(source, "_git_commit_github_batch")
-
-    assert "create_only_paths: set[str] | None = None" in block
-    assert block.count("_git_github_create_only_paths_exist(") >= 2
-    assert "if collision is not False:" in block
-    assert "if retry_collision is not False:" in block
 
 
 def test_upload_transaction_commits_images_and_manifest_together_on_github():

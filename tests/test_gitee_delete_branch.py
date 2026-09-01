@@ -1,10 +1,11 @@
-import ast
 import threading
-import types
-from pathlib import Path
 from unittest.mock import Mock
 
 from gallery_remote import GalleryRemote
+from gallery_sync import GallerySync
+
+
+PATH = "gallery/airi/1.png"
 
 
 class FakeLogger:
@@ -16,22 +17,6 @@ class FakeLogger:
 
     def error(self, *args, **kwargs):
         pass
-
-
-def _load_method(name):
-    source = Path("main.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "Main":
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == name:
-                    item.decorator_list = []
-                    module = ast.Module(body=[item], type_ignores=[])
-                    ast.fix_missing_locations(module)
-                    namespace = {"logger": FakeLogger()}
-                    exec(compile(module, "main.py", "exec"), namespace)
-                    return namespace[name]
-    raise AssertionError(f"Main.{name} is missing")
 
 
 def _gitee_remote(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
@@ -47,34 +32,22 @@ def _gitee_remote(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
         mutation_lock=threading.RLock(),
     )
     if cached_sha:
-        remote.sha_cache["gallery/airi/1.png"] = cached_sha
+        remote.sha_cache[PATH] = cached_sha
     remote.request = request
     remote.fetch_file_sha = lambda path: fresh_sha
     return remote
 
 
-def _delete_plugin(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
-    cache = {}
-    if cached_sha:
-        cache["gallery/airi/1.png"] = cached_sha
-    return types.SimpleNamespace(
-        _git_mutation_lock=threading.RLock(),
-        _sha_cache=cache,
-        _git_api_base=lambda: "https://gitee.test/api/v5",
-        _git_owner=lambda: "owner",
-        _git_repo=lambda: "repo",
-        _git_branch=lambda: "gallery-data",
-        _git_platform=lambda: "gitee",
-        _git_request=request,
-        _git_fetch_file_sha=lambda path: fresh_sha,
-    )
+def _gitee_sync(request, *, cached_sha="cached-sha"):
+    remote = _gitee_remote(request, cached_sha=cached_sha)
+    return GallerySync(object(), remote, remote.config, logger=FakeLogger()), remote
 
 
 def test_gitee_create_targets_configured_branch():
     request = Mock(return_value=(201, {"content": {"sha": "new-sha"}}))
     remote = _gitee_remote(request, cached_sha=None)
 
-    assert remote.put_file("gallery/airi/1.png", b"image", "Upload image") == (True, "new-sha")
+    assert remote.put_file(PATH, b"image", "Upload image") == (True, "new-sha")
     assert request.call_count == 1
     call = request.call_args
     assert call.args[0] == "POST"
@@ -91,7 +64,7 @@ def test_gitee_update_retry_keeps_configured_branch():
     )
     remote = _gitee_remote(request)
 
-    assert remote.put_file("gallery/airi/1.png", b"image", "Update image") == (True, "new-sha")
+    assert remote.put_file(PATH, b"image", "Update image") == (True, "new-sha")
     assert request.call_count == 2
     first_update = request.call_args_list[0]
     retry_update = request.call_args_list[1]
@@ -105,10 +78,9 @@ def test_gitee_update_retry_keeps_configured_branch():
 
 def test_gitee_delete_targets_configured_branch():
     request = Mock(return_value=(200, {"content": None}))
-    plugin = _delete_plugin(request)
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, _ = _gitee_sync(request)
 
-    assert delete("gallery/airi/1.png", "Delete image") is True
+    assert sync.delete_file(PATH, "Delete image") is True
     assert request.call_count == 1
     call = request.call_args
     assert call.args[0] == "DELETE"
@@ -127,10 +99,9 @@ def test_gitee_stale_sha_retry_keeps_configured_branch():
             (200, {"content": None}),
         ]
     )
-    plugin = _delete_plugin(request)
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, _ = _gitee_sync(request)
 
-    assert delete("gallery/airi/1.png", "Delete image") is True
+    assert sync.delete_file(PATH, "Delete image") is True
     assert request.call_count == 3
     first_delete = request.call_args_list[0]
     refresh = request.call_args_list[1]

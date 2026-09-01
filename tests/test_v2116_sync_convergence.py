@@ -1,7 +1,8 @@
-from pathlib import Path
+import inspect
 
 import gallery_reporting
 import gallery_safety
+from gallery_sync import GallerySync
 
 
 def test_path_difference_reports_both_sides_deterministically():
@@ -30,13 +31,10 @@ def test_remote_deleted_cleanup_requires_current_local_bytes_to_match_verified_r
 
 
 def test_sync_uses_real_disk_paths_and_converges_to_remote_paths():
-    source = Path("main.py").read_text(encoding="utf-8")
-    sync = source.split("    def _git_sync_from_remote", 1)[1].split(
-        "    def _git_push_file", 1
-    )[0]
+    sync = inspect.getsource(GallerySync.sync_from_remote)
 
     assert "compare_gallery_paths" in sync
-    assert "self._iter_image_files()" in sync
+    assert "self.store.iter_image_files()" in sync
     assert "path_diff.local_only" in sync
     assert "matches_verified_remote_content" in sync
     assert "local_path.unlink()" in sync
@@ -61,13 +59,11 @@ def test_sync_reports_any_remaining_path_difference_instead_of_false_zero_summar
 
 
 def test_import_gallery_mismatch_includes_concrete_difference_examples():
-    source = Path("main.py").read_text(encoding="utf-8")
-    renumber = source.split("    def _renumber_gallery_consistently_sync", 1)[1].split(
-        "    async def _renumber_gallery_consistently", 1
-    )[0]
+    # Import convergence now belongs to GallerySync; Main only delegates to it.
+    renumber = inspect.getsource(GallerySync.renumber_gallery_consistently)
 
     assert "compare_gallery_paths" in renumber
-    assert "_format_gallery_path_difference" in renumber
+    assert "format_gallery_path_difference" in renumber
 
     details = gallery_reporting.format_gallery_path_difference(
         gallery_safety.GalleryPathDifference(

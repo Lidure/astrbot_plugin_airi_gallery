@@ -1,11 +1,12 @@
 import ast
 import json
-import threading
 import types
 from pathlib import Path
 from unittest.mock import Mock
 
+from gallery_remote import GalleryRemote
 from gallery_safety import normalize_perceptual_manifest
+from gallery_sync import GallerySync
 
 
 class FakeLogger:
@@ -23,6 +24,7 @@ LOGGER = FakeLogger()
 GALLERY_INDEX_PATH = "gallery/gallery_index.json"
 GALLERY_INDEX_ALGORITHM = "dhash64-nn-white-v1"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+PATH = "gallery/airi/1.png"
 
 
 def _load_method(name: str):
@@ -49,17 +51,21 @@ def _load_method(name: str):
     raise AssertionError(f"Main.{name} is missing")
 
 
-def _delete_plugin(request, *, platform="github", sha="cached-sha"):
-    return types.SimpleNamespace(
-        _git_mutation_lock=threading.RLock(),
-        _sha_cache={"gallery/airi/1.png": sha} if sha else {},
-        _git_api_base=lambda: "https://api.example.test",
-        _git_owner=lambda: "owner",
-        _git_repo=lambda: "repo",
-        _git_branch=lambda: "gallery-branch",
-        _git_platform=lambda: platform,
-        _git_request=request,
+def _delete_sync(request, *, platform="github", sha="cached-sha"):
+    remote = GalleryRemote(
+        {
+            "git_platform": platform,
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+            "git_branch": "gallery-branch",
+            "git_token": "token",
+        },
+        logger=LOGGER,
     )
+    remote.request = request
+    if sha:
+        remote.sha_cache[PATH] = sha
+    return GallerySync(object(), remote, remote.config, logger=LOGGER), remote
 
 
 def test_initial_uncertain_delete_confirms_remote_404_as_success():
@@ -69,12 +75,11 @@ def test_initial_uncertain_delete_confirms_remote_404_as_success():
             (404, {"message": "Not Found"}),
         ]
     )
-    plugin = _delete_plugin(request)
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, remote = _delete_sync(request)
 
-    assert delete("gallery/airi/1.png", "Delete image") is True
+    assert sync.delete_file(PATH, "Delete image") is True
     assert [call.args[0] for call in request.call_args_list] == ["DELETE", "GET"]
-    assert "gallery/airi/1.png" not in plugin._sha_cache
+    assert PATH not in remote.sha_cache
 
 
 def test_initial_uncertain_delete_preserves_failure_when_remote_still_exists():
@@ -84,12 +89,11 @@ def test_initial_uncertain_delete_preserves_failure_when_remote_still_exists():
             (200, {"sha": "current-sha"}),
         ]
     )
-    plugin = _delete_plugin(request)
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, remote = _delete_sync(request)
 
-    assert delete("gallery/airi/1.png", "Delete image") is False
+    assert sync.delete_file(PATH, "Delete image") is False
     assert [call.args[0] for call in request.call_args_list] == ["DELETE", "GET"]
-    assert plugin._sha_cache["gallery/airi/1.png"] == "current-sha"
+    assert remote.sha_cache[PATH] == "current-sha"
 
 
 def test_retry_uncertain_delete_confirms_remote_404_as_success():
@@ -101,10 +105,9 @@ def test_retry_uncertain_delete_confirms_remote_404_as_success():
             (404, {"message": "Not Found"}),
         ]
     )
-    plugin = _delete_plugin(request)
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, remote = _delete_sync(request)
 
-    assert delete("gallery/airi/1.png", "Delete image") is True
+    assert sync.delete_file(PATH, "Delete image") is True
     assert [call.args[0] for call in request.call_args_list] == [
         "DELETE",
         "GET",
@@ -112,7 +115,7 @@ def test_retry_uncertain_delete_confirms_remote_404_as_success():
         "GET",
     ]
     assert request.call_args_list[2].kwargs["json_body"]["sha"] == "fresh-sha"
-    assert "gallery/airi/1.png" not in plugin._sha_cache
+    assert PATH not in remote.sha_cache
 
 
 def test_uncertain_delete_confirmation_is_platform_symmetric_for_gitee():
@@ -122,10 +125,9 @@ def test_uncertain_delete_confirmation_is_platform_symmetric_for_gitee():
             (404, {"message": "Not Found"}),
         ]
     )
-    plugin = _delete_plugin(request, platform="gitee")
-    delete = types.MethodType(_load_method("_git_delete_file"), plugin)
+    sync, _ = _delete_sync(request, platform="gitee")
 
-    assert delete("gallery/airi/1.png", "Delete image") is True
+    assert sync.delete_file(PATH, "Delete image") is True
     assert request.call_args_list[0].kwargs["json_body"]["branch"] == "gallery-branch"
     assert request.call_args_list[1].kwargs["params"]["ref"] == "gallery-branch"
 

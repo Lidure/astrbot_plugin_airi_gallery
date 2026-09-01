@@ -138,6 +138,11 @@ except ImportError:
     from gallery_remote import GalleryRemote
 
 try:
+    from .gallery_sync import GallerySync
+except ImportError:
+    from gallery_sync import GallerySync
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -452,24 +457,24 @@ class Main(Star):
         )
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
 
-        # Git 远程同步状态
-        self._sync_timer: threading.Timer | None = None
-        self._sync_lock = threading.Lock()
+        # Git 远程同步事务状态由 GallerySync 单独拥有；Main 仅保留兼容代理。
         self._gallery_write_lock = threading.RLock()
-        self._git_mutation_lock = threading.RLock()
-        self._shutdown_event = threading.Event()
-        self._startup_sync_thread: threading.Thread | None = None
-        self._git_sync_enabled = False
         self.remote = GalleryRemote(
             self.config,
             logger=logger,
-            mutation_lock=self._git_mutation_lock,
-            set_sync_enabled=lambda enabled: setattr(
-                self, "_git_sync_enabled", bool(enabled)
-            ),
             request_state=_GIT_REQUEST_STATE,
         )
-        self._git_push_cancelled = False
+        self.sync = GallerySync(
+            self.store,
+            self.remote,
+            self.config,
+            image_suffixes=IMAGE_SUFFIXES,
+            logger=logger,
+            gallery_write_lock=self._gallery_write_lock,
+            ensure_perceptual_index=self._ensure_perceptual_index,
+            manifest_path=GALLERY_INDEX_PATH,
+            manifest_algorithm=GALLERY_INDEX_ALGORITHM,
+        )
         self._diagnostic_task: asyncio.Task | None = None
         self._diagnostic_update_cache = UpdateProbeCache(
             ttl_seconds=UPDATE_CACHE_SECONDS
@@ -550,36 +555,14 @@ class Main(Star):
         if coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self._validate_git_config()
             if self._git_sync_enabled:
-                self._startup_sync_thread = threading.Thread(
-                    target=self._git_startup_sync, daemon=True
-                )
-                self._startup_sync_thread.start()
-                self._start_sync_timer()
+                self.sync.start_background_sync()
         else:
             await self._normalize_gallery_tree()
         self._diagnostic_task = asyncio.create_task(self._run_startup_diagnostics())
 
     async def terminate(self):
         """插件卸载时停止后台同步并等待已启动的同步线程退出。"""
-        if not hasattr(self, "_shutdown_event"):
-            self._shutdown_event = threading.Event()
-        self._shutdown_event.set()
-        self._git_sync_enabled = False
-        self._git_push_cancelled = True
-
-        sync_timer = getattr(self, "_sync_timer", None)
-        if sync_timer is not None:
-            sync_timer.cancel()
-            self._sync_timer = None
-            if sync_timer.is_alive():
-                await asyncio.to_thread(sync_timer.join, 5.0)
-
-        startup_thread = getattr(self, "_startup_sync_thread", None)
-        if startup_thread is not None and startup_thread.is_alive():
-            await asyncio.to_thread(startup_thread.join, 5.0)
-            if startup_thread.is_alive():
-                logger.warning("[Git Sync] 启动同步线程未能在卸载等待期内退出。")
-        self._startup_sync_thread = None
+        await self.sync.stop_background_sync()
 
         if self._diagnostic_task is not None:
             self._diagnostic_task.cancel()
@@ -820,7 +803,7 @@ class Main(Star):
 
     @filter.command("抽表情")
     async def cmd_random_draw(self, event: AstrMessageEvent):
-        """从全图库随机抽取 1 张或 N 张图片/表情包。"""
+        """从全图库随机抽取 1 张或 N 张图片或表情包。"""
         text = self._normalize_command_text(event, "抽表情")
         action = self._parse_action(text)
         if not action:
@@ -1719,6 +1702,128 @@ class Main(Star):
         self._git_sync_enabled = True
         logger.info(f"[Git Sync] 已启用，平台={platform} 仓库={owner}/{repo}")
 
+    @property
+    def _sync_lock(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.sync_lock
+        lock = self.__dict__.get("_sync_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self.__dict__["_sync_lock"] = lock
+        return lock
+
+    @_sync_lock.setter
+    def _sync_lock(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.sync_lock = value
+        else:
+            self.__dict__["_sync_lock"] = value
+
+    @property
+    def _git_mutation_lock(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.mutation_lock
+        lock = self.__dict__.get("_git_mutation_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self.__dict__["_git_mutation_lock"] = lock
+        return lock
+
+    @_git_mutation_lock.setter
+    def _git_mutation_lock(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.mutation_lock = value
+            if self.__dict__.get("remote") is not None:
+                self.remote.mutation_lock = value
+        else:
+            self.__dict__["_git_mutation_lock"] = value
+
+    @property
+    def _shutdown_event(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.shutdown_event
+        event = self.__dict__.get("_shutdown_event")
+        if event is None:
+            event = threading.Event()
+            self.__dict__["_shutdown_event"] = event
+        return event
+
+    @_shutdown_event.setter
+    def _shutdown_event(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.shutdown_event = value
+        else:
+            self.__dict__["_shutdown_event"] = value
+
+    @property
+    def _sync_timer(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.sync_timer
+        return self.__dict__.get("_sync_timer")
+
+    @_sync_timer.setter
+    def _sync_timer(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.sync_timer = value
+        else:
+            self.__dict__["_sync_timer"] = value
+
+    @property
+    def _startup_sync_thread(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.startup_sync_thread
+        return self.__dict__.get("_startup_sync_thread")
+
+    @_startup_sync_thread.setter
+    def _startup_sync_thread(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.startup_sync_thread = value
+        else:
+            self.__dict__["_startup_sync_thread"] = value
+
+    @property
+    def _git_sync_enabled(self) -> bool:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.git_sync_enabled
+        return bool(self.__dict__.get("_git_sync_enabled", False))
+
+    @_git_sync_enabled.setter
+    def _git_sync_enabled(self, value: bool) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.set_sync_enabled(bool(value))
+        else:
+            self.__dict__["_git_sync_enabled"] = bool(value)
+
+    @property
+    def _git_push_cancelled(self) -> bool:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.git_push_cancelled
+        return bool(self.__dict__.get("_git_push_cancelled", False))
+
+    @_git_push_cancelled.setter
+    def _git_push_cancelled(self, value: bool) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            if value:
+                sync.cancel_push()
+            else:
+                sync.reset_push_cancelled()
+        else:
+            self.__dict__["_git_push_cancelled"] = bool(value)
+
     def _remote_service(self) -> GalleryRemote:
         remote = self.__dict__.get("remote")
         if remote is not None:
@@ -2052,139 +2157,12 @@ class Main(Star):
         message: str,
         create_only_paths: set[str] | None = None,
     ) -> bool:
-        """把一批文件作为一个 GitHub commit 提交，并保护 create-only 路径。"""
-
-        def branch_tree_matches_items(tree_sha: str) -> bool:
-            """ref 更新结果不确定时，只在当前 tree 已完整包含本批 blob 时确认成功。"""
-            if not str(tree_sha).strip():
-                return False
-            base = self._git_api_base()
-            owner = self._git_owner()
-            repo = self._git_repo()
-            url = f"{base}/repos/{owner}/{repo}/git/trees/{tree_sha}"
-            status, data = self._git_request(
-                "GET", url, params={"recursive": "1"}, timeout=60
-            )
-            if status != 200 or not isinstance(data, dict) or data.get("truncated"):
-                return False
-            remote_blobs = {
-                str(entry.get("path", "")): str(entry.get("sha", "")).strip()
-                for entry in data.get("tree", [])
-                if isinstance(entry, dict)
-                and entry.get("type") == "blob"
-                and str(entry.get("path", "")).strip()
-            }
-            return all(
-                remote_blobs.get(git_path) == blob_sha
-                for git_path, _, blob_sha in items
-            )
-
-        with self._git_mutation_lock:
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return False
-            parent_sha, base_tree_sha = head
-
-            collision = False
-            if create_only_paths:
-                collision = self._git_github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
-                )
-            if collision is not False:
-                if collision:
-                    logger.warning("[Git Sync] 新上传编号已被远程占用，拒绝覆盖。")
-                return False
-
-            tree_entries = [
-                {
-                    "path": git_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blob_sha,
-                }
-                for git_path, _, blob_sha in items
-            ]
-            tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
-            if not tree_sha:
-                return False
-
-            commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
-            if not commit_sha:
-                return False
-
-            if self._git_update_github_ref(commit_sha):
-                for git_path, _, blob_sha in items:
-                    self._sha_cache[git_path] = blob_sha
-                return True
-
-            # 真实实现每次 PATCH 都会写入 outcome；默认 conflict 仅兼容旧测试桩。
-            ref_outcome = getattr(self, "_git_ref_update_outcome", None) or "conflict"
-            if ref_outcome == "rejected":
-                logger.warning(
-                    "[Git Sync] GitHub ref 更新被明确拒绝，本批次停止，不执行冲突重试。"
-                )
-                return False
-
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return False
-            parent_sha, base_tree_sha = head
-
-            if ref_outcome == "uncertain":
-                # PATCH 响应丢失时，分支可能已移动到本 commit，甚至又前进到它的后继。
-                # 仅当当前 tree 仍完整包含本批次全部 blob 时，才能把不确定响应收敛为成功。
-                if parent_sha == commit_sha or branch_tree_matches_items(base_tree_sha):
-                    for git_path, _, blob_sha in items:
-                        self._sha_cache[git_path] = blob_sha
-                    return True
-                logger.warning(
-                    "[Git Sync] GitHub ref 更新结果不确定且无法确认已生效，本批次停止。"
-                )
-                return False
-
-            if ref_outcome != "conflict":
-                logger.warning(
-                    f"[Git Sync] GitHub ref 更新返回未知结果 {ref_outcome!r}，本批次停止。"
-                )
-                return False
-
-            logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
-            retry_collision = False
-            if create_only_paths:
-                retry_collision = self._git_github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
-                )
-            if retry_collision is not False:
-                if retry_collision:
-                    logger.warning("[Git Sync] 重试前发现新上传编号已被远程占用，拒绝覆盖。")
-                return False
-
-            tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
-            if not tree_sha:
-                return False
-            retry_commit_sha = self._git_create_github_commit(
-                message, tree_sha, parent_sha
-            )
-            if not retry_commit_sha:
-                return False
-            if not self._git_update_github_ref(retry_commit_sha):
-                retry_outcome = (
-                    getattr(self, "_git_ref_update_outcome", None) or "conflict"
-                )
-                if retry_outcome != "uncertain":
-                    return False
-                refreshed = self._git_get_head_commit_and_tree()
-                if not refreshed:
-                    return False
-                if (
-                    refreshed[0] != retry_commit_sha
-                    and not branch_tree_matches_items(refreshed[1])
-                ):
-                    return False
-
-            for git_path, _, blob_sha in items:
-                self._sha_cache[git_path] = blob_sha
-            return True
+        """Compatibility delegate; GallerySync owns the GitHub batch transaction."""
+        return self.sync.commit_github_batch(
+            items,
+            message,
+            create_only_paths=create_only_paths,
+        )
 
     def _git_push_batch_github(
         self,
@@ -2214,165 +2192,12 @@ class Main(Star):
         )
 
     def _git_push_pending_items(self, items: list[tuple[str, bytes]]) -> tuple[int, int, int]:
-        """推送一批待处理文件，返回 (成功数, 失败数, 跳过数)。"""
-        if not items:
-            return 0, 0, 0
-
-        if self._git_platform() == "github":
-            self._git_ref_update_outcome = None
-            if self._git_push_batch_github(items):
-                try:
-                    for git_path, content in items:
-                        remote_sha = self._sha_cache.get(git_path, "")
-                        self._remember_verified_remote_content(
-                            git_path, content, remote_sha, save=False
-                        )
-                finally:
-                    self._save_hash_index()
-                logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
-                return len(items), 0, 0
-            ref_outcome = getattr(self, "_git_ref_update_outcome", None)
-            if ref_outcome in {"rejected", "uncertain"}:
-                logger.warning(
-                    "[Git Sync] GitHub 批量提交因 ref 更新拒绝/结果不确定而停止，"
-                    "不回退逐文件写入。"
-                )
-                return 0, len(items), 0
-            logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
-
-        success = 0
-        failed = 0
-        skipped = 0
-        try:
-            for offset, (git_path, content) in enumerate(items):
-                if self._git_push_cancelled:
-                    skipped += len(items) - offset
-                    break
-                uploaded, remote_sha = self._git_put_file(
-                    git_path, content, f"Sync {git_path}"
-                )
-                if uploaded:
-                    if remote_sha:
-                        self._remember_verified_remote_content(
-                            git_path, content, remote_sha, save=False
-                        )
-                    success += 1
-                else:
-                    failed += 1
-        finally:
-            self._save_hash_index()
-        return success, failed, skipped
+        """Compatibility delegate; GallerySync owns pending push orchestration."""
+        return self.sync.push_pending_items(items)
 
     def _git_delete_file(self, path: str, message: str) -> bool:
-        """删除远程文件；无法确认远端当前 SHA 时必须 fail-closed。"""
-        with self._git_mutation_lock:
-            base = self._git_api_base()
-            owner = self._git_owner()
-            repo = self._git_repo()
-            branch = self._git_branch()
-            url = f"{base}/repos/{owner}/{repo}/contents/{path}"
-
-            def confirm_uncertain_delete() -> bool:
-                """DELETE 响应不确定时，以随后一次 Contents GET 收敛真实远端状态。"""
-                self._sha_cache.pop(path, None)
-                confirm_status, confirm_data = self._git_request(
-                    "GET", url, params={"ref": branch}
-                )
-                if confirm_status == 404:
-                    logger.info(
-                        f"[Git Sync] 删除 {path} 响应不确定后确认远程已不存在。"
-                    )
-                    return True
-                if confirm_status == 200 and isinstance(confirm_data, dict):
-                    current_sha = str(confirm_data.get("sha", "")).strip()
-                    if current_sha:
-                        self._sha_cache[path] = current_sha
-                    logger.warning(
-                        f"[Git Sync] 删除 {path} 响应不确定后确认远程仍存在，已保留本地文件。"
-                    )
-                    return False
-                logger.error(
-                    f"[Git Sync] 删除 {path} 响应不确定且无法确认远程状态 "
-                    f"(HTTP {confirm_status})"
-                )
-                return False
-
-            sha = self._sha_cache.get(path)
-            if not sha:
-                status, data = self._git_request(
-                    "GET", url, params={"ref": branch}
-                )
-                if status == 404:
-                    self._sha_cache.pop(path, None)
-                    logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
-                    return True
-                if status != 200 or not isinstance(data, dict):
-                    logger.error(
-                        f"[Git Sync] 无法确认删除目标 {path} 的远程 SHA (HTTP {status})"
-                    )
-                    return False
-                sha = str(data.get("sha", "")).strip()
-                if not sha:
-                    logger.error(f"[Git Sync] 删除目标 {path} 的远程响应缺少 SHA。")
-                    return False
-                self._sha_cache[path] = sha
-    
-            if self._git_platform() == "gitee":
-                body = {"message": message, "sha": sha, "branch": branch}
-            else:
-                body = {"message": message, "sha": sha, "branch": branch}
-    
-            status, _ = self._git_request("DELETE", url, json_body=body)
-            if status in (200, 204):
-                self._sha_cache.pop(path, None)
-                return True
-            if status == 404:
-                self._sha_cache.pop(path, None)
-                logger.info(f"[Git Sync] 删除 {path} 时远程已不存在。")
-                return True
-            if status == 0 or status >= 500:
-                return confirm_uncertain_delete()
-
-            if status in (409, 422):
-                self._sha_cache.pop(path, None)
-                refresh_status, refresh_data = self._git_request(
-                    "GET", url, params={"ref": branch}
-                )
-                if refresh_status == 404:
-                    logger.info(f"[Git Sync] 删除 {path} 冲突后确认远程已不存在。")
-                    return True
-                if refresh_status != 200 or not isinstance(refresh_data, dict):
-                    logger.error(
-                        f"[Git Sync] 删除 {path} 冲突后无法刷新远程 SHA "
-                        f"(HTTP {refresh_status})"
-                    )
-                    return False
-                fresh_sha = str(refresh_data.get("sha", "")).strip()
-                if not fresh_sha:
-                    logger.error(f"[Git Sync] 删除 {path} 冲突后远程响应缺少 SHA。")
-                    return False
-
-                self._sha_cache[path] = fresh_sha
-                retry_body = dict(body)
-                retry_body["sha"] = fresh_sha
-                retry_status, _ = self._git_request(
-                    "DELETE", url, json_body=retry_body
-                )
-                if retry_status in (200, 204, 404):
-                    self._sha_cache.pop(path, None)
-                    if retry_status == 404:
-                        logger.info(f"[Git Sync] 重试删除 {path} 时远程已不存在。")
-                    return True
-                if retry_status == 0 or retry_status >= 500:
-                    return confirm_uncertain_delete()
-                logger.error(
-                    f"[Git Sync] 使用刷新 SHA 重试删除失败 {path} "
-                    f"(HTTP {retry_status})"
-                )
-                return False
-
-            logger.error(f"[Git Sync] 删除文件失败 {path} (HTTP {status})")
-            return False
+        """Compatibility delegate; GallerySync owns the delete transaction."""
+        return self.sync.delete_file(path, message)
 
     def _to_git_path(self, local_abs_path: str) -> str | None:
         """将本地绝对路径转换为仓库中的相对路径。
@@ -2398,188 +2223,8 @@ class Main(Star):
 
 
     def _git_sync_from_remote(self) -> dict[str, object]:
-        """从远程仓库拉取图片，并让本地缓存尽量收敛到远端真实路径集合。"""
-        result: dict[str, object] = {
-            "synced": 0,
-            "removed": 0,
-            "duplicates": 0,
-            "busy": False,
-            "failed": False,
-            "remaining_local_only": (),
-            "remaining_remote_only": (),
-            "content_conflicts": (),
-        }
-        if not self._git_sync_enabled:
-            result["failed"] = True
-            result["error"] = "同步失败：Git 远程同步未启用。"
-            return result
-        if not self._sync_lock.acquire(blocking=False):
-            logger.debug("[Git Sync] 已有同步任务进行中，跳过本次。")
-            result["busy"] = True
-            return result
-        self._git_mutation_lock.acquire()
-        try:
-            tree = self._git_list_tree()
-            if tree is None:
-                result["failed"] = True
-                result["error"] = "同步失败：远程图库状态无法确认。"
-                return result
-
-            # 与 /导入图库 使用同一个规范：只认可 gallery/分类/图片 三层图片路径。
-            remote_images: dict[str, dict] = {}
-            for entry in tree:
-                git_path = str(entry.get("path", ""))
-                if (
-                    self._is_remote_gallery_image(git_path)
-                    and len(Path(git_path).parts) == 3
-                ):
-                    remote_images[git_path] = entry
-
-            synced = 0
-            content_conflicts: list[str] = []
-            for git_path, info in remote_images.items():
-                local_path = resolve_gallery_local_path(self.gallery_root.parent, git_path)
-                if local_path is None:
-                    logger.warning(
-                        f"[Git Sync] 本地路径越界或经过符号链接，已跳过: {git_path}"
-                    )
-                    continue
-                remote_sha = str(info.get("sha", ""))
-                parts = Path(git_path).parts
-                category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
-
-                if local_path.exists():
-                    try:
-                        with self._hash_index_lock:
-                            entry = self._hash_index.get(git_path)
-                        local_content = local_path.read_bytes()
-                    except OSError as exc:
-                        content_conflicts.append(git_path)
-                        logger.warning(
-                            f"[Git Sync] 本地内容无法读取，为避免覆盖予以保留: {git_path}: {exc}"
-                        )
-                        continue
-
-                    if git_blob_sha(local_content) == remote_sha:
-                        self._sha_cache[git_path] = remote_sha
-                        self._remember_verified_remote_content(
-                            git_path, local_content, remote_sha, save=False
-                        )
-                        continue
-                    if should_preserve_local_sync_content(
-                        local_content, entry, remote_sha
-                    ):
-                        content_conflicts.append(git_path)
-                        logger.warning(
-                            f"[Git Sync] 本地内容已修改，为避免覆盖予以保留: {git_path}"
-                        )
-                        continue
-                else:
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                content = self._git_get_file(git_path)
-                if content is None:
-                    logger.warning(f"[Git Sync] 未能同步远端图片：{git_path}")
-                    continue
-
-                # 路径一致性优先：即使相同内容已存在于另一路径，也必须落盘
-                # GitHub 的这个具体路径，否则 /导入图库 永远无法确认双端一致。
-                self._sha_cache[git_path] = remote_sha
-                local_path.write_bytes(content)
-                self._invalidate_category_hash_cache(category)
-                self._remember_verified_remote_content(
-                    git_path, content, remote_sha, save=False
-                )
-                synced += 1
-                result["synced"] = synced
-
-            result["content_conflicts"] = tuple(sorted(content_conflicts))
-
-            local_image_paths = {
-                path
-                for path in (
-                    self._to_git_path(str(item)) for item in self._iter_image_files()
-                )
-                if path
-            }
-            path_diff = compare_gallery_paths(local_image_paths, remote_images.keys())
-
-            # 不再只依赖进程内 _sha_cache。hash_index 中的双 SHA 验证记录
-            # 能证明该路径过去确实存在于远端，因此远端删除后可安全清理本地缓存。
-            for stale_path in path_diff.local_only:
-                with self._hash_index_lock:
-                    indexed = self._hash_index.get(stale_path)
-                cached_sha = self._sha_cache.get(stale_path)
-                if verified_remote_sha(indexed) is None and not cached_sha:
-                    continue
-                local_path = resolve_gallery_local_path(self.gallery_root.parent, stale_path)
-                if local_path is None or not local_path.exists():
-                    continue
-                try:
-                    local_content = local_path.read_bytes()
-                except OSError as exc:
-                    logger.warning(f"[Git Sync] 无法核对本地残留内容 {stale_path}: {exc}")
-                    continue
-                if not matches_verified_remote_content(
-                    local_content, indexed, cached_sha=cached_sha
-                ):
-                    logger.info(
-                        f"[Git Sync] 仅本地文件内容已改变，为避免误删予以保留: {stale_path}"
-                    )
-                    continue
-                try:
-                    local_path.unlink()
-                except OSError as exc:
-                    logger.warning(f"[Git Sync] 清理远端已删除的本地缓存失败 {stale_path}: {exc}")
-                    continue
-                logger.info(f"[Git Sync] 远程已删除，本地同步移除: {stale_path}")
-                parts = Path(stale_path).parts
-                if len(parts) >= 3:
-                    self._invalidate_category_hash_cache(parts[1])
-                self._forget_file_hash(stale_path, save=False)
-                self._sha_cache.pop(stale_path, None)
-                result["removed"] = int(result["removed"]) + 1
-
-            # 清理已经不存在于本地/远端的进程内 SHA 残留。
-            for cached_path in list(self._sha_cache):
-                if cached_path.startswith("gallery/") and cached_path not in remote_images:
-                    local_path = resolve_gallery_local_path(self.gallery_root.parent, cached_path)
-                    if local_path is None or not local_path.exists():
-                        self._sha_cache.pop(cached_path, None)
-
-            final_local_paths = {
-                path
-                for path in (
-                    self._to_git_path(str(item)) for item in self._iter_image_files()
-                )
-                if path
-            }
-            remaining = compare_gallery_paths(final_local_paths, remote_images.keys())
-            result["remaining_local_only"] = remaining.local_only
-            result["remaining_remote_only"] = remaining.remote_only
-
-            if synced:
-                logger.info(f"[Git Sync] 从远程同步了 {synced} 个文件。")
-            if content_conflicts:
-                logger.warning(
-                    "[Git Sync] 同路径内容冲突已保留本地文件："
-                    + "、".join(sorted(content_conflicts)[:5])
-                )
-            if not remaining.is_clean:
-                logger.warning(
-                    "[Git Sync] 同步后路径集合仍有差异："
-                    + self._format_gallery_path_difference(remaining)
-                )
-        except Exception as exc:
-            logger.error(f"[Git Sync] 同步异常: {exc}")
-            result["failed"] = True
-            result["error"] = f"同步失败：{type(exc).__name__}。请检查日志后重试。"
-        finally:
-            try:
-                self._save_hash_index()
-            finally:
-                self._git_mutation_lock.release()
-                self._sync_lock.release()
-        return result
+        """Compatibility delegate; GallerySync owns pull convergence."""
+        return self.sync.sync_from_remote()
 
     def _git_push_file(self, local_abs_path: str) -> bool:
         """Push one newly admitted local image without overwriting a raced cloud path."""
@@ -2625,171 +2270,20 @@ class Main(Star):
         return git_blob_sha(content)
 
     def _git_push_all_local(self) -> tuple[int, int, int]:
-        """将本地 gallery 中新增或变更的图片批量推送到远程仓库。
-
-        返回 (成功数, 失败数, 跳过数)。
-        """
-        if not self._git_sync_enabled:
-            return 0, 0, 0
-
-        self._git_push_cancelled = False
-        success = 0
-        failed = 0
-        skipped = 0
-        processed = 0
-        pending: list[tuple[str, bytes]] = []
-        if self._git_platform() == "github":
-            try:
-                batch_size = int(self.config.get("git_push_batch_size", 50) or 50)
-            except (TypeError, ValueError):
-                batch_size = 50
-            batch_size = max(1, min(100, batch_size))
-        else:
-            batch_size = 1
-
-        local_images = [
-            path
-            for path in sorted(self.gallery_root.rglob("*"))
-            if _is_image_file(path) and self._to_git_path(str(path))
-        ]
-
-        remote_tree = self._git_list_tree()
-        if remote_tree is None:
-            logger.warning("[Git Sync] 获取远程文件树失败，无法执行快速差异推送。")
-            return 0, len(local_images), 0
-
-        remote_files = {
-            entry["path"]: entry
-            for entry in remote_tree
-            if entry.get("path", "").startswith("gallery/")
-        }
-        if self._git_platform() != "github":
-            logger.info("[Git Sync] 当前平台暂不支持批量 commit，使用逐文件推送。")
-
-        for path in local_images:
-            if self._git_push_cancelled:
-                logger.info("[Git Sync] 批量推送已被用户取消。")
-                break
-
-            processed += 1
-            git_path = self._to_git_path(str(path))
-            if not git_path:
-                continue
-            try:
-                content = path.read_bytes()
-                local_sha = self._git_blob_sha(content)
-                remote = remote_files.get(git_path)
-                remote_sha = str(remote.get("sha", "")) if remote else ""
-                if remote_sha == local_sha:
-                    self._sha_cache[git_path] = remote_sha
-                    self._remember_verified_remote_content(
-                        git_path, content, remote_sha, save=False
-                    )
-                    skipped += 1
-                    continue
-
-                if remote_sha:
-                    self._sha_cache[git_path] = remote_sha
-                else:
-                    self._sha_cache.pop(git_path, None)
-
-                pending.append((git_path, content))
-                if len(pending) >= batch_size:
-                    ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
-                    success += ok_count
-                    failed += fail_count
-                    skipped += skip_count
-                    pending = []
-            except Exception as exc:
-                logger.error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
-                failed += 1
-
-        # 统计被跳过的剩余文件
-        if self._git_push_cancelled:
-            skipped += max(0, len(local_images) - processed)
-            logger.info(f"[Git Sync] 批量推送已取消：成功 {success}，失败 {failed}，跳过 {skipped}。")
-            self._save_hash_index()
-            return success, failed, skipped
-
-        if pending:
-            ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
-            success += ok_count
-            failed += fail_count
-            skipped += skip_count
-
-        logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
-        self._save_hash_index()
-        return success, failed, skipped
+        """Compatibility delegate; GallerySync owns push-all traversal."""
+        return self.sync.push_all_local()
 
     def _git_startup_sync(self) -> None:
-        """启动时的完整同步流程：先拉取远程，若远程为空而本地有图则自动推送。"""
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-
-        # 先拉取远程
-        self._git_sync_from_remote()
-        if (
-            (hasattr(self, "_shutdown_event") and self._shutdown_event.is_set())
-            or not self._git_sync_enabled
-        ):
-            return
-
-        # 检查远程是否有 gallery 图片
-        tree = self._git_list_tree()
-        if tree is None or (
-            hasattr(self, "_shutdown_event") and self._shutdown_event.is_set()
-        ):
-            return
-
-        remote_gallery_count = sum(
-            1 for e in tree
-            if e["path"].startswith("gallery/")
-            and Path(e["path"]).suffix.lower() in IMAGE_SUFFIXES
-        )
-
-        if remote_gallery_count == 0 and (
-            not hasattr(self, "_shutdown_event")
-            or not self._shutdown_event.is_set()
-        ):
-            # 远程为空，检查本地是否有图片
-            local_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
-            if local_images and (
-                not hasattr(self, "_shutdown_event")
-                or not self._shutdown_event.is_set()
-            ):
-                logger.info(
-                    f"[Git Sync] 远程仓库为空，本地有 {len(local_images)} 张图片，自动推送中…"
-                )
-                ok, fail, skip = self._git_push_all_local()
-                logger.info(f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}，跳过 {skip}。")
+        """Compatibility delegate; GallerySync owns startup convergence."""
+        return self.sync.startup_sync()
 
     def _start_sync_timer(self) -> None:
-        """启动定时从远程拉取的后台任务。"""
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-        interval = coerce_strict_int(self.config.get("git_sync_interval", 5), 5)
-        if interval <= 0:
-            logger.info("[Git Sync] 自动同步已禁用（间隔为 0）。")
-            return
-        self._sync_timer = threading.Timer(interval * 60, self._sync_timer_cb)
-        self._sync_timer.daemon = True
-        self._sync_timer.start()
-        logger.info(f"[Git Sync] 自动同步已启动，间隔 {interval} 分钟。")
+        """Compatibility delegate; GallerySync owns timer scheduling."""
+        return self.sync.start_timer()
 
     def _sync_timer_cb(self) -> None:
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-        try:
-            self._git_sync_from_remote()
-        except Exception as exc:
-            logger.error(f"[Git Sync] 定时同步失败: {exc}")
-        finally:
-            # 无论成功失败都重新调度下一次，但卸载后不得复活。
-            if self._git_sync_enabled and (
-                not hasattr(self, "_shutdown_event")
-                or not self._shutdown_event.is_set()
-            ):
-                self._start_sync_timer()
+        """Compatibility delegate; GallerySync owns periodic sync callbacks."""
+        return self.sync.timer_callback()
 
     def _get_view_command_mode_text(self) -> str:
         return self.view_command_mode
@@ -4131,63 +3625,24 @@ class Main(Star):
 
         await event.send(event.plain_result(message))
 
+
     def _remap_hash_index(self, plan: tuple[RenameStep, ...]) -> None:
-        mapping = {step.source: step.target for step in plan}
-        with self._hash_index_lock:
-            remapped: dict[str, dict] = {}
-            for old_path, entry in self._hash_index.items():
-                new_path = mapping.get(old_path, old_path)
-                copied = dict(entry)
-                parts = Path(new_path).parts
-                if len(parts) >= 3:
-                    copied["category"] = _sanitize_component(parts[1])
-                remapped[new_path] = copied
-            self._hash_index = remapped
-            self._hash_index_dirty = True
-        self._sha_cache = {
-            mapping.get(path, path): sha for path, sha in self._sha_cache.items()
-        }
-        self._category_hash_cache.clear()
-        self._save_hash_index(force=True)
+        """Compatibility delegate; GallerySync owns renumber state remapping."""
+        return self.sync.remap_renumber_state(plan)
 
     def _stage_local_renumber(
         self, plan: tuple[RenameStep, ...]
     ) -> list[tuple[Path, Path, Path]]:
-        staged: list[tuple[Path, Path, Path]] = []
-        changed = [step for step in plan if step.source != step.target]
-        token = f"{os.getpid()}-{time.time_ns()}"
-        try:
-            for offset, step in enumerate(changed):
-                source = resolve_gallery_local_path(self.gallery_root.parent, step.source)
-                target = resolve_gallery_local_path(self.gallery_root.parent, step.target)
-                if source is None or target is None or not source.exists():
-                    raise RuntimeError(f"本地重编号源文件缺失：{step.source}")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                temp = source.with_name(f".airi-renumber-{token}-{offset}{source.suffix}")
-                source.replace(temp)
-                staged.append((temp, source, target))
-            return staged
-        except Exception:
-            for temp, source, _ in reversed(staged):
-                if temp.exists():
-                    temp.replace(source)
-            raise
+        """Compatibility delegate; GallerySync owns rollbackable local staging."""
+        return self.sync.stage_local_renumber(plan)
 
     @staticmethod
     def _rollback_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
-        for temp, source, _ in reversed(staged):
-            try:
-                if temp.exists():
-                    temp.replace(source)
-            except OSError:
-                pass
+        return GallerySync.rollback_local_renumber(staged)
 
     @staticmethod
     def _finish_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
-        for temp, _, target in staged:
-            if target.exists():
-                raise RuntimeError(f"重编号目标被意外占用：{target}")
-            temp.replace(target)
+        return GallerySync.finish_local_renumber(staged)
 
     def _github_commit_renumber(
         self,
@@ -4198,215 +3653,19 @@ class Main(Star):
         expected_head_sha: str,
         base_tree_sha: str,
     ) -> dict[str, object]:
-        """Commit a renumber plan with hierarchical trees and one final atomic ref move."""
-        with self._git_mutation_lock:
-            def failure(stage: str, detail: str) -> dict[str, object]:
-                logger.warning(f"[Gallery] GitHub 重编号失败 [{stage}]: {detail}")
-                return {"ok": False, "stage": stage, "error": detail}
-    
-            if self._git_platform() != "github":
-                return failure("platform", "当前远端不是 GitHub")
-            current_head = self._git_get_head_commit_and_tree()
-            if not current_head or current_head[0] != expected_head_sha:
-                return failure("head_changed", "重编号期间 GitHub HEAD 已发生变化")
-    
-            try:
-                category_layouts = build_renumbered_category_entries(tree, plan)
-            except ValueError as exc:
-                return failure("layout", str(exc))
-    
-            tree_shas = {
-                str(entry.get("path", "")): str(entry.get("sha", "")).strip()
-                for entry in tree
-                if str(entry.get("type", "")) == "tree"
-                and str(entry.get("sha", "")).strip()
-            }
-            gallery_base_tree_sha = tree_shas.get("gallery", "")
-            if not gallery_base_tree_sha:
-                return failure("layout", "远程 tree 中缺少 gallery 目录 SHA")
-    
-            manifest_sha = self._git_create_github_blob(manifest_payload)
-            if not manifest_sha:
-                return failure("manifest_blob", "创建 gallery/gallery_index.json blob 失败")
-    
-            gallery_entries: list[dict] = []
-            for category, category_entries in category_layouts.items():
-                category_base_tree_sha = tree_shas.get(f"gallery/{category}", "")
-                if not category_base_tree_sha:
-                    return failure("layout", f"远程 tree 中缺少分类 {category} 的目录 SHA")
-                try:
-                    deletes, upserts = build_category_tree_delta_entries(
-                        tree, category, category_entries
-                    )
-                except ValueError as exc:
-                    return failure("layout", str(exc))
-                category_tree_sha = self._git_apply_category_tree_delta(
-                    category, category_base_tree_sha, deletes, upserts
-                )
-                if not category_tree_sha:
-                    return failure("category_tree", f"创建分类 {category} 的最终 tree 失败")
-                gallery_entries.append(
-                    {"path": category, "mode": "040000", "type": "tree", "sha": category_tree_sha}
-                )
-    
-            gallery_entries.append(
-                {
-                    "path": Path(GALLERY_INDEX_PATH).name,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": manifest_sha,
-                }
-            )
-            gallery_tree_sha = self._git_create_github_tree(
-                gallery_base_tree_sha, gallery_entries
-            )
-            if not gallery_tree_sha:
-                return failure("gallery_tree", "创建 gallery 汇总 tree 失败")
-    
-            root_tree_sha = self._git_create_github_tree(
-                base_tree_sha,
-                [
-                    {
-                        "path": "gallery",
-                        "mode": "040000",
-                        "type": "tree",
-                        "sha": gallery_tree_sha,
-                    }
-                ],
-            )
-            if not root_tree_sha:
-                return failure("root_tree", "创建仓库根 tree 失败")
-    
-            commit_sha = self._git_create_github_commit(
-                f"Renumber {len(plan)} gallery images",
-                root_tree_sha,
-                expected_head_sha,
-            )
-            if not commit_sha:
-                return failure("commit", "创建 GitHub commit 失败")
-    
-            latest_head = self._git_get_head_commit_and_tree()
-            if not latest_head or latest_head[0] != expected_head_sha:
-                return failure("head_changed", "提交对象创建后 GitHub HEAD 已发生变化")
-            if not self._git_update_github_ref(commit_sha):
-                return failure("ref_update", "更新 GitHub 分支引用失败或非快进更新被拒绝")
-            return {"ok": True, "stage": "complete", "commit_sha": commit_sha}
+        """Compatibility delegate; GallerySync owns the GitHub renumber commit."""
+        return self.sync.commit_github_renumber(
+            plan,
+            tree,
+            manifest_payload,
+            expected_head_sha=expected_head_sha,
+            base_tree_sha=base_tree_sha,
+        )
+
 
     def _renumber_gallery_consistently_sync(self) -> dict:
-        self.gallery_root.mkdir(parents=True, exist_ok=True)
-        self._ensure_perceptual_index()
-
-        if not self._git_sync_enabled:
-            local_paths = [
-                self._to_git_path(str(path)) for path in self._iter_image_files()
-            ]
-            plan = build_global_renumber_plan(
-                [path for path in local_paths if path], IMAGE_SUFFIXES
-            )
-            staged = self._stage_local_renumber(plan)
-            self._finish_local_renumber(staged)
-            self._remap_hash_index(plan)
-            return {"ok": True, "renamed": len(staged), "total": len(plan), "remote": False}
-
-        if self._git_platform() != "github":
-            return {"ok": False, "error": "双端一致重编号目前仅支持 GitHub；为避免编号分叉，本次未修改任何文件。"}
-        if not self._sync_lock.acquire(blocking=False):
-            return {"ok": False, "error": "已有同步任务正在运行，本次未执行重编号。"}
-        try:
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
-            expected_head_sha, base_tree_sha = head
-            tree = self._git_list_tree_at(base_tree_sha)
-            if tree is None:
-                return {"ok": False, "error": "远程图库状态无法确认，本次未执行重编号。"}
-            remote_paths = sorted(
-                str(entry.get("path", ""))
-                for entry in tree
-                if self._is_remote_gallery_image(str(entry.get("path", "")))
-                and len(Path(str(entry.get("path", ""))).parts) == 3
-            )
-            local_paths = sorted(
-                path
-                for path in (self._to_git_path(str(item)) for item in self._iter_image_files())
-                if path
-            )
-            path_diff = compare_gallery_paths(local_paths, remote_paths)
-            if not path_diff.is_clean:
-                details = self._format_gallery_path_difference(path_diff)
-                return {
-                    "ok": False,
-                    "error": (
-                        "本地与 GitHub 图片集合尚未一致，本次没有改写任何编号。\n"
-                        + details
-                        + "\n请先执行 /立即同步；若同步后仍显示“仅本地”，要保留请执行 /推送到远程，不需要则删除对应本地文件。"
-                    ),
-                }
-            plan = build_global_renumber_plan(remote_paths, IMAGE_SUFFIXES)
-            mapping = {step.source: step.target for step in plan}
-            self._ensure_perceptual_index()
-            with self._hash_index_lock:
-                old_index = dict(self._hash_index)
-            manifest_files = {}
-            for old_path, entry in old_index.items():
-                if not isinstance(entry, dict):
-                    continue
-                phash = str(entry.get("perceptual_hash", "")).strip()
-                if phash and old_path in mapping:
-                    manifest_files[mapping[old_path]] = {"perceptual_hash": phash}
-            manifest_payload = json.dumps(
-                {"version": 1, "algorithm": GALLERY_INDEX_ALGORITHM, "files": manifest_files},
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-
-            current_head = self._git_get_head_commit_and_tree()
-            if not current_head or current_head[0] != expected_head_sha:
-                return {
-                    "ok": False,
-                    "error": "重编号期间 GitHub 已发生变化，本次没有改写任何本地编号，请重新执行 /导入图库。",
-                }
-
-            staged = self._stage_local_renumber(plan)
-            commit_result = self._github_commit_renumber(
-                plan,
-                tree,
-                manifest_payload,
-                expected_head_sha=expected_head_sha,
-                base_tree_sha=base_tree_sha,
-            )
-            if not commit_result.get("ok"):
-                self._rollback_local_renumber(staged)
-                stage = str(commit_result.get("stage") or "unknown")
-                detail = str(commit_result.get("error") or "未知错误")
-                if stage == "head_changed":
-                    return {
-                        "ok": False,
-                        "error": "重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。",
-                    }
-                return {
-                    "ok": False,
-                    "error": f"GitHub 重编号提交失败（{stage}）：{detail}；本地临时改名已回滚。",
-                }
-            try:
-                self._finish_local_renumber(staged)
-            except Exception as exc:
-                logger.error(f"[Gallery] GitHub 已重编号但本地落盘失败，将由下一次同步修复：{exc}")
-                for temp, _, _ in staged:
-                    try:
-                        temp.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                return {"ok": False, "error": "GitHub 已完成重编号，但本地落盘失败；请立即执行 /立即同步。"}
-            self._remap_hash_index(plan)
-            for step in plan:
-                old_sha = next((str(e.get("sha", "")) for e in tree if e.get("path") == step.source), "")
-                if old_sha:
-                    self._sha_cache[step.target] = old_sha
-            return {"ok": True, "renamed": len(staged), "total": len(plan), "remote": True}
-        finally:
-            self._sync_lock.release()
+        """Compatibility delegate; GallerySync owns consistent renumber orchestration."""
+        return self.sync.renumber_gallery_consistently()
 
     async def _renumber_gallery_consistently(self) -> dict:
         return await asyncio.to_thread(self._renumber_gallery_consistently_sync)
