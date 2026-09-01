@@ -1,0 +1,91 @@
+name: Stage 3A pull delegate patch
+
+on:
+  push:
+    branches:
+      - refactor/gallery-sync-service
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/gallery-sync-service
+          fetch-depth: 0
+
+      - name: Replace Main pull implementation with compatibility delegate
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("main.py")
+          source = path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"\n    def _git_sync_from_remote\(self\) -> dict\[str, object\]:\n"
+              r".*?"
+              r"(?=\n    def _git_push_file\(self, local_abs_path: str\) -> bool:)",
+              re.S,
+          )
+          replacement = '''
+    def _git_sync_from_remote(self) -> dict[str, object]:
+        """Compatibility delegate; GallerySync owns pull convergence."""
+        return self.sync.sync_from_remote()
+'''
+          updated, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise SystemExit(f"expected exactly one Main pull block, replaced {count}")
+          path.write_text(updated, encoding="utf-8")
+          PY
+
+      - name: Verify narrow delegate shape
+        shell: bash
+        run: |
+          python -m py_compile main.py gallery_sync.py
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          source = Path("main.py").read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          block = None
+          for node in tree.body:
+              if isinstance(node, ast.ClassDef) and node.name == "Main":
+                  for item in node.body:
+                      if isinstance(item, ast.FunctionDef) and item.name == "_git_sync_from_remote":
+                          block = ast.get_source_segment(source, item) or ""
+                          break
+          if block is None:
+              raise SystemExit("Main._git_sync_from_remote missing")
+          required = "return self.sync.sync_from_remote()"
+          if required not in block:
+              raise SystemExit("pull compatibility delegate missing")
+          forbidden = (
+              "self._sync_lock.acquire(",
+              "self._git_mutation_lock.acquire()",
+              "compare_gallery_paths",
+              "matches_verified_remote_content",
+          )
+          leaked = [token for token in forbidden if token in block]
+          if leaked:
+              raise SystemExit(f"old pull implementation leaked into Main: {leaked}")
+          PY
+
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/_stage3a_pull_delegate.yml
+          if git diff --quiet -- main.py .github/workflows/_stage3a_pull_delegate.yml; then
+            echo "No patch to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py
+          git commit -m "refactor: delegate pull convergence to GallerySync"
+          git push origin HEAD:refactor/gallery-sync-service
