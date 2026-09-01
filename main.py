@@ -65,6 +65,24 @@ except ImportError:
     )
 
 try:
+    from .gallery_config import (
+        resolve_cloud_gallery_url,
+        resolve_view_all_collage_compress,
+        resolve_view_all_collage_scale,
+        resolve_view_command_mode,
+        resolve_view_multiple_mode,
+    )
+except ImportError:
+    from gallery_config import (
+        resolve_cloud_gallery_url,
+        resolve_view_all_collage_compress,
+        resolve_view_all_collage_scale,
+        resolve_view_command_mode,
+        resolve_view_multiple_mode,
+    )
+
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -190,8 +208,6 @@ except ImportError:
 
 PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 DEFAULT_CATEGORY = "default"
-MODE_NO_PREFIX = "no_prefix"
-MODE_PREFIX = "prefix"
 VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
 REMOTE_DELETE_CONFIRM_TTL = 300
@@ -1467,37 +1483,19 @@ class Main(Star):
             return jsonify({"ok": False, "error": str(exc)}), 500
 
     def _resolve_view_command_mode(self) -> str:
-        mode = str(self.config.get("view_command_mode", MODE_NO_PREFIX)).strip().lower()
-        if mode in {MODE_NO_PREFIX, MODE_PREFIX}:
-            return mode
-        return MODE_NO_PREFIX
+        return resolve_view_command_mode(self.config)
 
     def _resolve_view_multiple_mode(self) -> str:
-        mode = str(self.config.get("view_multiple_mode", "single")).strip().lower()
-        if mode in {"single", "forward"}:
-            return mode
-        return "single"
+        return resolve_view_multiple_mode(self.config)
 
     def _resolve_view_all_collage_compress(self) -> bool:
-        return bool(self.config.get("view_all_collage_compress", False))
+        return resolve_view_all_collage_compress(self.config)
 
     def _resolve_view_all_collage_scale(self) -> float:
-        raw_value = self.config.get("view_all_collage_scale", 0.85)
-        try:
-            scale = float(raw_value)
-        except (TypeError, ValueError):
-            return 0.85
-        return max(0.5, min(1.0, scale))
+        return resolve_view_all_collage_scale(self.config)
 
     def _cloud_gallery_url(self) -> str:
-        url = str(self.config.get("cloud_gallery_url", "")).strip()
-        if not url:
-            return ""
-        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
-            url = f"https://{url}"
-        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
-            return ""
-        return url
+        return resolve_cloud_gallery_url(self.config)
 
     def _build_cloud_gallery_help_text(self) -> str | None:
         url = self._cloud_gallery_url()
