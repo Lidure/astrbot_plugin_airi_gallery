@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.13-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.14-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -339,6 +339,13 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.14
+
+- **远端事务一致性** 完善 GitHub / Gitee 上传与删除的失败分类、过期 SHA 重试、响应丢失确认和补偿逻辑；远端状态不确定时默认保留本地数据，确认远端已完成后再收口本地状态，并自动清理已失效的远端感知哈希索引项。
+- **同步与路径安全** 串行化远端快照到本地收敛过程，保护本地已修改文件，统一路径 containment 校验；Git tree 图片路径固定使用 POSIX 语义并拒绝反斜杠异常路径，避免 Windows / Linux 判断不一致。
+- **批量性能与 Web 生命周期** 上传批次复用本地图库快照和编号游标，GitHub 合并批量提交；生成缓存加入 TTL / 容量清理，本地 Web UI 图片按需加载，Cloud 页面统一管理 Blob URL、请求取消、并发去重和写操作后的强制刷新。
+- **CI 与可维护性** 增加 Python 3.10 / 3.12、最低依赖版本和真实 AstrBot runtime smoke 验证；将命令解析、配置解析、诊断、渲染和结果格式化等纯逻辑逐步从 `main.py` 拆分为可独立测试模块，保持原有上传、删除和同步事务语义。
+
 ### v2.11.13
 
 - **去重权限边界** 修复通用消息分发路径可绕过 `use_permission` 直接执行 `/去重图库` 的问题；现在任何去重扫描/删除开始前都会先校验管理员或白名单权限，未授权用户只收到拒绝提示，不会进入图库去重删除流程。
