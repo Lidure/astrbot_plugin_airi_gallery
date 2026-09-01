@@ -6,6 +6,7 @@ from gallery_store import GalleryStore
 from gallery_sync import GallerySync
 
 
+# Ref-outcome preservation belongs to the GallerySync transaction, not Main entry state.
 def _transaction(tmp_path: Path, *, initial_outcome=None):
     root = tmp_path / "gallery"
     root.mkdir(parents=True)
