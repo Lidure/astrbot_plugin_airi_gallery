@@ -822,7 +822,7 @@ class Main(Star):
 
     @filter.command("抽表情")
     async def cmd_random_draw(self, event: AstrMessageEvent):
-        """从全图库随机抽取 1 张或 N 张图片/表情包。"""
+        """从全图库随机抽取 1 张或 N 张图片或表情包。"""
         text = self._normalize_command_text(event, "抽表情")
         action = self._parse_action(text)
         if not action:
@@ -2176,139 +2176,12 @@ class Main(Star):
         message: str,
         create_only_paths: set[str] | None = None,
     ) -> bool:
-        """把一批文件作为一个 GitHub commit 提交，并保护 create-only 路径。"""
-
-        def branch_tree_matches_items(tree_sha: str) -> bool:
-            """ref 更新结果不确定时，只在当前 tree 已完整包含本批 blob 时确认成功。"""
-            if not str(tree_sha).strip():
-                return False
-            base = self._git_api_base()
-            owner = self._git_owner()
-            repo = self._git_repo()
-            url = f"{base}/repos/{owner}/{repo}/git/trees/{tree_sha}"
-            status, data = self._git_request(
-                "GET", url, params={"recursive": "1"}, timeout=60
-            )
-            if status != 200 or not isinstance(data, dict) or data.get("truncated"):
-                return False
-            remote_blobs = {
-                str(entry.get("path", "")): str(entry.get("sha", "")).strip()
-                for entry in data.get("tree", [])
-                if isinstance(entry, dict)
-                and entry.get("type") == "blob"
-                and str(entry.get("path", "")).strip()
-            }
-            return all(
-                remote_blobs.get(git_path) == blob_sha
-                for git_path, _, blob_sha in items
-            )
-
-        with self._git_mutation_lock:
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return False
-            parent_sha, base_tree_sha = head
-
-            collision = False
-            if create_only_paths:
-                collision = self._git_github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
-                )
-            if collision is not False:
-                if collision:
-                    logger.warning("[Git Sync] 新上传编号已被远程占用，拒绝覆盖。")
-                return False
-
-            tree_entries = [
-                {
-                    "path": git_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blob_sha,
-                }
-                for git_path, _, blob_sha in items
-            ]
-            tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
-            if not tree_sha:
-                return False
-
-            commit_sha = self._git_create_github_commit(message, tree_sha, parent_sha)
-            if not commit_sha:
-                return False
-
-            if self._git_update_github_ref(commit_sha):
-                for git_path, _, blob_sha in items:
-                    self._sha_cache[git_path] = blob_sha
-                return True
-
-            # 真实实现每次 PATCH 都会写入 outcome；默认 conflict 仅兼容旧测试桩。
-            ref_outcome = getattr(self, "_git_ref_update_outcome", None) or "conflict"
-            if ref_outcome == "rejected":
-                logger.warning(
-                    "[Git Sync] GitHub ref 更新被明确拒绝，本批次停止，不执行冲突重试。"
-                )
-                return False
-
-            head = self._git_get_head_commit_and_tree()
-            if not head:
-                return False
-            parent_sha, base_tree_sha = head
-
-            if ref_outcome == "uncertain":
-                # PATCH 响应丢失时，分支可能已移动到本 commit，甚至又前进到它的后继。
-                # 仅当当前 tree 仍完整包含本批次全部 blob 时，才能把不确定响应收敛为成功。
-                if parent_sha == commit_sha or branch_tree_matches_items(base_tree_sha):
-                    for git_path, _, blob_sha in items:
-                        self._sha_cache[git_path] = blob_sha
-                    return True
-                logger.warning(
-                    "[Git Sync] GitHub ref 更新结果不确定且无法确认已生效，本批次停止。"
-                )
-                return False
-
-            if ref_outcome != "conflict":
-                logger.warning(
-                    f"[Git Sync] GitHub ref 更新返回未知结果 {ref_outcome!r}，本批次停止。"
-                )
-                return False
-
-            logger.info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
-            retry_collision = False
-            if create_only_paths:
-                retry_collision = self._git_github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
-                )
-            if retry_collision is not False:
-                if retry_collision:
-                    logger.warning("[Git Sync] 重试前发现新上传编号已被远程占用，拒绝覆盖。")
-                return False
-
-            tree_sha = self._git_create_github_tree(base_tree_sha, tree_entries)
-            if not tree_sha:
-                return False
-            retry_commit_sha = self._git_create_github_commit(
-                message, tree_sha, parent_sha
-            )
-            if not retry_commit_sha:
-                return False
-            if not self._git_update_github_ref(retry_commit_sha):
-                retry_outcome = (
-                    getattr(self, "_git_ref_update_outcome", None) or "conflict"
-                )
-                if retry_outcome != "uncertain":
-                    return False
-                refreshed = self._git_get_head_commit_and_tree()
-                if not refreshed:
-                    return False
-                if (
-                    refreshed[0] != retry_commit_sha
-                    and not branch_tree_matches_items(refreshed[1])
-                ):
-                    return False
-
-            for git_path, _, blob_sha in items:
-                self._sha_cache[git_path] = blob_sha
-            return True
+        """Compatibility delegate; GallerySync owns the GitHub batch transaction."""
+        return self.sync.commit_github_batch(
+            items,
+            message,
+            create_only_paths=create_only_paths,
+        )
 
     def _git_push_batch_github(
         self,
