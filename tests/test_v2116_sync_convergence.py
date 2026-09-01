@@ -1,5 +1,4 @@
 import inspect
-from pathlib import Path
 
 import gallery_reporting
 import gallery_safety
@@ -60,6 +59,7 @@ def test_sync_reports_any_remaining_path_difference_instead_of_false_zero_summar
 
 
 def test_import_gallery_mismatch_includes_concrete_difference_examples():
+    # Import convergence now belongs to GallerySync; Main only delegates to it.
     renumber = inspect.getsource(GallerySync.renumber_gallery_consistently)
 
     assert "compare_gallery_paths" in renumber
