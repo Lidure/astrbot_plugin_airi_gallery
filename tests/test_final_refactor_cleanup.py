@@ -39,9 +39,13 @@ def _main_method_names():
 def test_main_drops_migrated_service_internal_imports():
     forbidden = {
         "DiagnosticItem",
+        "DiagnosticReport",
+        "GitProbeResult",
         "LocalDiagnosticContext",
         "UpdateProbeCache",
+        "UpdateProbeResult",
         "check_git_configuration",
+        "coerce_strict_int",
         "evaluate_git_probe",
         "evaluate_update_probe",
         "parse_metadata_version",

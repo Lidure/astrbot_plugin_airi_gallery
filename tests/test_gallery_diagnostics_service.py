@@ -162,25 +162,19 @@ def test_main_wires_gallery_diagnostics_without_duplicate_state():
     assert "self._diagnostic_update_cache =" not in constructor
 
 
-def test_main_diagnostic_helpers_are_only_service_compatibility_delegates():
+def test_main_diagnostic_compatibility_helpers_are_removed_after_migration():
     source = open("main.py", "r", encoding="utf-8").read()
 
-    def method_block(name, next_name):
-        return source.split(f"    def {name}(", 1)[1].split(f"    def {next_name}(", 1)[0]
+    for name in (
+        "_probe_gallery_git",
+        "_probe_gallery_update",
+        "_run_gallery_diagnostics",
+        "_run_startup_diagnostics",
+    ):
+        assert f"    def {name}(" not in source
+        assert f"    async def {name}(" not in source
 
-    probe_git = method_block("_probe_gallery_git", "_probe_gallery_update")
-    probe_update = method_block("_probe_gallery_update", "_run_gallery_diagnostics")
-    run = source.split("    def _run_gallery_diagnostics(", 1)[1].split(
-        "    async def _run_startup_diagnostics(", 1
+    command = source.split("async def cmd_gallery_diagnostics", 1)[1].split(
+        "@filter.command", 1
     )[0]
-    startup = source.split("    async def _run_startup_diagnostics(", 1)[1].split(
-        "    def _validate_git_config(", 1
-    )[0]
-
-    assert "return self.diagnostics.probe_git()" in probe_git
-    assert "return self.diagnostics.probe_update()" in probe_update
-    assert "return self.diagnostics.run()" in run
-    assert "return await self.diagnostics.run_startup()" in startup
-    assert "requests.get" not in probe_update
-    assert "run_local_diagnostics" not in run
-    assert "logger.warning" not in startup
+    assert "self.diagnostics.run" in command

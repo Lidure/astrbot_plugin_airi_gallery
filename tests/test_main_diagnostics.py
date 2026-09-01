@@ -293,13 +293,16 @@ def main_module(monkeypatch):
 def test_unauthorized_diagnostics_command_skips_probe_and_sends_only_denial(main_module):
     calls = []
 
-    class Plugin:
-        def _is_allowed(self, event):
-            return False
-
-        def _run_gallery_diagnostics(self):
+    class DiagnosticsStub:
+        def run(self):
             calls.append("probe")
             raise AssertionError("unauthorized command must not run diagnostics")
+
+    class Plugin:
+        diagnostics = DiagnosticsStub()
+
+        def _is_allowed(self, event):
+            return False
 
     class Event:
         def __init__(self):
@@ -323,12 +326,15 @@ def test_diagnostics_command_failure_uses_chinese_fallback_logging(
 ):
     logged = []
 
+    class DiagnosticsStub:
+        def run(self):
+            raise RuntimeError("private detail")
+
     class Plugin:
+        diagnostics = DiagnosticsStub()
+
         def _is_allowed(self, event):
             return True
-
-        def _run_gallery_diagnostics(self):
-            raise RuntimeError("private detail")
 
     class Event:
         def __init__(self):
