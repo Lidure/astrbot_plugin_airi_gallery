@@ -21,6 +21,10 @@ jobs:
         shell: bash
         run: python scripts/_stage3a_lifecycle_patch.py
 
+      - name: Repair migrated test import
+        shell: bash
+        run: sed -i '/from concurrent.futures import ThreadPoolExecutor/a from unittest.mock import Mock' tests/test_main_diagnostics.py
+
       - name: Remove temporary migration tooling
         shell: bash
         run: git rm .github/workflows/_stage3a_lifecycle_patch.yml scripts/_stage3a_lifecycle_patch.py
