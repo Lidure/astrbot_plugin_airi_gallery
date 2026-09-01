@@ -7,6 +7,7 @@ import threading
 import time
 import types
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 
 import pytest
 
@@ -438,24 +439,26 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
     main_module, monkeypatch
 ):
     async def scenario():
-        timer_delays = []
+        background_starts = []
         diagnostics_ran = asyncio.Event()
 
-        class ThreadStub:
-            def __init__(self, *, target, daemon):
-                self.target = target
-                self.daemon = daemon
+        class SyncStub:
+            def __init__(self):
+                self.shutdown_event = threading.Event()
+                self.git_sync_enabled = False
+                self.git_push_cancelled = False
 
-            def start(self):
-                pass
+            def set_sync_enabled(self, value):
+                self.git_sync_enabled = bool(value)
 
-        class TimerStub:
-            def __init__(self, delay, callback):
-                timer_delays.append(delay)
-                self.daemon = False
+            def reset_push_cancelled(self):
+                self.git_push_cancelled = False
 
-            def start(self):
-                pass
+            def cancel_push(self):
+                self.git_push_cancelled = True
+
+            def start_background_sync(self):
+                background_starts.append(True)
 
         async def normalize_gallery(self):
             pass
@@ -463,8 +466,6 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
         async def run_diagnostics(self):
             diagnostics_ran.set()
 
-        monkeypatch.setattr(main_module.threading, "Thread", ThreadStub)
-        monkeypatch.setattr(main_module.threading, "Timer", TimerStub)
         monkeypatch.setattr(main_module.Main, "_normalize_gallery_tree", normalize_gallery)
         monkeypatch.setattr(main_module.Main, "_run_startup_diagnostics", run_diagnostics)
 
@@ -478,13 +479,13 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
             "git_token": "token",
             "git_sync_interval": object(),
         }
-        plugin._git_sync_enabled = False
+        plugin.sync = SyncStub()
         plugin._diagnostic_task = None
 
         await main_module.Main.initialize(plugin)
         await plugin._diagnostic_task
 
-        assert timer_delays == [300]
+        assert background_starts == [True]
         assert diagnostics_ran.is_set()
 
     asyncio.run(scenario())
@@ -494,14 +495,12 @@ def test_malformed_git_interval_falls_back_and_keeps_startup_diagnostics(
 def test_non_positive_integer_git_intervals_keep_timer_disabled(
     main_module, monkeypatch, interval
 ):
-    monkeypatch.setattr(
-        main_module.threading,
-        "Timer",
-        lambda *args, **kwargs: pytest.fail("disabled interval must not create a timer"),
-    )
-    plugin = types.SimpleNamespace(config={"git_sync_interval": interval})
+    start_timer = Mock()
+    plugin = types.SimpleNamespace(sync=types.SimpleNamespace(start_timer=start_timer))
 
     main_module.Main._start_sync_timer(plugin)
+
+    start_timer.assert_called_once_with()
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -746,12 +745,19 @@ def test_terminate_cancels_and_awaits_diagnostic_task(main_module):
                 task_cancelled.set()
                 raise
 
-        plugin = types.SimpleNamespace(_sync_timer=None)
+        stop_background_sync = Mock()
+
+        class SyncStub:
+            async def stop_background_sync(self):
+                stop_background_sync()
+
+        plugin = types.SimpleNamespace(sync=SyncStub())
         plugin._diagnostic_task = asyncio.create_task(active_diagnostic())
         await task_started.wait()
 
         await main_module.Main.terminate(plugin)
 
+        stop_background_sync.assert_called_once_with()
         assert task_cancelled.is_set()
         assert plugin._diagnostic_task is None
 

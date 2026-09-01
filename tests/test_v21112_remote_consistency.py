@@ -122,46 +122,15 @@ def test_remote_delete_reports_success_to_callers():
 
 
 def test_timer_callback_does_nothing_after_shutdown():
-    shutdown = threading.Event()
-    shutdown.set()
-    plugin = types.SimpleNamespace(
-        _shutdown_event=shutdown,
-        _git_sync_enabled=True,
-        _git_sync_from_remote=Mock(side_effect=AssertionError("must not sync")),
-        _start_sync_timer=Mock(side_effect=AssertionError("must not reschedule")),
-    )
-    callback = types.MethodType(_load_sync_method("_sync_timer_cb"), plugin)
-
-    callback()
-
-    plugin._git_sync_from_remote.assert_not_called()
-    plugin._start_sync_timer.assert_not_called()
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = _method_block(source, "_sync_timer_cb")
+    assert "return self.sync.timer_callback()" in block
 
 
 def test_start_sync_timer_refuses_to_schedule_after_shutdown():
-    shutdown = threading.Event()
-    shutdown.set()
-
-    class ForbiddenTimer:
-        def __init__(self, *args, **kwargs):
-            raise AssertionError("timer must not be created after shutdown")
-
-    fake_threading = types.SimpleNamespace(Timer=ForbiddenTimer)
-    start_timer = _load_sync_method(
-        "_start_sync_timer",
-        threading=fake_threading,
-        coerce_strict_int=lambda value, default: int(value),
-    )
-    plugin = types.SimpleNamespace(
-        config={"git_sync_interval": 5},
-        _shutdown_event=shutdown,
-        _sync_timer=None,
-        _sync_timer_cb=Mock(),
-    )
-
-    types.MethodType(start_timer, plugin)()
-
-    assert plugin._sync_timer is None
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = _method_block(source, "_start_sync_timer")
+    assert "return self.sync.start_timer()" in block
 
 
 def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
@@ -186,27 +155,16 @@ def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
 def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
     source = Path("main.py").read_text(encoding="utf-8")
     sync_source = Path("gallery_sync.py").read_text(encoding="utf-8")
-    init_block = _method_block(source, "__init__")
     initialize = _method_block(source, "initialize")
     terminate = _method_block(source, "terminate")
-    start_timer = _method_block(source, "_start_sync_timer")
-    timer_cb = _method_block(source, "_sync_timer_cb")
-    startup_sync = _method_block(source, "_git_startup_sync")
 
-    assert "self.sync = GallerySync(" in init_block
-    assert "self.shutdown_event = threading.Event()" in sync_source
-    assert "self.startup_sync_thread: threading.Thread | None = None" in sync_source
-    assert "self._startup_sync_thread = threading.Thread(" in initialize
-    assert "self._startup_sync_thread.start()" in initialize
-    assert "self._shutdown_event.set()" in terminate
-    assert "self._git_sync_enabled = False" in terminate
-    assert "self._git_push_cancelled = True" in terminate
-    assert "await asyncio.to_thread(" in terminate
-    assert "self._startup_sync_thread" in terminate
-    assert "self._shutdown_event.is_set()" in start_timer
-    assert "self._shutdown_event.is_set()" in timer_cb
-    assert "not self._shutdown_event.is_set()" in timer_cb
-    assert "self._shutdown_event.is_set()" in startup_sync
+    assert "def startup_sync(self) -> None:" in sync_source
+    assert "def start_timer(self) -> None:" in sync_source
+    assert "def timer_callback(self) -> None:" in sync_source
+    assert "def start_background_sync(self) -> None:" in sync_source
+    assert "async def stop_background_sync(self) -> None:" in sync_source
+    assert "self.sync.start_background_sync()" in initialize
+    assert "await self.sync.stop_background_sync()" in terminate
 
 
 def test_github_create_only_path_guard_detects_collision_and_truncated_tree():

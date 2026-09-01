@@ -552,36 +552,14 @@ class Main(Star):
         if coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self._validate_git_config()
             if self._git_sync_enabled:
-                self._startup_sync_thread = threading.Thread(
-                    target=self._git_startup_sync, daemon=True
-                )
-                self._startup_sync_thread.start()
-                self._start_sync_timer()
+                self.sync.start_background_sync()
         else:
             await self._normalize_gallery_tree()
         self._diagnostic_task = asyncio.create_task(self._run_startup_diagnostics())
 
     async def terminate(self):
         """插件卸载时停止后台同步并等待已启动的同步线程退出。"""
-        if not hasattr(self, "_shutdown_event"):
-            self._shutdown_event = threading.Event()
-        self._shutdown_event.set()
-        self._git_sync_enabled = False
-        self._git_push_cancelled = True
-
-        sync_timer = getattr(self, "_sync_timer", None)
-        if sync_timer is not None:
-            sync_timer.cancel()
-            self._sync_timer = None
-            if sync_timer.is_alive():
-                await asyncio.to_thread(sync_timer.join, 5.0)
-
-        startup_thread = getattr(self, "_startup_sync_thread", None)
-        if startup_thread is not None and startup_thread.is_alive():
-            await asyncio.to_thread(startup_thread.join, 5.0)
-            if startup_thread.is_alive():
-                logger.warning("[Git Sync] 启动同步线程未能在卸载等待期内退出。")
-        self._startup_sync_thread = None
+        await self.sync.stop_background_sync()
 
         if self._diagnostic_task is not None:
             self._diagnostic_task.cancel()
@@ -2293,74 +2271,16 @@ class Main(Star):
         return self.sync.push_all_local()
 
     def _git_startup_sync(self) -> None:
-        """启动时的完整同步流程：先拉取远程，若远程为空而本地有图则自动推送。"""
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-
-        # 先拉取远程
-        self._git_sync_from_remote()
-        if (
-            (hasattr(self, "_shutdown_event") and self._shutdown_event.is_set())
-            or not self._git_sync_enabled
-        ):
-            return
-
-        # 检查远程是否有 gallery 图片
-        tree = self._git_list_tree()
-        if tree is None or (
-            hasattr(self, "_shutdown_event") and self._shutdown_event.is_set()
-        ):
-            return
-
-        remote_gallery_count = sum(
-            1 for e in tree
-            if e["path"].startswith("gallery/")
-            and Path(e["path"]).suffix.lower() in IMAGE_SUFFIXES
-        )
-
-        if remote_gallery_count == 0 and (
-            not hasattr(self, "_shutdown_event")
-            or not self._shutdown_event.is_set()
-        ):
-            # 远程为空，检查本地是否有图片
-            local_images = [p for p in self.gallery_root.rglob("*") if _is_image_file(p)]
-            if local_images and (
-                not hasattr(self, "_shutdown_event")
-                or not self._shutdown_event.is_set()
-            ):
-                logger.info(
-                    f"[Git Sync] 远程仓库为空，本地有 {len(local_images)} 张图片，自动推送中…"
-                )
-                ok, fail, skip = self._git_push_all_local()
-                logger.info(f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}，跳过 {skip}。")
+        """Compatibility delegate; GallerySync owns startup convergence."""
+        return self.sync.startup_sync()
 
     def _start_sync_timer(self) -> None:
-        """启动定时从远程拉取的后台任务。"""
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-        interval = coerce_strict_int(self.config.get("git_sync_interval", 5), 5)
-        if interval <= 0:
-            logger.info("[Git Sync] 自动同步已禁用（间隔为 0）。")
-            return
-        self._sync_timer = threading.Timer(interval * 60, self._sync_timer_cb)
-        self._sync_timer.daemon = True
-        self._sync_timer.start()
-        logger.info(f"[Git Sync] 自动同步已启动，间隔 {interval} 分钟。")
+        """Compatibility delegate; GallerySync owns timer scheduling."""
+        return self.sync.start_timer()
 
     def _sync_timer_cb(self) -> None:
-        if hasattr(self, "_shutdown_event") and self._shutdown_event.is_set():
-            return
-        try:
-            self._git_sync_from_remote()
-        except Exception as exc:
-            logger.error(f"[Git Sync] 定时同步失败: {exc}")
-        finally:
-            # 无论成功失败都重新调度下一次，但卸载后不得复活。
-            if self._git_sync_enabled and (
-                not hasattr(self, "_shutdown_event")
-                or not self._shutdown_event.is_set()
-            ):
-                self._start_sync_timer()
+        """Compatibility delegate; GallerySync owns periodic sync callbacks."""
+        return self.sync.timer_callback()
 
     def _get_view_command_mode_text(self) -> str:
         return self.view_command_mode

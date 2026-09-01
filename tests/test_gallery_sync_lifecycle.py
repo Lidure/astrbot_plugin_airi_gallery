@@ -86,6 +86,36 @@ def test_start_timer_refuses_shutdown_and_schedules_configured_interval(tmp_path
     assert len(created) == 1
 
 
+def test_start_timer_invalid_interval_falls_back_to_five_minutes(tmp_path, monkeypatch):
+    sync, _, _ = _sync(tmp_path, interval=object())
+    created = []
+
+    class FakeTimer:
+        def __init__(self, seconds, callback):
+            created.append(seconds)
+            self.daemon = False
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(gallery_sync_module.threading, "Timer", FakeTimer)
+    sync.start_timer()
+    assert created == [300]
+
+
+def test_start_timer_non_positive_interval_stays_disabled(tmp_path, monkeypatch):
+    for interval in (0, -1):
+        sync, _, _ = _sync(tmp_path / str(interval), interval=interval)
+        monkeypatch.setattr(
+            gallery_sync_module.threading,
+            "Timer",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("disabled interval must not create a timer")
+            ),
+        )
+        sync.start_timer()
+
+
 def test_timer_callback_reschedules_only_while_enabled_and_not_shutdown(tmp_path):
     sync, _, _ = _sync(tmp_path)
     sync.sync_from_remote = Mock()

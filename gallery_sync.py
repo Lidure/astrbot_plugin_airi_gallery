@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Mapping
 from pathlib import Path
 
 try:
-    from .gallery_diagnostics import coerce_strict_bool
+    from .gallery_diagnostics import coerce_strict_bool, coerce_strict_int
     from .gallery_reporting import format_gallery_path_difference
     from .gallery_safety import (
         compare_gallery_paths,
@@ -17,7 +18,7 @@ try:
         verified_remote_sha,
     )
 except ImportError:
-    from gallery_diagnostics import coerce_strict_bool
+    from gallery_diagnostics import coerce_strict_bool, coerce_strict_int
     from gallery_reporting import format_gallery_path_difference
     from gallery_safety import (
         compare_gallery_paths,
@@ -727,6 +728,99 @@ class GallerySync:
         )
         self.store.save_hash_index()
         return success, failed, skipped
+
+
+    def startup_sync(self) -> None:
+        """Run startup pull and seed an empty remote from the local gallery."""
+        if self.shutdown_event.is_set():
+            return
+
+        self.sync_from_remote()
+        if self.shutdown_event.is_set() or not self.git_sync_enabled:
+            return
+
+        tree = self.remote.list_tree()
+        if tree is None or self.shutdown_event.is_set():
+            return
+
+        remote_gallery_count = sum(
+            1
+            for entry in tree
+            if str(entry.get("path", "")).startswith("gallery/")
+            and Path(str(entry.get("path", ""))).suffix.lower()
+            in self.image_suffixes
+        )
+        if remote_gallery_count != 0 or self.shutdown_event.is_set():
+            return
+
+        local_images = list(self.store.iter_image_files())
+        if not local_images or self.shutdown_event.is_set():
+            return
+
+        self._info(
+            f"[Git Sync] 远程仓库为空，本地有 {len(local_images)} 张图片，自动推送中…"
+        )
+        ok, fail, skip = self.push_all_local()
+        self._info(
+            f"[Git Sync] 首次自动推送完成：成功 {ok}，失败 {fail}，跳过 {skip}。"
+        )
+
+    def start_timer(self) -> None:
+        """Schedule the next periodic pull unless shutdown or configuration disables it."""
+        if self.shutdown_event.is_set():
+            return
+        interval = coerce_strict_int(self.config.get("git_sync_interval", 5), 5)
+        if interval <= 0:
+            self._info("[Git Sync] 自动同步已禁用（间隔为 0）。")
+            return
+
+        self.sync_timer = threading.Timer(interval * 60, self.timer_callback)
+        self.sync_timer.daemon = True
+        self.sync_timer.start()
+        self._info(f"[Git Sync] 自动同步已启动，间隔 {interval} 分钟。")
+
+    def timer_callback(self) -> None:
+        """Run one periodic pull and reschedule while the lifecycle remains active."""
+        if self.shutdown_event.is_set():
+            return
+        try:
+            self.sync_from_remote()
+        except Exception as exc:
+            self._error(f"[Git Sync] 定时同步失败: {exc}")
+        finally:
+            if self.git_sync_enabled and not self.shutdown_event.is_set():
+                self.start_timer()
+
+    def start_background_sync(self) -> None:
+        """Start the startup convergence worker and periodic timer."""
+        if self.shutdown_event.is_set() or not self.git_sync_enabled:
+            return
+        self.startup_sync_thread = threading.Thread(
+            target=self.startup_sync,
+            daemon=True,
+        )
+        self.startup_sync_thread.start()
+        self.start_timer()
+
+    async def stop_background_sync(self) -> None:
+        """Stop scheduling work and wait briefly for active background workers."""
+        self.shutdown_event.set()
+        self.set_sync_enabled(False)
+        self.cancel_push()
+
+        sync_timer = self.sync_timer
+        if sync_timer is not None:
+            sync_timer.cancel()
+            self.sync_timer = None
+            if sync_timer.is_alive():
+                await asyncio.to_thread(sync_timer.join, 5.0)
+
+        startup_thread = self.startup_sync_thread
+        if startup_thread is not None and startup_thread.is_alive():
+            await asyncio.to_thread(startup_thread.join, 5.0)
+            if startup_thread.is_alive():
+                self._warning("[Git Sync] 启动同步线程未能在卸载等待期内退出。")
+        self.startup_sync_thread = None
 
     def cancel_push(self) -> None:
         self._git_push_cancelled = True
