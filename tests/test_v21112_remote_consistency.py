@@ -164,18 +164,21 @@ def test_start_sync_timer_refuses_to_schedule_after_shutdown():
     assert plugin._sync_timer is None
 
 
-def test_remote_branch_mutations_share_one_reentrant_lock():
+def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
+    from gallery_store import GalleryStore
+    from gallery_sync import GallerySync
+
+    root = tmp_path / "gallery"
+    store = GalleryStore(tmp_path, root, image_suffixes={".png"})
+    remote = GalleryRemote({})
+    sync = GallerySync(store, remote, {}, image_suffixes={".png"})
+
+    assert remote.mutation_lock is sync.mutation_lock
+    assert hasattr(sync.mutation_lock, "acquire")
+
+    # Until each transaction body is mechanically moved, Main compatibility
+    # delegates must still serialize through the service-owned lock.
     source = Path("main.py").read_text(encoding="utf-8")
-    init_block = _method_block(source, "__init__")
-    assert "self._git_mutation_lock = threading.RLock()" in init_block
-    assert "mutation_lock=self._git_mutation_lock" in init_block
-
-    shared_lock = threading.RLock()
-    remote = GalleryRemote({}, mutation_lock=shared_lock)
-    assert remote.mutation_lock is shared_lock
-
-    # Remote primitives own their lock boundary; transaction policy methods
-    # that still live in Main continue to use the same injected lock.
     for name in (
         "_git_delete_file",
         "_git_commit_github_batch",
@@ -187,6 +190,7 @@ def test_remote_branch_mutations_share_one_reentrant_lock():
 
 def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
     source = Path("main.py").read_text(encoding="utf-8")
+    sync_source = Path("gallery_sync.py").read_text(encoding="utf-8")
     init_block = _method_block(source, "__init__")
     initialize = _method_block(source, "initialize")
     terminate = _method_block(source, "terminate")
@@ -194,8 +198,9 @@ def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
     timer_cb = _method_block(source, "_sync_timer_cb")
     startup_sync = _method_block(source, "_git_startup_sync")
 
-    assert "self._shutdown_event = threading.Event()" in init_block
-    assert "self._startup_sync_thread: threading.Thread | None = None" in init_block
+    assert "self.sync = GallerySync(" in init_block
+    assert "self.shutdown_event = threading.Event()" in sync_source
+    assert "self.startup_sync_thread: threading.Thread | None = None" in sync_source
     assert "self._startup_sync_thread = threading.Thread(" in initialize
     assert "self._startup_sync_thread.start()" in initialize
     assert "self._shutdown_event.set()" in terminate

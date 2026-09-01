@@ -138,6 +138,11 @@ except ImportError:
     from gallery_remote import GalleryRemote
 
 try:
+    from .gallery_sync import GallerySync
+except ImportError:
+    from gallery_sync import GallerySync
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -452,24 +457,21 @@ class Main(Star):
         )
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
 
-        # Git 远程同步状态
-        self._sync_timer: threading.Timer | None = None
-        self._sync_lock = threading.Lock()
+        # Git 远程同步事务状态由 GallerySync 单独拥有；Main 仅保留兼容代理。
         self._gallery_write_lock = threading.RLock()
-        self._git_mutation_lock = threading.RLock()
-        self._shutdown_event = threading.Event()
-        self._startup_sync_thread: threading.Thread | None = None
-        self._git_sync_enabled = False
         self.remote = GalleryRemote(
             self.config,
             logger=logger,
-            mutation_lock=self._git_mutation_lock,
-            set_sync_enabled=lambda enabled: setattr(
-                self, "_git_sync_enabled", bool(enabled)
-            ),
             request_state=_GIT_REQUEST_STATE,
         )
-        self._git_push_cancelled = False
+        self.sync = GallerySync(
+            self.store,
+            self.remote,
+            self.config,
+            image_suffixes=IMAGE_SUFFIXES,
+            logger=logger,
+            gallery_write_lock=self._gallery_write_lock,
+        )
         self._diagnostic_task: asyncio.Task | None = None
         self._diagnostic_update_cache = UpdateProbeCache(
             ttl_seconds=UPDATE_CACHE_SECONDS
@@ -1718,6 +1720,128 @@ class Main(Star):
             return
         self._git_sync_enabled = True
         logger.info(f"[Git Sync] 已启用，平台={platform} 仓库={owner}/{repo}")
+
+    @property
+    def _sync_lock(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.sync_lock
+        lock = self.__dict__.get("_sync_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self.__dict__["_sync_lock"] = lock
+        return lock
+
+    @_sync_lock.setter
+    def _sync_lock(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.sync_lock = value
+        else:
+            self.__dict__["_sync_lock"] = value
+
+    @property
+    def _git_mutation_lock(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.mutation_lock
+        lock = self.__dict__.get("_git_mutation_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self.__dict__["_git_mutation_lock"] = lock
+        return lock
+
+    @_git_mutation_lock.setter
+    def _git_mutation_lock(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.mutation_lock = value
+            if self.__dict__.get("remote") is not None:
+                self.remote.mutation_lock = value
+        else:
+            self.__dict__["_git_mutation_lock"] = value
+
+    @property
+    def _shutdown_event(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.shutdown_event
+        event = self.__dict__.get("_shutdown_event")
+        if event is None:
+            event = threading.Event()
+            self.__dict__["_shutdown_event"] = event
+        return event
+
+    @_shutdown_event.setter
+    def _shutdown_event(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.shutdown_event = value
+        else:
+            self.__dict__["_shutdown_event"] = value
+
+    @property
+    def _sync_timer(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.sync_timer
+        return self.__dict__.get("_sync_timer")
+
+    @_sync_timer.setter
+    def _sync_timer(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.sync_timer = value
+        else:
+            self.__dict__["_sync_timer"] = value
+
+    @property
+    def _startup_sync_thread(self):
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.startup_sync_thread
+        return self.__dict__.get("_startup_sync_thread")
+
+    @_startup_sync_thread.setter
+    def _startup_sync_thread(self, value) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.startup_sync_thread = value
+        else:
+            self.__dict__["_startup_sync_thread"] = value
+
+    @property
+    def _git_sync_enabled(self) -> bool:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.git_sync_enabled
+        return bool(self.__dict__.get("_git_sync_enabled", False))
+
+    @_git_sync_enabled.setter
+    def _git_sync_enabled(self, value: bool) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            sync.set_sync_enabled(bool(value))
+        else:
+            self.__dict__["_git_sync_enabled"] = bool(value)
+
+    @property
+    def _git_push_cancelled(self) -> bool:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            return sync.git_push_cancelled
+        return bool(self.__dict__.get("_git_push_cancelled", False))
+
+    @_git_push_cancelled.setter
+    def _git_push_cancelled(self, value: bool) -> None:
+        sync = self.__dict__.get("sync")
+        if sync is not None:
+            if value:
+                sync.cancel_push()
+            else:
+                sync.reset_push_cancelled()
+        else:
+            self.__dict__["_git_push_cancelled"] = bool(value)
 
     def _remote_service(self) -> GalleryRemote:
         remote = self.__dict__.get("remote")

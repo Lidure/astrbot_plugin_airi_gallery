@@ -892,3 +892,29 @@ def test_view_command_helpers_in_main_delegate_to_gallery_commands(
         602,
     )
 
+
+
+def test_main_wires_gallery_sync_as_single_state_owner(main_module, monkeypatch, tmp_path):
+    from gallery_sync import GallerySync
+
+    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})
+
+    assert isinstance(plugin.sync, GallerySync)
+    assert plugin._sync_lock is plugin.sync.sync_lock
+    assert plugin._git_mutation_lock is plugin.sync.mutation_lock
+    assert plugin.remote.mutation_lock is plugin.sync.mutation_lock
+    assert plugin._shutdown_event is plugin.sync.shutdown_event
+    assert plugin._sync_timer is plugin.sync.sync_timer
+    assert plugin._startup_sync_thread is plugin.sync.startup_sync_thread
+    assert plugin._git_sync_enabled is plugin.sync.git_sync_enabled
+    assert plugin._git_push_cancelled is plugin.sync.git_push_cancelled
+    for legacy_name in (
+        "_sync_lock",
+        "_git_mutation_lock",
+        "_shutdown_event",
+        "_sync_timer",
+        "_startup_sync_thread",
+        "_git_sync_enabled",
+        "_git_push_cancelled",
+    ):
+        assert legacy_name not in plugin.__dict__
