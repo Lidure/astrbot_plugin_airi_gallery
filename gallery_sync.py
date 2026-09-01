@@ -26,12 +26,16 @@ class GallerySync:
         *,
         image_suffixes=None,
         logger=None,
+        gallery_write_lock=None,
     ) -> None:
         self.store = store
         self.remote = remote
         self.config = config
         self.image_suffixes = set(image_suffixes or ())
         self.logger = logger
+        # The local gallery-write lock is still shared with Stage 3B upload
+        # orchestration. GallerySync does not become its owner in Stage 3A.
+        self.gallery_write_lock = gallery_write_lock or threading.RLock()
 
         self.sync_lock = threading.Lock()
         self.mutation_lock = threading.RLock()
@@ -47,6 +51,14 @@ class GallerySync:
         self.remote.mutation_lock = self.mutation_lock
         self.remote.set_sync_enabled = self.set_sync_enabled
 
+    def _info(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.info(message)
+
+    def _warning(self, message: str) -> None:
+        if self.logger is not None:
+            self.logger.warning(message)
+
     @property
     def git_sync_enabled(self) -> bool:
         return self._git_sync_enabled
@@ -59,7 +71,7 @@ class GallerySync:
         self._git_sync_enabled = bool(enabled)
 
     def validate_git_config(self) -> bool:
-        """Validate the minimal Git configuration and update enablement."""
+        """Validate Git synchronization configuration without changing policy."""
         if not coerce_strict_bool(self.config.get("git_sync_enabled", False)):
             self.set_sync_enabled(False)
             return False
@@ -68,9 +80,20 @@ class GallerySync:
         owner = str(self.config.get("git_repo_owner", "")).strip()
         repo = str(self.config.get("git_repo_name", "")).strip()
         token = str(self.config.get("git_token", "")).strip()
-        enabled = platform in {"github", "gitee"} and bool(owner and repo and token)
-        self.set_sync_enabled(enabled)
-        return enabled
+        if platform not in {"github", "gitee"}:
+            self._warning("[Git Sync] git_platform 必须是 github 或 gitee，已禁用同步。")
+            self.set_sync_enabled(False)
+            return False
+        if not owner or not repo or not token:
+            self._warning(
+                "[Git Sync] git_repo_owner / git_repo_name / git_token 未填写，已禁用同步。"
+            )
+            self.set_sync_enabled(False)
+            return False
+
+        self.set_sync_enabled(True)
+        self._info(f"[Git Sync] 已启用，平台={platform} 仓库={owner}/{repo}")
+        return True
 
     def cancel_push(self) -> None:
         self._git_push_cancelled = True
