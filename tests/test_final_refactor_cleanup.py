@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 MAIN_PATH = Path("main.py")
+# Final architecture guard: Main is the AstrBot adapter; extracted services own their internals.
 
 
 def _tree():
