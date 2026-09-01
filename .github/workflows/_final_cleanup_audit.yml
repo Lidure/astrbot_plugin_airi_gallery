@@ -1,0 +1,34 @@
+name: Final cleanup audit
+
+on:
+  push:
+    branches:
+      - refactor/final-cleanup
+    paths:
+      - scripts/_final_cleanup_audit.py
+      - .github/workflows/_final_cleanup_audit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/final-cleanup
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Audit final ownership and imports
+        run: python scripts/_final_cleanup_audit.py
+      - name: Remove temporary audit files
+        run: git rm scripts/_final_cleanup_audit.py .github/workflows/_final_cleanup_audit.yml
+      - name: Commit audit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: complete final ownership audit"
+          git push origin HEAD:refactor/final-cleanup
