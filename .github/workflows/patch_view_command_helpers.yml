@@ -36,3 +36,4 @@ jobs:
           git add main.py gallery_commands.py tests/test_gallery_commands.py tests/test_main_diagnostics.py
           git commit -m "refactor: isolate view command parsing helpers"
           git push origin HEAD:refactor/view-command-parsing-v21113
+# rerun after locking MODE_PREFIX import
