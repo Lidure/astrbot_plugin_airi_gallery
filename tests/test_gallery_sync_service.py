@@ -74,19 +74,29 @@ def test_gallery_sync_can_cancel_push_without_main_owned_flag(tmp_path):
     assert sync.git_push_cancelled is False
 
 
-def test_main_remote_delete_is_only_a_gallery_sync_compatibility_delegate():
+def _main_method_block(name: str) -> str:
     source = Path("main.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    method = None
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == "Main":
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "_git_delete_file":
-                    method = item
-                    break
-    assert method is not None
-    block = ast.get_source_segment(source, method) or ""
+                if isinstance(item, ast.FunctionDef) and item.name == name:
+                    return ast.get_source_segment(source, item) or ""
+    raise AssertionError(f"Main.{name} is missing")
+
+
+def test_main_remote_delete_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_git_delete_file")
 
     assert "return self.sync.delete_file(path, message)" in block
     assert "with self._git_mutation_lock:" not in block
     assert "self._git_request(" not in block
+
+
+def test_main_github_batch_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_git_commit_github_batch")
+
+    assert "return self.sync.commit_github_batch(" in block
+    assert "with self._git_mutation_lock:" not in block
+    assert "self._git_update_github_ref(" not in block
+    assert "branch_tree_matches_items" not in block
