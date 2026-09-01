@@ -564,6 +564,170 @@ class GallerySync:
                 self.sync_lock.release()
         return result
 
+    def _push_github_batch(self, items: list[tuple[str, bytes]]) -> bool:
+        """Push one GitHub batch through the service-owned commit transaction."""
+        if not items:
+            return True
+
+        blob_items: list[tuple[str, bytes, str]] = []
+        for git_path, content in items:
+            if self.git_push_cancelled:
+                return False
+            blob_sha = self.remote.create_github_blob(content)
+            if not blob_sha:
+                self._warning(f"[Git Sync] 批量 blob 创建失败: {git_path}")
+                return False
+            blob_items.append((git_path, content, blob_sha))
+
+        return self.commit_github_batch(
+            blob_items,
+            f"Sync {len(blob_items)} gallery files",
+        )
+
+    def push_pending_items(
+        self, items: list[tuple[str, bytes]]
+    ) -> tuple[int, int, int]:
+        """Push one pending batch and return ``(success, failed, skipped)``."""
+        if not items:
+            return 0, 0, 0
+
+        if self.remote.platform() == "github":
+            self.remote.ref_update_outcome = None
+            if self._push_github_batch(items):
+                try:
+                    for git_path, content in items:
+                        remote_sha = self.remote.sha_cache.get(git_path, "")
+                        self.store.remember_verified_remote_content(
+                            git_path, content, remote_sha, save=False
+                        )
+                finally:
+                    self.store.save_hash_index()
+                self._info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
+                return len(items), 0, 0
+            ref_outcome = self.remote.ref_update_outcome
+            if ref_outcome in {"rejected", "uncertain"}:
+                self._warning(
+                    "[Git Sync] GitHub 批量提交因 ref 更新拒绝/结果不确定而停止，"
+                    "不回退逐文件写入。"
+                )
+                return 0, len(items), 0
+            self._warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
+
+        success = 0
+        failed = 0
+        skipped = 0
+        try:
+            for offset, (git_path, content) in enumerate(items):
+                if self.git_push_cancelled:
+                    skipped += len(items) - offset
+                    break
+                uploaded, remote_sha = self.remote.put_file(
+                    git_path, content, f"Sync {git_path}"
+                )
+                if uploaded:
+                    if remote_sha:
+                        self.store.remember_verified_remote_content(
+                            git_path, content, remote_sha, save=False
+                        )
+                    success += 1
+                else:
+                    failed += 1
+        finally:
+            self.store.save_hash_index()
+        return success, failed, skipped
+
+    def push_all_local(self) -> tuple[int, int, int]:
+        """Push local gallery changes to the remote repository."""
+        if not self.git_sync_enabled:
+            return 0, 0, 0
+
+        self.reset_push_cancelled()
+        success = 0
+        failed = 0
+        skipped = 0
+        processed = 0
+        pending: list[tuple[str, bytes]] = []
+        if self.remote.platform() == "github":
+            try:
+                batch_size = int(self.config.get("git_push_batch_size", 50) or 50)
+            except (TypeError, ValueError):
+                batch_size = 50
+            batch_size = max(1, min(100, batch_size))
+        else:
+            batch_size = 1
+
+        local_images = list(self.store.iter_image_files())
+        remote_tree = self.remote.list_tree()
+        if remote_tree is None:
+            self._warning("[Git Sync] 获取远程文件树失败，无法执行快速差异推送。")
+            return 0, len(local_images), 0
+
+        remote_files = {
+            entry["path"]: entry
+            for entry in remote_tree
+            if entry.get("path", "").startswith("gallery/")
+        }
+        if self.remote.platform() != "github":
+            self._info("[Git Sync] 当前平台暂不支持批量 commit，使用逐文件推送。")
+
+        for path in local_images:
+            if self.git_push_cancelled:
+                self._info("[Git Sync] 批量推送已被用户取消。")
+                break
+
+            processed += 1
+            git_path = self.store.hash_index_key(path)
+            if not git_path:
+                continue
+            try:
+                content = path.read_bytes()
+                local_sha = git_blob_sha(content)
+                remote_entry = remote_files.get(git_path)
+                remote_sha = str(remote_entry.get("sha", "")) if remote_entry else ""
+                if remote_sha == local_sha:
+                    self.remote.sha_cache[git_path] = remote_sha
+                    self.store.remember_verified_remote_content(
+                        git_path, content, remote_sha, save=False
+                    )
+                    skipped += 1
+                    continue
+
+                if remote_sha:
+                    self.remote.sha_cache[git_path] = remote_sha
+                else:
+                    self.remote.sha_cache.pop(git_path, None)
+
+                pending.append((git_path, content))
+                if len(pending) >= batch_size:
+                    ok_count, fail_count, skip_count = self.push_pending_items(pending)
+                    success += ok_count
+                    failed += fail_count
+                    skipped += skip_count
+                    pending = []
+            except Exception as exc:
+                self._error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
+                failed += 1
+
+        if self.git_push_cancelled:
+            skipped += max(0, len(local_images) - processed)
+            self._info(
+                f"[Git Sync] 批量推送已取消：成功 {success}，失败 {failed}，跳过 {skipped}。"
+            )
+            self.store.save_hash_index()
+            return success, failed, skipped
+
+        if pending:
+            ok_count, fail_count, skip_count = self.push_pending_items(pending)
+            success += ok_count
+            failed += fail_count
+            skipped += skip_count
+
+        self._info(
+            f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。"
+        )
+        self.store.save_hash_index()
+        return success, failed, skipped
+
     def cancel_push(self) -> None:
         self._git_push_cancelled = True
 

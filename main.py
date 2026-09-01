@@ -2211,54 +2211,8 @@ class Main(Star):
         )
 
     def _git_push_pending_items(self, items: list[tuple[str, bytes]]) -> tuple[int, int, int]:
-        """推送一批待处理文件，返回 (成功数, 失败数, 跳过数)。"""
-        if not items:
-            return 0, 0, 0
-
-        if self._git_platform() == "github":
-            self._git_ref_update_outcome = None
-            if self._git_push_batch_github(items):
-                try:
-                    for git_path, content in items:
-                        remote_sha = self._sha_cache.get(git_path, "")
-                        self._remember_verified_remote_content(
-                            git_path, content, remote_sha, save=False
-                        )
-                finally:
-                    self._save_hash_index()
-                logger.info(f"[Git Sync] 已批量提交 {len(items)} 张图片到 GitHub。")
-                return len(items), 0, 0
-            ref_outcome = getattr(self, "_git_ref_update_outcome", None)
-            if ref_outcome in {"rejected", "uncertain"}:
-                logger.warning(
-                    "[Git Sync] GitHub 批量提交因 ref 更新拒绝/结果不确定而停止，"
-                    "不回退逐文件写入。"
-                )
-                return 0, len(items), 0
-            logger.warning("[Git Sync] GitHub 批量提交失败，回退为逐文件推送当前批次。")
-
-        success = 0
-        failed = 0
-        skipped = 0
-        try:
-            for offset, (git_path, content) in enumerate(items):
-                if self._git_push_cancelled:
-                    skipped += len(items) - offset
-                    break
-                uploaded, remote_sha = self._git_put_file(
-                    git_path, content, f"Sync {git_path}"
-                )
-                if uploaded:
-                    if remote_sha:
-                        self._remember_verified_remote_content(
-                            git_path, content, remote_sha, save=False
-                        )
-                    success += 1
-                else:
-                    failed += 1
-        finally:
-            self._save_hash_index()
-        return success, failed, skipped
+        """Compatibility delegate; GallerySync owns pending push orchestration."""
+        return self.sync.push_pending_items(items)
 
     def _git_delete_file(self, path: str, message: str) -> bool:
         """Compatibility delegate; GallerySync owns the delete transaction."""
@@ -2335,101 +2289,8 @@ class Main(Star):
         return git_blob_sha(content)
 
     def _git_push_all_local(self) -> tuple[int, int, int]:
-        """将本地 gallery 中新增或变更的图片批量推送到远程仓库。
-
-        返回 (成功数, 失败数, 跳过数)。
-        """
-        if not self._git_sync_enabled:
-            return 0, 0, 0
-
-        self._git_push_cancelled = False
-        success = 0
-        failed = 0
-        skipped = 0
-        processed = 0
-        pending: list[tuple[str, bytes]] = []
-        if self._git_platform() == "github":
-            try:
-                batch_size = int(self.config.get("git_push_batch_size", 50) or 50)
-            except (TypeError, ValueError):
-                batch_size = 50
-            batch_size = max(1, min(100, batch_size))
-        else:
-            batch_size = 1
-
-        local_images = [
-            path
-            for path in sorted(self.gallery_root.rglob("*"))
-            if _is_image_file(path) and self._to_git_path(str(path))
-        ]
-
-        remote_tree = self._git_list_tree()
-        if remote_tree is None:
-            logger.warning("[Git Sync] 获取远程文件树失败，无法执行快速差异推送。")
-            return 0, len(local_images), 0
-
-        remote_files = {
-            entry["path"]: entry
-            for entry in remote_tree
-            if entry.get("path", "").startswith("gallery/")
-        }
-        if self._git_platform() != "github":
-            logger.info("[Git Sync] 当前平台暂不支持批量 commit，使用逐文件推送。")
-
-        for path in local_images:
-            if self._git_push_cancelled:
-                logger.info("[Git Sync] 批量推送已被用户取消。")
-                break
-
-            processed += 1
-            git_path = self._to_git_path(str(path))
-            if not git_path:
-                continue
-            try:
-                content = path.read_bytes()
-                local_sha = self._git_blob_sha(content)
-                remote = remote_files.get(git_path)
-                remote_sha = str(remote.get("sha", "")) if remote else ""
-                if remote_sha == local_sha:
-                    self._sha_cache[git_path] = remote_sha
-                    self._remember_verified_remote_content(
-                        git_path, content, remote_sha, save=False
-                    )
-                    skipped += 1
-                    continue
-
-                if remote_sha:
-                    self._sha_cache[git_path] = remote_sha
-                else:
-                    self._sha_cache.pop(git_path, None)
-
-                pending.append((git_path, content))
-                if len(pending) >= batch_size:
-                    ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
-                    success += ok_count
-                    failed += fail_count
-                    skipped += skip_count
-                    pending = []
-            except Exception as exc:
-                logger.error(f"[Git Sync] 批量推送失败 {git_path}: {exc}")
-                failed += 1
-
-        # 统计被跳过的剩余文件
-        if self._git_push_cancelled:
-            skipped += max(0, len(local_images) - processed)
-            logger.info(f"[Git Sync] 批量推送已取消：成功 {success}，失败 {failed}，跳过 {skipped}。")
-            self._save_hash_index()
-            return success, failed, skipped
-
-        if pending:
-            ok_count, fail_count, skip_count = self._git_push_pending_items(pending)
-            success += ok_count
-            failed += fail_count
-            skipped += skip_count
-
-        logger.info(f"[Git Sync] 批量推送完成：成功 {success}，失败 {failed}，跳过 {skipped}。")
-        self._save_hash_index()
-        return success, failed, skipped
+        """Compatibility delegate; GallerySync owns push-all traversal."""
+        return self.sync.push_all_local()
 
     def _git_startup_sync(self) -> None:
         """启动时的完整同步流程：先拉取远程，若远程为空而本地有图则自动推送。"""
