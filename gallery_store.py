@@ -177,7 +177,6 @@ class GalleryStore:
             data = {"version": HASH_INDEX_VERSION, "files": self.hash_index}
             tmp_path = self.hash_index_path.with_suffix(".json.tmp")
             try:
-                self.hash_index_path.parent.mkdir(parents=True, exist_ok=True)
                 tmp_path.write_text(
                     json.dumps(data, ensure_ascii=False, separators=(",", ":")),
                     encoding="utf-8",
