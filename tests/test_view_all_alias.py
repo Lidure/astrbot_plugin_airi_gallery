@@ -1,16 +1,16 @@
 from pathlib import Path
 
-
-def _view_all_match_block(source: str) -> str:
-    return source.split("    def _match_view_all_command", 1)[1].split("\n    def ", 1)[0]
+from gallery_commands import extract_view_all_target
 
 
 def test_view_all_command_accepts_kanquanbu_and_kansuoyou_aliases():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = _view_all_match_block(source)
+    assert extract_view_all_target("/看全部 airi", use_prefix=True) == "airi"
+    assert extract_view_all_target("/看所有 airi", use_prefix=True) == "airi"
+    assert extract_view_all_target("看全部 airi", use_prefix=False) == "airi"
+    assert extract_view_all_target("看所有 airi", use_prefix=False) == "airi"
 
-    assert 'r"^/(?:看全部|看所有)\\s*(.+)$"' in block
-    assert 'r"^(?:看全部|看所有)\\s*(.+)$"' in block
+    assert extract_view_all_target("看全部 airi", use_prefix=True) is None
+    assert extract_view_all_target("/看所有 airi", use_prefix=False) is None
 
 
 def test_help_mentions_view_all_alias():
