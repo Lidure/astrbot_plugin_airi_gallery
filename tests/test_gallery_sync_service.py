@@ -100,3 +100,13 @@ def test_main_github_batch_is_only_a_gallery_sync_compatibility_delegate():
     assert "with self._git_mutation_lock:" not in block
     assert "self._git_update_github_ref(" not in block
     assert "branch_tree_matches_items" not in block
+
+
+def test_main_pull_sync_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_git_sync_from_remote")
+
+    assert "return self.sync.sync_from_remote()" in block
+    assert "self._sync_lock.acquire(" not in block
+    assert "self._git_mutation_lock.acquire()" not in block
+    assert "compare_gallery_paths" not in block
+    assert "matches_verified_remote_content" not in block
