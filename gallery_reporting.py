@@ -53,3 +53,14 @@ def format_sync_report(result: dict) -> str:
         + " 同路径内容冲突表示本地文件已被修改或无法安全确认；要以远端为准，请先备份并删除对应本地文件，再执行 /立即同步。"
         + " 仅 GitHub 项目表示本次下载未完成，可再次执行 /立即同步。"
     )
+
+
+def format_renumber_report(report: dict) -> str:
+    if not report.get("ok"):
+        return str(report.get("error") or "图库整理失败，未修改编号。")
+    total = int(report.get("total", 0))
+    renamed = int(report.get("renamed", 0))
+    if total <= 0:
+        return "图库整理完成：当前没有图片需要编号。"
+    consistency = "；本地与 GitHub 编号一致" if report.get("remote") else ""
+    return f"图库整理完成：共 {total} 张，编号 1-{total}；重命名 {renamed} 个文件{consistency}。"
