@@ -188,27 +188,27 @@ def test_gallery_diagnostics_command_and_lifecycle_are_wired():
 
 
 def test_diagnostic_git_requests_can_avoid_mutating_sync_enablement():
-    source = Path("main.py").read_text(encoding="utf-8")
+    remote_source = Path("gallery_remote.py").read_text(encoding="utf-8")
+    diagnostics_source = Path("gallery_diagnostics.py").read_text(encoding="utf-8")
 
-    assert "disable_on_auth_failure: bool = True" in source
-    assert "disable_on_auth_failure=False" in source
+    assert "disable_on_auth_failure: bool = True" in remote_source
+    assert "disable_on_auth_failure=False" in diagnostics_source
 
 
 def test_startup_diagnostics_are_background_only_and_cancelled_on_shutdown():
-    source = Path("main.py").read_text(encoding="utf-8")
+    source = Path("gallery_diagnostics.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     startup = next(
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.AsyncFunctionDef)
-        and node.name == "_run_startup_diagnostics"
+        and node.name == "run_startup"
     )
     startup_source = ast.get_source_segment(source, startup)
 
-    assert "asyncio.create_task(self._run_startup_diagnostics())" in source
-    assert "self._diagnostic_task.cancel()" in source
-    assert "event.send" not in startup_source
-
+    assert "asyncio.create_task(self.run_startup())" in source
+    assert "task.cancel()" in source
+    assert "send" not in startup_source
 
 def test_cloud_page_offers_builtin_gallery_and_optional_token_reads():
     html = cloud_page()
