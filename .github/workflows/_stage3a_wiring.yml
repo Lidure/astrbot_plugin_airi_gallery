@@ -1,0 +1,88 @@
+name: Stage 3A wiring migration
+
+on:
+  push:
+    branches:
+      - refactor/gallery-sync-service
+    paths:
+      - .github/workflows/_stage3a_wiring.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/gallery-sync-service
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Add RED wiring contract, verify RED, then implement GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          test_path = Path('tests/test_main_diagnostics.py')
+          test_source = test_path.read_text(encoding='utf-8')
+          contract = '''\n\ndef test_main_wires_gallery_sync_as_single_state_owner(main_module, monkeypatch, tmp_path):\n    from gallery_sync import GallerySync\n\n    plugin, _ = construct_plugin(main_module, monkeypatch, tmp_path, {})\n\n    assert isinstance(plugin.sync, GallerySync)\n    assert plugin._sync_lock is plugin.sync.sync_lock\n    assert plugin._git_mutation_lock is plugin.sync.mutation_lock\n    assert plugin.remote.mutation_lock is plugin.sync.mutation_lock\n    assert plugin._shutdown_event is plugin.sync.shutdown_event\n    assert plugin._sync_timer is plugin.sync.sync_timer\n    assert plugin._startup_sync_thread is plugin.sync.startup_sync_thread\n    assert plugin._git_sync_enabled is plugin.sync.git_sync_enabled\n    assert plugin._git_push_cancelled is plugin.sync.git_push_cancelled\n    for legacy_name in (\n        "_sync_lock",\n        "_git_mutation_lock",\n        "_shutdown_event",\n        "_sync_timer",\n        "_startup_sync_thread",\n        "_git_sync_enabled",\n        "_git_push_cancelled",\n    ):\n        assert legacy_name not in plugin.__dict__\n'''
+          if 'def test_main_wires_gallery_sync_as_single_state_owner' not in test_source:
+              test_path.write_text(test_source + contract, encoding='utf-8')
+          PY
+
+          set +e
+          python -m pytest tests/test_main_diagnostics.py::test_main_wires_gallery_sync_as_single_state_owner -q
+          red_status=$?
+          set -e
+          if [ "$red_status" -eq 0 ]; then
+            echo 'Expected RED wiring contract to fail before production wiring, but it passed.' >&2
+            exit 1
+          fi
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('main.py')
+          source = path.read_text(encoding='utf-8')
+
+          import_marker = '''try:\n    from .gallery_remote import GalleryRemote\nexcept ImportError:\n    from gallery_remote import GalleryRemote\n'''
+          import_replacement = import_marker + '''\ntry:\n    from .gallery_sync import GallerySync\nexcept ImportError:\n    from gallery_sync import GallerySync\n'''
+          if 'from .gallery_sync import GallerySync' not in source:
+              if source.count(import_marker) != 1:
+                  raise SystemExit('GalleryRemote import marker did not match exactly once')
+              source = source.replace(import_marker, import_replacement, 1)
+
+          old_state = '''        # Git 远程同步状态\n        self._sync_timer: threading.Timer | None = None\n        self._sync_lock = threading.Lock()\n        self._gallery_write_lock = threading.RLock()\n        self._git_mutation_lock = threading.RLock()\n        self._shutdown_event = threading.Event()\n        self._startup_sync_thread: threading.Thread | None = None\n        self._git_sync_enabled = False\n        self.remote = GalleryRemote(\n            self.config,\n            logger=logger,\n            mutation_lock=self._git_mutation_lock,\n            set_sync_enabled=lambda enabled: setattr(\n                self, "_git_sync_enabled", bool(enabled)\n            ),\n            request_state=_GIT_REQUEST_STATE,\n        )\n        self._git_push_cancelled = False\n'''
+          new_state = '''        # Git 远程同步事务状态由 GallerySync 单独拥有；Main 仅保留兼容代理。\n        self._gallery_write_lock = threading.RLock()\n        self.remote = GalleryRemote(\n            self.config,\n            logger=logger,\n            request_state=_GIT_REQUEST_STATE,\n        )\n        self.sync = GallerySync(\n            self.store,\n            self.remote,\n            self.config,\n            image_suffixes=IMAGE_SUFFIXES,\n            logger=logger,\n            gallery_write_lock=self._gallery_write_lock,\n        )\n'''
+          if old_state not in source:
+              raise SystemExit('Main Git state block no longer matches expected Stage 2 source')
+          source = source.replace(old_state, new_state, 1)
+
+          marker = '    def _remote_service(self) -> GalleryRemote:\n'
+          properties = '''    @property\n    def _sync_lock(self):\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.sync_lock\n        lock = self.__dict__.get("_sync_lock")\n        if lock is None:\n            lock = threading.Lock()\n            self.__dict__["_sync_lock"] = lock\n        return lock\n\n    @_sync_lock.setter\n    def _sync_lock(self, value) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.sync_lock = value\n        else:\n            self.__dict__["_sync_lock"] = value\n\n    @property\n    def _git_mutation_lock(self):\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.mutation_lock\n        lock = self.__dict__.get("_git_mutation_lock")\n        if lock is None:\n            lock = threading.RLock()\n            self.__dict__["_git_mutation_lock"] = lock\n        return lock\n\n    @_git_mutation_lock.setter\n    def _git_mutation_lock(self, value) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.mutation_lock = value\n            if self.__dict__.get("remote") is not None:\n                self.remote.mutation_lock = value\n        else:\n            self.__dict__["_git_mutation_lock"] = value\n\n    @property\n    def _shutdown_event(self):\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.shutdown_event\n        event = self.__dict__.get("_shutdown_event")\n        if event is None:\n            event = threading.Event()\n            self.__dict__["_shutdown_event"] = event\n        return event\n\n    @_shutdown_event.setter\n    def _shutdown_event(self, value) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.shutdown_event = value\n        else:\n            self.__dict__["_shutdown_event"] = value\n\n    @property\n    def _sync_timer(self):\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.sync_timer\n        return self.__dict__.get("_sync_timer")\n\n    @_sync_timer.setter\n    def _sync_timer(self, value) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.sync_timer = value\n        else:\n            self.__dict__["_sync_timer"] = value\n\n    @property\n    def _startup_sync_thread(self):\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.startup_sync_thread\n        return self.__dict__.get("_startup_sync_thread")\n\n    @_startup_sync_thread.setter\n    def _startup_sync_thread(self, value) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.startup_sync_thread = value\n        else:\n            self.__dict__["_startup_sync_thread"] = value\n\n    @property\n    def _git_sync_enabled(self) -> bool:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.git_sync_enabled\n        return bool(self.__dict__.get("_git_sync_enabled", False))\n\n    @_git_sync_enabled.setter\n    def _git_sync_enabled(self, value: bool) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            sync.set_sync_enabled(bool(value))\n        else:\n            self.__dict__["_git_sync_enabled"] = bool(value)\n\n    @property\n    def _git_push_cancelled(self) -> bool:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            return sync.git_push_cancelled\n        return bool(self.__dict__.get("_git_push_cancelled", False))\n\n    @_git_push_cancelled.setter\n    def _git_push_cancelled(self, value: bool) -> None:\n        sync = self.__dict__.get("sync")\n        if sync is not None:\n            if value:\n                sync.cancel_push()\n            else:\n                sync.reset_push_cancelled()\n        else:\n            self.__dict__["_git_push_cancelled"] = bool(value)\n\n'''
+          if 'def _sync_lock(self):' not in source:
+              if source.count(marker) != 1:
+                  raise SystemExit('remote service marker did not match exactly once')
+              source = source.replace(marker, properties + marker, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+          python -m pytest tests/test_main_diagnostics.py::test_main_wires_gallery_sync_as_single_state_owner -q
+          python -m pytest tests -q
+      - name: Commit migration and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/_stage3a_wiring.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.py tests/test_main_diagnostics.py .github/workflows/_stage3a_wiring.yml
+          git commit -m 'refactor: wire Main to GallerySync state'
+          git push origin HEAD:refactor/gallery-sync-service
