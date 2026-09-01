@@ -112,3 +112,21 @@ def test_main_pull_sync_is_only_a_gallery_sync_compatibility_delegate():
     assert "self._git_mutation_lock.acquire()" not in block
     assert "compare_gallery_paths" not in block
     assert "matches_verified_remote_content" not in block
+
+
+def test_main_push_pending_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_git_push_pending_items")
+
+    assert "return self.sync.push_pending_items(items)" in block
+    assert "self._git_push_batch_github(" not in block
+    assert "self._git_put_file(" not in block
+    assert "self._save_hash_index()" not in block
+
+
+def test_main_push_all_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_git_push_all_local")
+
+    assert "return self.sync.push_all_local()" in block
+    assert "self.gallery_root.rglob(" not in block
+    assert "self._git_list_tree()" not in block
+    assert "self._git_push_pending_items(" not in block
