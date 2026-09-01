@@ -105,3 +105,24 @@ def test_create_only_collision_fails_before_tree_or_commit_creation():
     remote.create_github_tree.assert_not_called()
     remote.create_github_commit.assert_not_called()
     remote.update_github_ref.assert_not_called()
+
+
+def test_create_only_paths_are_rechecked_after_ref_conflict():
+    sync, remote = _sync(
+        update_outcomes=[(False, "conflict")],
+        heads=[("parent-old", "tree-old"), ("parent-fresh", "tree-fresh")],
+    )
+    remote.github_create_only_paths_exist.side_effect = [False, True]
+
+    assert sync.commit_github_batch(
+        ITEMS,
+        "Sync batch",
+        create_only_paths={PATH},
+    ) is False
+    assert remote.github_create_only_paths_exist.call_args_list == [
+        (("tree-old", {PATH}),),
+        (("tree-fresh", {PATH}),),
+    ]
+    assert remote.create_github_commit.call_count == 1
+    assert remote.update_github_ref.call_count == 1
+    assert remote.sha_cache == {}
