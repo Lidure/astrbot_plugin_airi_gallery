@@ -46,3 +46,24 @@ def test_sync_report_handles_busy_failure_clean_and_conflict_states():
     assert "内容冲突：gallery/airi/3.jpg" in conflict
     assert "/推送到远程" in conflict
     assert "/立即同步" in conflict
+
+
+def test_renumber_report_preserves_failure_empty_and_remote_success_messages():
+    assert gallery_reporting.format_renumber_report({"ok": False}) == (
+        "图库整理失败，未修改编号。"
+    )
+    assert gallery_reporting.format_renumber_report(
+        {"ok": False, "error": "remote failed"}
+    ) == "remote failed"
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": 0, "renamed": 0}
+    ) == "图库整理完成：当前没有图片需要编号。"
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": 4, "renamed": 2}
+    ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件。"
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": 4, "renamed": 2, "remote": True}
+    ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件；本地与 GitHub 编号一致。"
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": "4", "renamed": "2", "remote": True}
+    ) == "图库整理完成：共 4 张，编号 1-4；重命名 2 个文件；本地与 GitHub 编号一致。"
