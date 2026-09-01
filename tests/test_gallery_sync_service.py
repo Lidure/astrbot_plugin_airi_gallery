@@ -103,6 +103,8 @@ def test_main_github_batch_is_only_a_gallery_sync_compatibility_delegate():
 
 
 def test_main_pull_sync_is_only_a_gallery_sync_compatibility_delegate():
+    # Pull semantics are covered by test_gallery_sync_pull.py; this test guards
+    # the composition boundary so the transaction cannot drift back into Main.
     block = _main_method_block("_git_sync_from_remote")
 
     assert "return self.sync.sync_from_remote()" in block
