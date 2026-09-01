@@ -797,3 +797,52 @@ def test_startup_diagnostics_logs_without_using_any_chat_send_path(
     assert [level for level, _ in logged] == ["warning", "error"]
     assert "Startup warning: warning detail" in logged[0][1]
     assert "Startup error: error detail" in logged[1][1]
+
+
+def test_command_helpers_in_main_are_thin_compatibility_delegates(
+    main_module, monkeypatch
+):
+    monkeypatch.setattr(
+        main_module,
+        "_sanitize_gallery_component",
+        lambda value, *, default_category: f"{default_category}:{value}",
+    )
+    assert main_module._sanitize_component("raw") == "default:raw"
+
+    monkeypatch.setattr(
+        main_module, "_normalize_gallery_match_text", lambda value: f"norm:{value}"
+    )
+    assert main_module.Main._normalize_match_text("raw") == "norm:raw"
+
+    monkeypatch.setattr(
+        main_module, "_strip_gallery_at_prefix", lambda value: f"strip:{value}"
+    )
+    assert main_module.Main._strip_at_prefix("raw") == "strip:raw"
+
+    monkeypatch.setattr(
+        main_module,
+        "_replace_gallery_command_aliases",
+        lambda value, aliases: (value, dict(aliases)),
+    )
+    replaced = main_module.Main._replace_command_aliases("/sz airi")
+    assert replaced[0] == "/sz airi"
+    assert replaced[1] == main_module.COMMAND_ALIASES
+
+    monkeypatch.setattr(
+        main_module, "_parse_gallery_aliases", lambda entries: {"seen": entries[0]}
+    )
+    assert main_module.Main._parse_aliases(["a=b"]) == {"seen": "a=b"}
+
+    plugin = object.__new__(main_module.Main)
+    plugin.category_aliases = {"爱莉": "Airi"}
+    plugin._list_category_names = lambda: ["Airi"]
+    monkeypatch.setattr(
+        main_module,
+        "_resolve_gallery_category_query_impl",
+        lambda query, categories, aliases: (query, list(categories), dict(aliases)),
+    )
+    assert main_module.Main._resolve_gallery_category_query(plugin, "爱莉") == (
+        "爱莉",
+        ["Airi"],
+        {"爱莉": "Airi"},
+    )
