@@ -50,7 +50,7 @@ def test_gallery_store_hash_index_round_trip_is_atomic(tmp_path: Path):
     root.mkdir()
     store = GalleryStore(tmp_path, root, image_suffixes={".jpg"})
     store.hash_index["gallery/airi/1.jpg"] = {
-        "sha256": "abc",
+        "hash": "abc",
         "size": 3,
         "mtime_ns": 1,
     }
@@ -62,4 +62,4 @@ def test_gallery_store_hash_index_round_trip_is_atomic(tmp_path: Path):
 
     reloaded = GalleryStore(tmp_path, root, image_suffixes={".jpg"})
     reloaded.load_hash_index()
-    assert reloaded.hash_index["gallery/airi/1.jpg"]["sha256"] == "abc"
+    assert reloaded.hash_index["gallery/airi/1.jpg"]["hash"] == "abc"
