@@ -7,6 +7,9 @@ from gallery_safety import git_blob_sha
 from gallery_store import GalleryStore
 from gallery_sync import GallerySync
 
+# Stage 3A keeps push-all verification at the GallerySync behavior boundary;
+# Main source placement is covered separately by compatibility-delegate tests.
+
 
 def _sync(tmp_path, *, platform="github", batch_size=50):
     root = tmp_path / "gallery"
