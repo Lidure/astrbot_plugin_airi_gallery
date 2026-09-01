@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import gallery_reporting
+
 
 def test_force_confirmation_reuses_cached_candidate_fingerprint():
     source = Path("main.py").read_text(encoding="utf-8")
@@ -68,7 +70,9 @@ def test_import_gallery_uses_one_global_mapping_for_local_and_github():
     assert "_remap_hash_index(plan)" in source
     assert "本地与 GitHub 图片集合尚未一致" in source
     assert "远程图库状态无法确认" in source
-    assert "本地与 GitHub 编号一致" in source
+    assert gallery_reporting.format_renumber_report(
+        {"ok": True, "total": 2, "renamed": 1, "remote": True}
+    ) == "图库整理完成：共 2 张，编号 1-2；重命名 1 个文件；本地与 GitHub 编号一致。"
 
 
 def test_github_renumber_is_bound_to_one_head_snapshot():
