@@ -52,16 +52,16 @@ async def run_smoke() -> None:
         async def no_network_startup_diagnostics() -> None:
             return None
 
-        plugin._run_startup_diagnostics = no_network_startup_diagnostics
+        plugin.diagnostics.run_startup = no_network_startup_diagnostics
         await plugin.initialize()
         await asyncio.sleep(0)
 
-        assert plugin._diagnostic_task is not None
+        assert plugin.diagnostics.task is not None
         assert plugin.gallery_root.is_dir()
 
         await plugin.terminate()
 
-        assert plugin._diagnostic_task is None
+        assert plugin.diagnostics.task is None
         assert plugin._shutdown_event.is_set()
 
 
