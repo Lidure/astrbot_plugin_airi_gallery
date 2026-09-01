@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from gallery_remote import GalleryRemote
 from gallery_sync import GallerySync
@@ -120,8 +120,8 @@ def test_create_only_paths_are_rechecked_after_ref_conflict():
         create_only_paths={PATH},
     ) is False
     assert remote.github_create_only_paths_exist.call_args_list == [
-        (("tree-old", {PATH}),),
-        (("tree-fresh", {PATH}),),
+        call("tree-old", {PATH}),
+        call("tree-fresh", {PATH}),
     ]
     assert remote.create_github_commit.call_count == 1
     assert remote.update_github_ref.call_count == 1
