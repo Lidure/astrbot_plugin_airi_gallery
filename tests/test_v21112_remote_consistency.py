@@ -145,11 +145,11 @@ def test_remote_branch_mutations_share_gallery_sync_reentrant_lock(tmp_path):
     assert remote.mutation_lock is sync.mutation_lock
     assert hasattr(sync.mutation_lock, "acquire")
 
-    # Transaction bodies not yet migrated in Stage 3A still serialize through
-    # the service-owned lock. Delete and GitHub batch/ref are service-owned.
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = _method_block(source, "_github_commit_renumber")
-    assert "with self._git_mutation_lock:" in block
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
+    block = source.split("    def commit_github_renumber", 1)[1].split(
+        "    def renumber_gallery_consistently", 1
+    )[0]
+    assert "with self.mutation_lock:" in block
 
 
 def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():

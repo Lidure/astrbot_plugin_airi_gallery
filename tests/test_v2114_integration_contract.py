@@ -71,26 +71,27 @@ def test_active_local_dedup_ignores_stale_hash_index_paths(tmp_path: Path):
 
 
 def test_import_gallery_uses_one_global_mapping_for_local_and_github():
-    source = Path("main.py").read_text(encoding="utf-8")
+    main = Path("main.py").read_text(encoding="utf-8")
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
 
-    assert "build_global_renumber_plan(remote_paths, IMAGE_SUFFIXES)" in source
-    assert "_stage_local_renumber(plan)" in source
-    assert "_github_commit_renumber(" in source
-    assert "_remap_hash_index(plan)" in source
+    assert "build_global_renumber_plan(remote_paths, self.image_suffixes)" in source
+    assert "self.stage_local_renumber(plan)" in source
+    assert "self.commit_github_renumber(" in source
+    assert "self.remap_renumber_state(plan)" in source
     assert "本地与 GitHub 图片集合尚未一致" in source
     assert "远程图库状态无法确认" in source
+    assert "return self.sync.renumber_gallery_consistently()" in main
     assert gallery_reporting.format_renumber_report(
         {"ok": True, "total": 2, "renamed": 1, "remote": True}
     ) == "图库整理完成：共 2 张，编号 1-2；重命名 1 个文件；本地与 GitHub 编号一致。"
 
 
 def test_github_renumber_is_bound_to_one_head_snapshot():
-    source = Path("main.py").read_text(encoding="utf-8")
+    source = Path("gallery_sync.py").read_text(encoding="utf-8")
 
-    assert "def _git_list_tree_at(" in source
     assert "expected_head_sha" in source
     assert "base_tree_sha" in source
-    assert "_git_list_tree_at(base_tree_sha)" in source
+    assert "self.remote.list_tree_at(base_tree_sha)" in source
     assert "重编号期间 GitHub 已发生变化" in source
     assert "重编号 ref 冲突，刷新 HEAD 后重试一次。" not in source
 

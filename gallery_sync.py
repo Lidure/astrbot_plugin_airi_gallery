@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import threading
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -9,6 +12,10 @@ try:
     from .gallery_diagnostics import coerce_strict_bool, coerce_strict_int
     from .gallery_reporting import format_gallery_path_difference
     from .gallery_safety import (
+        RenameStep,
+        build_category_tree_delta_entries,
+        build_global_renumber_plan,
+        build_renumbered_category_entries,
         compare_gallery_paths,
         git_blob_sha,
         is_remote_gallery_image_path,
@@ -21,6 +28,10 @@ except ImportError:
     from gallery_diagnostics import coerce_strict_bool, coerce_strict_int
     from gallery_reporting import format_gallery_path_difference
     from gallery_safety import (
+        RenameStep,
+        build_category_tree_delta_entries,
+        build_global_renumber_plan,
+        build_renumbered_category_entries,
         compare_gallery_paths,
         git_blob_sha,
         is_remote_gallery_image_path,
@@ -53,12 +64,18 @@ class GallerySync:
         image_suffixes=None,
         logger=None,
         gallery_write_lock=None,
+        ensure_perceptual_index=None,
+        manifest_path: str = "gallery/gallery_index.json",
+        manifest_algorithm: str = "dhash64-nn-white-v1",
     ) -> None:
         self.store = store
         self.remote = remote
         self.config = config
         self.image_suffixes = set(image_suffixes or ())
         self.logger = logger
+        self.ensure_perceptual_index = ensure_perceptual_index or (lambda: None)
+        self.manifest_path = str(manifest_path)
+        self.manifest_algorithm = str(manifest_algorithm)
         # The local gallery-write lock is still shared with Stage 3B upload
         # orchestration. GallerySync does not become its owner in Stage 3A.
         self.gallery_write_lock = gallery_write_lock or threading.RLock()
@@ -729,6 +746,357 @@ class GallerySync:
         self.store.save_hash_index()
         return success, failed, skipped
 
+
+
+    def remap_renumber_state(self, plan: tuple[RenameStep, ...]) -> None:
+        """Remap local hash/SHA state after a renumber plan is finalized."""
+        mapping = {step.source: step.target for step in plan}
+        sanitize = getattr(self.store, "_sanitize", lambda value: str(value))
+        with self.store.hash_index_lock:
+            remapped: dict[str, dict] = {}
+            for old_path, entry in self.store.hash_index.items():
+                new_path = mapping.get(old_path, old_path)
+                copied = dict(entry)
+                parts = Path(new_path).parts
+                if len(parts) >= 3:
+                    copied["category"] = sanitize(parts[1])
+                remapped[new_path] = copied
+            self.store.hash_index = remapped
+            self.store.hash_index_dirty = True
+        self.remote.sha_cache = {
+            mapping.get(path, path): sha
+            for path, sha in self.remote.sha_cache.items()
+        }
+        self.store.category_hash_cache.clear()
+        self.store.save_hash_index(force=True)
+
+    def stage_local_renumber(
+        self, plan: tuple[RenameStep, ...]
+    ) -> list[tuple[Path, Path, Path]]:
+        """Move changed local paths to temporary names so the plan is rollbackable."""
+        staged: list[tuple[Path, Path, Path]] = []
+        changed = [step for step in plan if step.source != step.target]
+        token = f"{os.getpid()}-{time.time_ns()}"
+        try:
+            for offset, step in enumerate(changed):
+                source = resolve_gallery_local_path(
+                    self.store.gallery_root.parent, step.source
+                )
+                target = resolve_gallery_local_path(
+                    self.store.gallery_root.parent, step.target
+                )
+                if source is None or target is None or not source.exists():
+                    raise RuntimeError(f"本地重编号源文件缺失：{step.source}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temp = source.with_name(
+                    f".airi-renumber-{token}-{offset}{source.suffix}"
+                )
+                source.replace(temp)
+                staged.append((temp, source, target))
+            return staged
+        except Exception:
+            self.rollback_local_renumber(staged)
+            raise
+
+    @staticmethod
+    def rollback_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
+        for temp, source, _ in reversed(staged):
+            try:
+                if temp.exists():
+                    temp.replace(source)
+            except OSError:
+                pass
+
+    @staticmethod
+    def finish_local_renumber(staged: list[tuple[Path, Path, Path]]) -> None:
+        for temp, _, target in staged:
+            if target.exists():
+                raise RuntimeError(f"重编号目标被意外占用：{target}")
+            temp.replace(target)
+
+    def commit_github_renumber(
+        self,
+        plan: tuple[RenameStep, ...],
+        tree: list[dict],
+        manifest_payload: bytes,
+        *,
+        expected_head_sha: str,
+        base_tree_sha: str,
+    ) -> dict[str, object]:
+        """Commit one hierarchical renumber with one final atomic ref move."""
+        with self.mutation_lock:
+            def failure(stage: str, detail: str) -> dict[str, object]:
+                self._warning(f"[Gallery] GitHub 重编号失败 [{stage}]: {detail}")
+                return {"ok": False, "stage": stage, "error": detail}
+
+            if self.remote.platform() != "github":
+                return failure("platform", "当前远端不是 GitHub")
+            current_head = self.remote.get_head_commit_and_tree()
+            if not current_head or current_head[0] != expected_head_sha:
+                return failure("head_changed", "重编号期间 GitHub HEAD 已发生变化")
+
+            try:
+                category_layouts = build_renumbered_category_entries(tree, plan)
+            except ValueError as exc:
+                return failure("layout", str(exc))
+
+            tree_shas = {
+                str(entry.get("path", "")): str(entry.get("sha", "")).strip()
+                for entry in tree
+                if str(entry.get("type", "")) == "tree"
+                and str(entry.get("sha", "")).strip()
+            }
+            gallery_base_tree_sha = tree_shas.get("gallery", "")
+            if not gallery_base_tree_sha:
+                return failure("layout", "远程 tree 中缺少 gallery 目录 SHA")
+
+            manifest_sha = self.remote.create_github_blob(manifest_payload)
+            if not manifest_sha:
+                return failure("manifest_blob", f"创建 {self.manifest_path} blob 失败")
+
+            gallery_entries: list[dict] = []
+            for category, category_entries in category_layouts.items():
+                category_base_tree_sha = tree_shas.get(f"gallery/{category}", "")
+                if not category_base_tree_sha:
+                    return failure(
+                        "layout", f"远程 tree 中缺少分类 {category} 的目录 SHA"
+                    )
+                try:
+                    deletes, upserts = build_category_tree_delta_entries(
+                        tree, category, category_entries
+                    )
+                except ValueError as exc:
+                    return failure("layout", str(exc))
+                category_tree_sha = self.remote.apply_category_tree_delta(
+                    category, category_base_tree_sha, deletes, upserts
+                )
+                if not category_tree_sha:
+                    return failure(
+                        "category_tree", f"创建分类 {category} 的最终 tree 失败"
+                    )
+                gallery_entries.append(
+                    {
+                        "path": category,
+                        "mode": "040000",
+                        "type": "tree",
+                        "sha": category_tree_sha,
+                    }
+                )
+
+            gallery_entries.append(
+                {
+                    "path": Path(self.manifest_path).name,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": manifest_sha,
+                }
+            )
+            gallery_tree_sha = self.remote.create_github_tree(
+                gallery_base_tree_sha, gallery_entries
+            )
+            if not gallery_tree_sha:
+                return failure("gallery_tree", "创建 gallery 汇总 tree 失败")
+
+            root_tree_sha = self.remote.create_github_tree(
+                base_tree_sha,
+                [
+                    {
+                        "path": "gallery",
+                        "mode": "040000",
+                        "type": "tree",
+                        "sha": gallery_tree_sha,
+                    }
+                ],
+            )
+            if not root_tree_sha:
+                return failure("root_tree", "创建仓库根 tree 失败")
+
+            commit_sha = self.remote.create_github_commit(
+                f"Renumber {len(plan)} gallery images",
+                root_tree_sha,
+                expected_head_sha,
+            )
+            if not commit_sha:
+                return failure("commit", "创建 GitHub commit 失败")
+
+            latest_head = self.remote.get_head_commit_and_tree()
+            if not latest_head or latest_head[0] != expected_head_sha:
+                return failure(
+                    "head_changed", "提交对象创建后 GitHub HEAD 已发生变化"
+                )
+            if not self.remote.update_github_ref(commit_sha):
+                return failure(
+                    "ref_update", "更新 GitHub 分支引用失败或非快进更新被拒绝"
+                )
+            return {
+                "ok": True,
+                "stage": "complete",
+                "commit_sha": commit_sha,
+            }
+
+    def renumber_gallery_consistently(self) -> dict:
+        """Apply one global numbering plan locally and, when enabled, on GitHub."""
+        self.store.gallery_root.mkdir(parents=True, exist_ok=True)
+        self.ensure_perceptual_index()
+
+        if not self.git_sync_enabled:
+            local_paths = [
+                self.store.hash_index_key(path)
+                for path in self.store.iter_image_files()
+            ]
+            plan = build_global_renumber_plan(
+                [path for path in local_paths if path], self.image_suffixes
+            )
+            staged = self.stage_local_renumber(plan)
+            self.finish_local_renumber(staged)
+            self.remap_renumber_state(plan)
+            return {
+                "ok": True,
+                "renamed": len(staged),
+                "total": len(plan),
+                "remote": False,
+            }
+
+        if self.remote.platform() != "github":
+            return {
+                "ok": False,
+                "error": "双端一致重编号目前仅支持 GitHub；为避免编号分叉，本次未修改任何文件。",
+            }
+        if not self.sync_lock.acquire(blocking=False):
+            return {
+                "ok": False,
+                "error": "已有同步任务正在运行，本次未执行重编号。",
+            }
+        try:
+            head = self.remote.get_head_commit_and_tree()
+            if not head:
+                return {
+                    "ok": False,
+                    "error": "远程图库状态无法确认，本次未执行重编号。",
+                }
+            expected_head_sha, base_tree_sha = head
+            tree = self.remote.list_tree_at(base_tree_sha)
+            if tree is None:
+                return {
+                    "ok": False,
+                    "error": "远程图库状态无法确认，本次未执行重编号。",
+                }
+
+            remote_paths = sorted(
+                str(entry.get("path", ""))
+                for entry in tree
+                if is_remote_gallery_image_path(
+                    str(entry.get("path", "")), self.image_suffixes
+                )
+                and len(Path(str(entry.get("path", ""))).parts) == 3
+            )
+            local_paths = sorted(
+                path
+                for path in (
+                    self.store.hash_index_key(item)
+                    for item in self.store.iter_image_files()
+                )
+                if path
+            )
+            path_diff = compare_gallery_paths(local_paths, remote_paths)
+            if not path_diff.is_clean:
+                details = format_gallery_path_difference(path_diff)
+                return {
+                    "ok": False,
+                    "error": (
+                        "本地与 GitHub 图片集合尚未一致，本次没有改写任何编号。\n"
+                        + details
+                        + "\n请先执行 /立即同步；若同步后仍显示“仅本地”，要保留请执行 /推送到远程，不需要则删除对应本地文件。"
+                    ),
+                }
+
+            plan = build_global_renumber_plan(remote_paths, self.image_suffixes)
+            mapping = {step.source: step.target for step in plan}
+            self.ensure_perceptual_index()
+            with self.store.hash_index_lock:
+                old_index = dict(self.store.hash_index)
+            manifest_files: dict[str, dict[str, str]] = {}
+            for old_path, entry in old_index.items():
+                if not isinstance(entry, dict):
+                    continue
+                phash = str(entry.get("perceptual_hash", "")).strip()
+                if phash and old_path in mapping:
+                    manifest_files[mapping[old_path]] = {
+                        "perceptual_hash": phash
+                    }
+            manifest_payload = json.dumps(
+                {
+                    "version": 1,
+                    "algorithm": self.manifest_algorithm,
+                    "files": manifest_files,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+
+            current_head = self.remote.get_head_commit_and_tree()
+            if not current_head or current_head[0] != expected_head_sha:
+                return {
+                    "ok": False,
+                    "error": "重编号期间 GitHub 已发生变化，本次没有改写任何本地编号，请重新执行 /导入图库。",
+                }
+
+            staged = self.stage_local_renumber(plan)
+            commit_result = self.commit_github_renumber(
+                plan,
+                tree,
+                manifest_payload,
+                expected_head_sha=expected_head_sha,
+                base_tree_sha=base_tree_sha,
+            )
+            if not commit_result.get("ok"):
+                self.rollback_local_renumber(staged)
+                stage = str(commit_result.get("stage") or "unknown")
+                detail = str(commit_result.get("error") or "未知错误")
+                if stage == "head_changed":
+                    return {
+                        "ok": False,
+                        "error": "重编号期间 GitHub 已发生变化，本地临时改名已回滚，请重新执行 /导入图库。",
+                    }
+                return {
+                    "ok": False,
+                    "error": f"GitHub 重编号提交失败（{stage}）：{detail}；本地临时改名已回滚。",
+                }
+
+            try:
+                self.finish_local_renumber(staged)
+            except Exception as exc:
+                self._error(
+                    f"[Gallery] GitHub 已重编号但本地落盘失败，将由下一次同步修复：{exc}"
+                )
+                for temp, _, _ in staged:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                return {
+                    "ok": False,
+                    "error": "GitHub 已完成重编号，但本地落盘失败；请立即执行 /立即同步。",
+                }
+
+            self.remap_renumber_state(plan)
+            remote_shas = {
+                str(entry.get("path", "")): str(entry.get("sha", ""))
+                for entry in tree
+            }
+            for step in plan:
+                old_sha = remote_shas.get(step.source, "")
+                if old_sha:
+                    self.remote.sha_cache[step.target] = old_sha
+            return {
+                "ok": True,
+                "renamed": len(staged),
+                "total": len(plan),
+                "remote": True,
+            }
+        finally:
+            self.sync_lock.release()
 
     def startup_sync(self) -> None:
         """Run startup pull and seed an empty remote from the local gallery."""
