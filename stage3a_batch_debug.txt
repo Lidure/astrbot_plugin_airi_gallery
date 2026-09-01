@@ -1,0 +1,33 @@
+APPLY_OK
+APPLY_STATUS=0
+--- FOCUSED ---
+.                                                                        [100%]
+1 passed in 0.10s
+FOCUSED_STATUS=0
+--- FULL ---
+........................................................................ [ 18%]
+........................................................................ [ 36%]
+........................................................................ [ 55%]
+........................................................................ [ 73%]
+........................................................................ [ 91%]
+...F............................                                         [100%]
+=================================== FAILURES ===================================
+_______ test_github_batch_rechecks_create_only_paths_after_ref_conflict ________
+
+    def test_github_batch_rechecks_create_only_paths_after_ref_conflict():
+        source = Path("main.py").read_text(encoding="utf-8")
+        block = _method_block(source, "_git_commit_github_batch")
+    
+        assert "create_only_paths: set[str] | None = None" in block
+>       assert block.count("_git_github_create_only_paths_exist(") >= 2
+E       AssertionError: assert 0 >= 2
+E        +  where 0 = <built-in method count of str object at 0x7fb0d4399f00>('_git_github_create_only_paths_exist(')
+E        +    where <built-in method count of str object at 0x7fb0d4399f00> = '    def _git_commit_github_batch(\n        self,\n        items: list[tuple[str, bytes, str]],\n        message: str,...t_github_batch(\n            items,\n            message,\n            create_only_paths=create_only_paths,\n        )'.count
+
+tests/test_v21112_remote_consistency.py:238: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_v21112_remote_consistency.py::test_github_batch_rechecks_create_only_paths_after_ref_conflict - AssertionError: assert 0 >= 2
+ +  where 0 = <built-in method count of str object at 0x7fb0d4399f00>('_git_github_create_only_paths_exist(')
+ +    where <built-in method count of str object at 0x7fb0d4399f00> = '    def _git_commit_github_batch(\n        self,\n        items: list[tuple[str, bytes, str]],\n        message: str,...t_github_batch(\n            items,\n            message,\n            create_only_paths=create_only_paths,\n        )'.count
+1 failed, 391 passed in 4.39s
+FULL_STATUS=1
