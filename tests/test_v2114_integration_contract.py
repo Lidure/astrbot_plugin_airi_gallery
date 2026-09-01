@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import gallery_reporting
+from gallery_store import GalleryStore
 
 
 def test_force_confirmation_reuses_cached_candidate_fingerprint():
@@ -53,12 +54,20 @@ def test_exact_duplicate_is_checked_before_forceable_similarity():
     assert exact_pos < similar_pos < forced_pos
 
 
-def test_active_local_dedup_ignores_stale_hash_index_paths():
-    source = Path("main.py").read_text(encoding="utf-8")
+def test_active_local_dedup_ignores_stale_hash_index_paths(tmp_path: Path):
+    root = tmp_path / "gallery"
+    existing = root / "airi" / "1.png"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"existing")
+    store = GalleryStore(tmp_path, root, image_suffixes={".png"})
+    store.hash_index = {
+        "gallery/airi/1.png": {"hash": "present"},
+        "gallery/airi/2.png": {"hash": "stale"},
+    }
 
-    assert "for record in indexed_images_from_hash_index(snapshot):" in source
-    assert "local_path = resolve_gallery_local_path(self.gallery_root.parent, record.path)" in source
-    assert "local_path is not None and local_path.exists() and _is_image_file(local_path)" in source
+    assert [record.path for record in store.indexed_local_images()] == [
+        "gallery/airi/1.png"
+    ]
 
 
 def test_import_gallery_uses_one_global_mapping_for_local_and_github():
