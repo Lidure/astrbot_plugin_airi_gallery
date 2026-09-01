@@ -10,6 +10,14 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 main_path = Path("main.py")
 source = main_path.read_text(encoding="utf-8")
 
+old_config_import = '''    from .gallery_config import (\n        resolve_cloud_gallery_url,\n'''
+new_config_import = '''    from .gallery_config import (\n        MODE_PREFIX,\n        resolve_cloud_gallery_url,\n'''
+source = replace_once(source, old_config_import, new_config_import, "relative gallery config import")
+
+old_config_fallback = '''    from gallery_config import (\n        resolve_cloud_gallery_url,\n'''
+new_config_fallback = '''    from gallery_config import (\n        MODE_PREFIX,\n        resolve_cloud_gallery_url,\n'''
+source = replace_once(source, old_config_fallback, new_config_fallback, "fallback gallery config import")
+
 old_import = '''        normalize_match_text as _normalize_gallery_match_text,\n        parse_aliases as _parse_gallery_aliases,\n        replace_command_aliases as _replace_gallery_command_aliases,\n        resolve_gallery_category_query as _resolve_gallery_category_query_impl,\n        sanitize_component as _sanitize_gallery_component,\n        strip_at_prefix as _strip_gallery_at_prefix,\n'''
 new_import = '''        match_view_all_command as _match_gallery_view_all_command,\n        match_view_command as _match_gallery_view_command,\n        normalize_match_text as _normalize_gallery_match_text,\n        parse_aliases as _parse_gallery_aliases,\n        parse_view_target as _parse_gallery_view_target,\n        replace_command_aliases as _replace_gallery_command_aliases,\n        resolve_gallery_category_query as _resolve_gallery_category_query_impl,\n        sanitize_component as _sanitize_gallery_component,\n        strip_at_prefix as _strip_gallery_at_prefix,\n'''
 if source.count(old_import) != 2:
