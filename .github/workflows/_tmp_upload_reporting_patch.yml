@@ -1,0 +1,55 @@
+name: Temporary upload reporting patch
+
+on:
+  push:
+    branches:
+      - refactor/upload-reporting-helpers
+    paths:
+      - .github/workflows/_tmp_upload_reporting_patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/upload-reporting-helpers
+      - name: Patch main.py delegates
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("main.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_import = '''        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_renumber_report as _format_renumber_report_impl,\n        format_sync_report as _format_sync_report_impl,\n'''
+          new_import = '''        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_renumber_report as _format_renumber_report_impl,\n        format_sync_report as _format_sync_report_impl,\n        format_upload_match_label as _format_upload_match_label_impl,\n        serialize_upload_decision as _serialize_upload_decision_impl,\n'''
+          if text.count(old_import) != 2:
+              raise SystemExit(f"unexpected reporting import count: {text.count(old_import)}")
+          text = text.replace(old_import, new_import)
+
+          old_json = '''    @staticmethod\n    def _upload_decision_json(decision: IndexedUploadDecision) -> dict:\n        def match_json(match: UploadMatch) -> dict:\n            return {\n                "path": match.path,\n                "number": match.number,\n                "similarity": round(match.similarity, 6),\n                "distance": match.distance,\n            }\n        return {\n            "reason": decision.reason,\n            "exact_match": match_json(decision.exact_match) if decision.exact_match else None,\n            "similar_matches": [match_json(match) for match in decision.similar_matches],\n        }\n'''
+          new_json = '''    @staticmethod\n    def _upload_decision_json(decision: IndexedUploadDecision) -> dict:\n        return _serialize_upload_decision_impl(decision)\n'''
+          if text.count(old_json) != 1:
+              raise SystemExit(f"unexpected upload decision helper count: {text.count(old_json)}")
+          text = text.replace(old_json, new_json)
+
+          old_label = '''    @staticmethod\n    def _upload_match_label(match: UploadMatch) -> str:\n        number = f"#{match.number}" if match.number is not None else match.path\n        return f"{number}（{match.similarity * 100:.1f}%）"\n'''
+          new_label = '''    @staticmethod\n    def _upload_match_label(match: UploadMatch) -> str:\n        return _format_upload_match_label_impl(match)\n'''
+          if text.count(old_label) != 1:
+              raise SystemExit(f"unexpected upload label helper count: {text.count(old_label)}")
+          text = text.replace(old_label, new_label)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Remove temporary workflow and commit
+        run: |
+          rm .github/workflows/_tmp_upload_reporting_patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py .github/workflows/_tmp_upload_reporting_patch.yml
+          git commit -m "refactor: delegate upload reporting helpers"
+          git push origin HEAD:refactor/upload-reporting-helpers
