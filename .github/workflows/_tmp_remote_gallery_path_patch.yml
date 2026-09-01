@@ -46,6 +46,8 @@ jobs:
           text = text.replace(old, new)
           main.write_text(text, encoding="utf-8")
           PY
+      - name: Install focused test dependency
+        run: python -m pip install pytest
       - name: Run focused tests
         run: python -m pytest tests/test_remote_gallery_path_classification.py -q
       - name: Remove temporary workflow and commit
