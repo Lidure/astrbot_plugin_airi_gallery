@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 try:
-    from .gallery_safety import GalleryPathDifference
+    from .gallery_safety import (
+        GalleryPathDifference,
+        IndexedUploadDecision,
+        UploadMatch,
+    )
 except ImportError:
-    from gallery_safety import GalleryPathDifference
+    from gallery_safety import (
+        GalleryPathDifference,
+        IndexedUploadDecision,
+        UploadMatch,
+    )
 
 
 def format_gallery_path_difference(
@@ -64,3 +72,24 @@ def format_renumber_report(report: dict) -> str:
         return "图库整理完成：当前没有图片需要编号。"
     consistency = "；本地与 GitHub 编号一致" if report.get("remote") else ""
     return f"图库整理完成：共 {total} 张，编号 1-{total}；重命名 {renamed} 个文件{consistency}。"
+
+
+def serialize_upload_decision(decision: IndexedUploadDecision) -> dict:
+    def match_json(match: UploadMatch) -> dict:
+        return {
+            "path": match.path,
+            "number": match.number,
+            "similarity": round(match.similarity, 6),
+            "distance": match.distance,
+        }
+
+    return {
+        "reason": decision.reason,
+        "exact_match": match_json(decision.exact_match) if decision.exact_match else None,
+        "similar_matches": [match_json(match) for match in decision.similar_matches],
+    }
+
+
+def format_upload_match_label(match: UploadMatch) -> str:
+    number = f"#{match.number}" if match.number is not None else match.path
+    return f"{number}（{match.similarity * 100:.1f}%）"

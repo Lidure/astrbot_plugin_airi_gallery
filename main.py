@@ -115,12 +115,16 @@ try:
         format_gallery_path_difference as _format_gallery_path_difference_impl,
         format_renumber_report as _format_renumber_report_impl,
         format_sync_report as _format_sync_report_impl,
+        format_upload_match_label as _format_upload_match_label_impl,
+        serialize_upload_decision as _serialize_upload_decision_impl,
     )
 except ImportError:
     from gallery_reporting import (
         format_gallery_path_difference as _format_gallery_path_difference_impl,
         format_renumber_report as _format_renumber_report_impl,
         format_sync_report as _format_sync_report_impl,
+        format_upload_match_label as _format_upload_match_label_impl,
+        serialize_upload_decision as _serialize_upload_decision_impl,
     )
 
 try:
@@ -1281,18 +1285,7 @@ class Main(Star):
 
     @staticmethod
     def _upload_decision_json(decision: IndexedUploadDecision) -> dict:
-        def match_json(match: UploadMatch) -> dict:
-            return {
-                "path": match.path,
-                "number": match.number,
-                "similarity": round(match.similarity, 6),
-                "distance": match.distance,
-            }
-        return {
-            "reason": decision.reason,
-            "exact_match": match_json(decision.exact_match) if decision.exact_match else None,
-            "similar_matches": [match_json(match) for match in decision.similar_matches],
-        }
+        return _serialize_upload_decision_impl(decision)
 
     async def _api_upload_images(self):
         from quart import request, jsonify
@@ -4418,8 +4411,7 @@ class Main(Star):
 
     @staticmethod
     def _upload_match_label(match: UploadMatch) -> str:
-        number = f"#{match.number}" if match.number is not None else match.path
-        return f"{number}（{match.similarity * 100:.1f}%）"
+        return _format_upload_match_label_impl(match)
 
     async def _send_upload_decision_hint(
         self, event: AstrMessageEvent, decision: IndexedUploadDecision
