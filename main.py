@@ -66,6 +66,7 @@ except ImportError:
 
 try:
     from .gallery_config import (
+        MODE_PREFIX,
         resolve_cloud_gallery_url,
         resolve_view_all_collage_compress,
         resolve_view_all_collage_scale,
@@ -74,6 +75,7 @@ try:
     )
 except ImportError:
     from gallery_config import (
+        MODE_PREFIX,
         resolve_cloud_gallery_url,
         resolve_view_all_collage_compress,
         resolve_view_all_collage_scale,
@@ -84,8 +86,11 @@ except ImportError:
 
 try:
     from .gallery_commands import (
+        match_view_all_command as _match_gallery_view_all_command,
+        match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
         parse_aliases as _parse_gallery_aliases,
+        parse_view_target as _parse_gallery_view_target,
         replace_command_aliases as _replace_gallery_command_aliases,
         resolve_gallery_category_query as _resolve_gallery_category_query_impl,
         sanitize_component as _sanitize_gallery_component,
@@ -93,8 +98,11 @@ try:
     )
 except ImportError:
     from gallery_commands import (
+        match_view_all_command as _match_gallery_view_all_command,
+        match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
         parse_aliases as _parse_gallery_aliases,
+        parse_view_target as _parse_gallery_view_target,
         replace_command_aliases as _replace_gallery_command_aliases,
         resolve_gallery_category_query as _resolve_gallery_category_query_impl,
         sanitize_component as _sanitize_gallery_component,
@@ -3409,19 +3417,14 @@ class Main(Star):
         return False
 
     def _match_view_command(self, normalized: str) -> re.Match[str] | None:
-        # 支持两种触发词："看" 与 "看看"，并在是否使用前缀模式时做区分
-        if self.view_command_mode == MODE_PREFIX:
-            return re.match(r"^/看(?:看)?\s*(.+)$", normalized)
-        if normalized.startswith("/"):
-            return None
-        return re.match(r"^看(?:看)?\s*(.+)$", normalized)
+        return _match_gallery_view_command(
+            normalized, use_prefix=self.view_command_mode == MODE_PREFIX
+        )
 
     def _match_view_all_command(self, normalized: str) -> re.Match[str] | None:
-        if self.view_command_mode == MODE_PREFIX:
-            return re.match(r"^/(?:看全部|看所有)\s*(.+)$", normalized)
-        if normalized.startswith("/"):
-            return None
-        return re.match(r"^(?:看全部|看所有)\s*(.+)$", normalized)
+        return _match_gallery_view_all_command(
+            normalized, use_prefix=self.view_command_mode == MODE_PREFIX
+        )
 
     def _parse_action(self, text: str) -> tuple[str, object] | None:
         normalized = text.strip()
@@ -3530,23 +3533,15 @@ class Main(Star):
             target = view_match.group(1).strip()
             if not target:
                 return None
-            range_match = re.match(r"^(\d+)\s*[-~～—–]\s*(\d+)$", target)
-            if range_match:
-                start = int(range_match.group(1))
-                end = int(range_match.group(2))
-                return "view_range", (start, end)
-
-            # 仅支持"分类 + 空格 + 数字"的写法，例如：看看cat 3
-            # 这样可避免把"看看602"误判成分类 6、数量 02。
-            many_match = re.match(r"^(.+?)\s+(\d+)$", target)
-            if many_match:
-                cat = many_match.group(1).strip()
-                num = int(many_match.group(2)) if many_match.group(2).isdigit() else 1
+            target_kind, target_value = _parse_gallery_view_target(target)
+            if target_kind == "range":
+                return "view_range", target_value
+            if target_kind == "multiple":
+                cat, num = target_value
                 return "view_multiple", (_sanitize_component(self._resolve_alias(cat)), num)
-
-            if target.isdigit():
-                return "view_number", int(target)
-            return "view_category", _sanitize_component(self._resolve_alias(target))
+            if target_kind == "number":
+                return "view_number", target_value
+            return "view_category", _sanitize_component(self._resolve_alias(target_value))
 
         return None
 

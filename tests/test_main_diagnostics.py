@@ -846,3 +846,49 @@ def test_command_helpers_in_main_are_thin_compatibility_delegates(
         ["Airi"],
         {"爱莉": "Airi"},
     )
+
+def test_view_command_helpers_in_main_delegate_to_gallery_commands(
+    main_module, monkeypatch
+):
+    plugin = object.__new__(main_module.Main)
+    plugin.view_command_mode = main_module.MODE_PREFIX
+
+    matcher_sentinel = object()
+    monkeypatch.setattr(
+        main_module,
+        "_match_gallery_view_command",
+        lambda normalized, *, use_prefix: (normalized, use_prefix, matcher_sentinel),
+    )
+    assert main_module.Main._match_view_command(plugin, "raw") == (
+        "raw",
+        True,
+        matcher_sentinel,
+    )
+
+    monkeypatch.setattr(
+        main_module,
+        "_match_gallery_view_all_command",
+        lambda normalized, *, use_prefix: (normalized, use_prefix),
+    )
+    assert main_module.Main._match_view_all_command(plugin, "raw-all") == (
+        "raw-all",
+        True,
+    )
+
+    class FakeMatch:
+        @staticmethod
+        def group(index):
+            assert index == 1
+            return "ignored"
+
+    plugin._replace_command_aliases = lambda text: text
+    plugin._match_view_all_command = lambda text: None
+    plugin._match_view_command = lambda text: FakeMatch()
+    monkeypatch.setattr(
+        main_module, "_parse_gallery_view_target", lambda target: ("number", 602)
+    )
+    assert main_module.Main._parse_action(plugin, "ordinary text") == (
+        "view_number",
+        602,
+    )
+
