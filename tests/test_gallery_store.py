@@ -63,3 +63,17 @@ def test_gallery_store_hash_index_round_trip_is_atomic(tmp_path: Path):
     reloaded = GalleryStore(tmp_path, root, image_suffixes={".jpg"})
     reloaded.load_hash_index()
     assert reloaded.hash_index["gallery/airi/1.jpg"]["hash"] == "abc"
+
+
+def test_gallery_store_hash_index_key_matches_existing_repo_relative_layout(tmp_path: Path):
+    from gallery_store import GalleryStore
+
+    root = tmp_path / "gallery"
+    image = root / "airi" / "1.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"x")
+    outside = tmp_path.parent / "outside.jpg"
+    store = GalleryStore(tmp_path, root, image_suffixes={".jpg"})
+
+    assert store.hash_index_key(image) == "gallery/airi/1.jpg"
+    assert store.hash_index_key(outside) is None
