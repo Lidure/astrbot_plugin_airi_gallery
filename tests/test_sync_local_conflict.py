@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import gallery_reporting
 import gallery_safety
 
 
@@ -29,13 +30,18 @@ def test_pull_sync_reports_same_path_content_conflicts_instead_of_silent_overwri
     sync = source.split("    def _git_sync_from_remote", 1)[1].split(
         "    def _git_push_file", 1
     )[0]
-    report = source.split("    def _format_sync_report", 1)[1].split(
-        "    def _git_sync_from_remote", 1
-    )[0]
 
     assert '"content_conflicts": ()' in sync
     assert "should_preserve_local_sync_content(" in sync
     assert "content_conflicts.append(git_path)" in sync
     assert "本地内容已修改，为避免覆盖予以保留" in sync
-    assert "content_conflicts" in report
-    assert "内容冲突" in report
+
+    report = gallery_reporting.format_sync_report(
+        {
+            "synced": 0,
+            "removed": 0,
+            "content_conflicts": ("gallery/airi/3.jpg",),
+        }
+    )
+    assert "同步后仍未完全一致" in report
+    assert "内容冲突：gallery/airi/3.jpg" in report
