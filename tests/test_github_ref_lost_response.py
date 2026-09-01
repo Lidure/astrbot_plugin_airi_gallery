@@ -1,8 +1,7 @@
-import ast
-import threading
-import types
-from pathlib import Path
 from unittest.mock import Mock
+
+from gallery_remote import GalleryRemote
+from gallery_sync import GallerySync
 
 
 class FakeLogger:
@@ -16,35 +15,25 @@ class FakeLogger:
         pass
 
 
-def _load_sync_method(name: str):
-    source = Path("main.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "Main":
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == name:
-                    item.decorator_list = []
-                    module = ast.Module(body=[item], type_ignores=[])
-                    ast.fix_missing_locations(module)
-                    namespace = {"logger": FakeLogger()}
-                    exec(compile(module, "main.py", "exec"), namespace)
-                    return namespace[name]
-    raise AssertionError(f"Main.{name} is missing")
-
-
-def _make_plugin(heads, tree_payloads, update_results):
-    plugin = types.SimpleNamespace(
-        _git_mutation_lock=threading.RLock(),
-        _sha_cache={},
-        _git_ref_update_outcome=None,
-        _git_get_head_commit_and_tree=Mock(side_effect=heads),
-        _git_create_github_tree=Mock(side_effect=lambda base, entries: f"built-{base}"),
-        _git_create_github_commit=Mock(side_effect=lambda message, tree, parent: f"commit-{parent}"),
-        _git_platform=lambda: "github",
-        _git_api_base=lambda: "https://api.github.test",
-        _git_owner=lambda: "owner",
-        _git_repo=lambda: "repo",
+def _make_sync(heads, tree_payloads, update_results):
+    remote = GalleryRemote(
+        {
+            "git_platform": "github",
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+            "git_branch": "main",
+            "git_token": "token",
+        }
     )
+    remote.get_head_commit_and_tree = Mock(side_effect=heads)
+    remote.create_github_tree = Mock(
+        side_effect=lambda base, entries, **kwargs: f"built-{base}"
+    )
+    remote.create_github_commit = Mock(
+        side_effect=lambda message, tree, parent: f"commit-{parent}"
+    )
+    remote.github_create_only_paths_exist = Mock(return_value=False)
+    remote.list_tree_at = Mock(side_effect=lambda tree_sha: tree_payloads.get(tree_sha))
 
     updates = iter(update_results)
 
@@ -55,36 +44,11 @@ def _make_plugin(heads, tree_payloads, update_results):
         else:
             ok = bool(result)
             outcome = "success" if ok else "uncertain"
-        plugin._git_ref_update_outcome = outcome
+        remote.ref_update_outcome = outcome
         return ok
 
-    plugin._git_update_github_ref = Mock(side_effect=update_ref)
-
-    def request(method, url, params=None, timeout=None, **kwargs):
-        tree_sha = url.rsplit("/", 1)[-1]
-        payload = tree_payloads.get(tree_sha)
-        if payload is None:
-            raise AssertionError(f"unexpected tree request: {url}")
-        return 200, payload
-
-    plugin._git_request = Mock(side_effect=request)
-
-    def create_only_guard(tree_sha, paths):
-        payload = tree_payloads.get(tree_sha)
-        if payload is None or payload.get("truncated"):
-            return None
-        existing = {
-            entry.get("path")
-            for entry in payload.get("tree", [])
-            if isinstance(entry, dict) and entry.get("path")
-        }
-        return bool(existing.intersection(paths))
-
-    plugin._git_github_create_only_paths_exist = Mock(side_effect=create_only_guard)
-    plugin._git_commit_github_batch = types.MethodType(
-        _load_sync_method("_git_commit_github_batch"), plugin
-    )
-    return plugin
+    remote.update_github_ref = Mock(side_effect=update_ref)
+    return GallerySync(object(), remote, remote.config, logger=FakeLogger()), remote
 
 
 def _batch_items():
@@ -95,18 +59,15 @@ def _batch_items():
 
 
 def _tree(*entries):
-    return {
-        "truncated": False,
-        "tree": [
-            {"path": path, "type": "blob", "sha": sha}
-            for path, sha in entries
-        ],
-    }
+    return [
+        {"path": path, "type": "blob", "sha": sha}
+        for path, sha in entries
+    ]
 
 
 def test_lost_first_ref_response_accepts_descendant_head_when_batch_tree_already_matches():
     items = _batch_items()
-    plugin = _make_plugin(
+    sync, remote = _make_sync(
         heads=[("parent-old", "tree-old"), ("external-descendant", "tree-desc")],
         tree_payloads={
             "tree-old": _tree(),
@@ -118,23 +79,23 @@ def test_lost_first_ref_response_accepts_descendant_head_when_batch_tree_already
         update_results=[False],
     )
 
-    result = plugin._git_commit_github_batch(
+    result = sync.commit_github_batch(
         items,
         "Sync gallery transaction",
         create_only_paths={"gallery/airi/1.png"},
     )
 
     assert result is True
-    assert plugin._sha_cache == {
+    assert remote.sha_cache == {
         "gallery/airi/1.png": "blob-image",
         "gallery/gallery_index.json": "blob-manifest",
     }
-    assert plugin._git_create_github_commit.call_count == 1
+    assert remote.create_github_commit.call_count == 1
 
 
 def test_lost_retry_ref_response_accepts_descendant_head_when_retry_tree_already_matches():
     items = _batch_items()
-    plugin = _make_plugin(
+    sync, remote = _make_sync(
         heads=[
             ("parent-old", "tree-old"),
             ("parent-fresh", "tree-fresh"),
@@ -151,23 +112,23 @@ def test_lost_retry_ref_response_accepts_descendant_head_when_retry_tree_already
         update_results=[(False, "conflict"), (False, "uncertain")],
     )
 
-    result = plugin._git_commit_github_batch(
+    result = sync.commit_github_batch(
         items,
         "Sync gallery transaction",
         create_only_paths={"gallery/airi/1.png"},
     )
 
     assert result is True
-    assert plugin._sha_cache == {
+    assert remote.sha_cache == {
         "gallery/airi/1.png": "blob-image",
         "gallery/gallery_index.json": "blob-manifest",
     }
-    assert plugin._git_create_github_commit.call_count == 2
+    assert remote.create_github_commit.call_count == 2
 
 
 def test_ref_failure_still_fails_closed_when_descendant_tree_has_different_batch_content():
     items = _batch_items()
-    plugin = _make_plugin(
+    sync, remote = _make_sync(
         heads=[("parent-old", "tree-old"), ("external-descendant", "tree-desc")],
         tree_payloads={
             "tree-old": _tree(),
@@ -179,11 +140,11 @@ def test_ref_failure_still_fails_closed_when_descendant_tree_has_different_batch
         update_results=[False],
     )
 
-    result = plugin._git_commit_github_batch(
+    result = sync.commit_github_batch(
         items,
         "Sync gallery transaction",
         create_only_paths={"gallery/airi/1.png"},
     )
 
     assert result is False
-    assert plugin._sha_cache == {}
+    assert remote.sha_cache == {}
