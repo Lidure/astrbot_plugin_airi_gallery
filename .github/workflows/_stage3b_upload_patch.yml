@@ -18,9 +18,11 @@ jobs:
           ref: refactor/gallery-upload-transaction
           fetch-depth: 0
       - name: Apply upload migration
-        run: python scripts/_stage3b_upload_patch.py
+        run: |
+          python scripts/_stage3b_upload_patch.py
+          python scripts/_stage3b_upload_test_patch.py
       - name: Remove temporary migration tooling
-        run: git rm .github/workflows/_stage3b_upload_patch.yml scripts/_stage3b_upload_patch.py
+        run: git rm .github/workflows/_stage3b_upload_patch.yml scripts/_stage3b_upload_patch.py scripts/_stage3b_upload_test_patch.py
       - name: Verify migrated working tree
         shell: bash
         run: |
