@@ -70,29 +70,33 @@ class GallerySync:
         image_suffixes=None,
         logger=None,
         gallery_write_lock=None,
-        ensure_perceptual_index=None,
         manifest_path: str = "gallery/gallery_index.json",
         manifest_algorithm: str = "dhash64-nn-white-v1",
         remote_manifest_reader=None,
         manifest_payload_factory=None,
         manifest_publisher=None,
-        rollback_stored_image=None,
     ) -> None:
         self.store = store
         self.remote = remote
         self.config = config
         self.image_suffixes = set(image_suffixes or ())
         self.logger = logger
-        self.ensure_perceptual_index = ensure_perceptual_index or (lambda: None)
+        if hasattr(self.store, "ensure_perceptual_index"):
+            self.ensure_perceptual_index = self.store.ensure_perceptual_index
+        else:
+            self.ensure_perceptual_index = lambda: None
         self.manifest_path = str(manifest_path)
         self.manifest_algorithm = str(manifest_algorithm)
         self.remote_manifest_reader = remote_manifest_reader
         self.manifest_payload_factory = manifest_payload_factory
         self.manifest_publisher = manifest_publisher
-        self.rollback_stored_image = rollback_stored_image
         # Upload entry/session state remains in Main, but the shared local-write
         # lock and remote transaction orchestration belong to GallerySync.
-        self.gallery_write_lock = gallery_write_lock or threading.RLock()
+        self.gallery_write_lock = (
+            gallery_write_lock
+            or getattr(self.store, "write_lock", None)
+            or threading.RLock()
+        )
 
         self.sync_lock = threading.Lock()
         self.mutation_lock = threading.RLock()
@@ -763,6 +767,15 @@ class GallerySync:
 
 
 
+    @property
+    def rollback_stored_image(self):
+        """Compatibility alias for older callers while GalleryStore owns rollback."""
+        return getattr(self.store, "rollback_stored_image", None)
+
+    @rollback_stored_image.setter
+    def rollback_stored_image(self, value) -> None:
+        setattr(self.store, "rollback_stored_image", value)
+
     def prepare_remote_upload_guard(
         self, category: str
     ) -> tuple[bool, tuple[IndexedImage, ...], int]:
@@ -843,11 +856,12 @@ class GallerySync:
     def _rollback_staged_uploads(
         self, staged_paths: list[Path], category: str
     ) -> None:
-        if not callable(self.rollback_stored_image):
-            self._error("[Git Sync] 本地上传回滚器未配置，无法安全回滚 staged 文件。")
+        rollback = getattr(self.store, "rollback_stored_image", None)
+        if not callable(rollback):
+            self._error("[Git Sync] GalleryStore 本地上传回滚不可用，无法安全回滚 staged 文件。")
             return
         for path in reversed(staged_paths):
-            self.rollback_stored_image(path, category)
+            self.store.rollback_stored_image(path, category)
 
     def push_staged_upload_transaction(
         self, staged_paths: list[Path], category: str
@@ -934,16 +948,14 @@ class GallerySync:
                         and self.delete_file(git_path, f"Delete {git_path}")
                     )
                     if deleted:
-                        if callable(self.rollback_stored_image):
-                            self.rollback_stored_image(pushed_path, category)
+                        self.store.rollback_stored_image(pushed_path, category)
                     else:
                         self._error(
                             f"[Git Sync] Gitee 补偿删除失败，已保留对应本地文件避免远端孤儿: {pushed_path}"
                         )
-                if callable(self.rollback_stored_image):
-                    for staged_path in staged_paths:
-                        if staged_path not in pushed_set:
-                            self.rollback_stored_image(staged_path, category)
+                for staged_path in staged_paths:
+                    if staged_path not in pushed_set:
+                        self.store.rollback_stored_image(staged_path, category)
                 if pushed_paths:
                     repaired = bool(
                         callable(self.manifest_publisher)
