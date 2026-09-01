@@ -128,6 +128,11 @@ except ImportError:
     )
 
 try:
+    from .gallery_store import GalleryStore
+except ImportError:
+    from gallery_store import GalleryStore
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -401,6 +406,15 @@ class Main(Star):
         self.plugin_data_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
         self.gallery_root = self.plugin_data_dir / "gallery"
         self.gallery_root.mkdir(parents=True, exist_ok=True)
+        self.store = GalleryStore(
+            self.plugin_data_dir,
+            self.gallery_root,
+            image_suffixes=IMAGE_SUFFIXES,
+            sanitize_component=_sanitize_component,
+            default_category=DEFAULT_CATEGORY,
+            logger=logger,
+        )
+        self.store.load_hash_index()
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         self.view_multiple_mode = self._resolve_view_multiple_mode()
@@ -435,11 +449,6 @@ class Main(Star):
 
         # Git 远程同步状态
         self._sha_cache: dict[str, str] = {}
-        self._category_hash_cache: dict[str, set[str]] = {}
-        self._hash_index_path = self.plugin_data_dir / "hash_index.json"
-        self._hash_index: dict[str, dict] = {}
-        self._hash_index_dirty = False
-        self._hash_index_lock = threading.RLock()
         self._sync_timer: threading.Timer | None = None
         self._sync_lock = threading.Lock()
         self._gallery_write_lock = threading.RLock()
@@ -458,7 +467,6 @@ class Main(Star):
         self._pending_similar_upload_lock = threading.RLock()
         self._pending_api_similar_uploads: dict[str, dict] = {}
         self._pending_api_similar_upload_lock = threading.RLock()
-        self._load_hash_index()
 
         if self.llm_tool_enabled:
             self.context.add_llm_tools(GalleryTool(self))
@@ -1947,14 +1955,7 @@ class Main(Star):
 
     def _indexed_local_images(self) -> tuple[IndexedImage, ...]:
         self._ensure_perceptual_index()
-        with self._hash_index_lock:
-            snapshot = dict(self._hash_index)
-        active: list[IndexedImage] = []
-        for record in indexed_images_from_hash_index(snapshot):
-            local_path = resolve_gallery_local_path(self.gallery_root.parent, record.path)
-            if local_path is not None and local_path.exists() and _is_image_file(local_path):
-                active.append(record)
-        return tuple(active)
+        return self.store.indexed_local_images()
 
     def _gallery_manifest_payload(self) -> dict:
         self._ensure_perceptual_index()
@@ -3215,16 +3216,7 @@ class Main(Star):
         return self.category_aliases.get(name, name)
 
     def _list_category_names(self) -> list[str]:
-        if not self.gallery_root.exists():
-            return []
-        return sorted(
-            [
-                path.name
-                for path in self.gallery_root.iterdir()
-                if path.is_dir() and path.name != "generated"
-            ],
-            key=lambda name: name.lower(),
-        )
+        return self.store.list_category_names()
 
     def _llm_gallery_hint(self) -> str:
         categories = self._list_category_names()
@@ -3510,111 +3502,114 @@ class Main(Star):
 
         return None
 
+    @property
+    def _hash_index_path(self) -> Path:
+        store = self.__dict__.get("store")
+        if store is not None:
+            return store.hash_index_path
+        return self.__dict__.get("_compat_hash_index_path", Path("hash_index.json"))
+
+    @_hash_index_path.setter
+    def _hash_index_path(self, value: Path) -> None:
+        store = self.__dict__.get("store")
+        if store is not None:
+            store.hash_index_path = Path(value)
+        else:
+            self.__dict__["_compat_hash_index_path"] = Path(value)
+
+    @property
+    def _hash_index(self) -> dict[str, dict]:
+        store = self.__dict__.get("store")
+        if store is not None:
+            return store.hash_index
+        return self.__dict__.setdefault("_compat_hash_index", {})
+
+    @_hash_index.setter
+    def _hash_index(self, value: dict[str, dict]) -> None:
+        store = self.__dict__.get("store")
+        if store is not None:
+            store.hash_index = value
+        else:
+            self.__dict__["_compat_hash_index"] = value
+
+    @property
+    def _hash_index_dirty(self) -> bool:
+        store = self.__dict__.get("store")
+        if store is not None:
+            return store.hash_index_dirty
+        return bool(self.__dict__.get("_compat_hash_index_dirty", False))
+
+    @_hash_index_dirty.setter
+    def _hash_index_dirty(self, value: bool) -> None:
+        store = self.__dict__.get("store")
+        if store is not None:
+            store.hash_index_dirty = bool(value)
+        else:
+            self.__dict__["_compat_hash_index_dirty"] = bool(value)
+
+    @property
+    def _hash_index_lock(self):
+        store = self.__dict__.get("store")
+        if store is not None:
+            return store.hash_index_lock
+        lock = self.__dict__.get("_compat_hash_index_lock")
+        if lock is None:
+            lock = threading.RLock()
+            self.__dict__["_compat_hash_index_lock"] = lock
+        return lock
+
+    @property
+    def _category_hash_cache(self) -> dict[str, set[str]]:
+        store = self.__dict__.get("store")
+        if store is not None:
+            return store.category_hash_cache
+        return self.__dict__.setdefault("_compat_category_hash_cache", {})
+
+    @_category_hash_cache.setter
+    def _category_hash_cache(self, value: dict[str, set[str]]) -> None:
+        store = self.__dict__.get("store")
+        if store is not None:
+            store.category_hash_cache = value
+        else:
+            self.__dict__["_compat_category_hash_cache"] = value
+
     def _category_dir(self, category: str) -> Path:
-        return self.gallery_root / _sanitize_component(category)
+        return self.store.category_dir(category)
 
     def _resolve_existing_category_dir(self, category: str) -> Path | None:
-        """尽量按用户输入匹配已有分类目录，避免因大小写或旧数据造成误判。"""
-        target_name = _sanitize_component(category)
-        direct_dir = self._category_dir(target_name)
-        if direct_dir.exists() and direct_dir.is_dir():
-            return direct_dir
-
-        if not self.gallery_root.exists():
-            return None
-
-        for path in self.gallery_root.iterdir():
-            if path.is_dir() and path.name.lower() == target_name.lower():
-                return path
-
-        return None
+        return self.store.resolve_existing_category_dir(category)
 
     def _iter_image_files(self) -> list[Path]:
-        if not self.gallery_root.exists():
-            return []
-        return sorted(
-            [path for path in self.gallery_root.rglob("*") if _is_image_file(path)],
-            key=lambda item: _image_sort_key(item, self.gallery_root),
-        )
+        return self.store.iter_image_files()
 
     def _next_index(self) -> int:
-        max_index = 0
-        for path in self._iter_image_files():
-            if path.stem.isdigit():
-                max_index = max(max_index, int(path.stem))
-        return max_index + 1
+        return self.store.next_index()
 
     def _find_by_index(self, index: int) -> Path | None:
-        candidates = [
-            path
-            for path in self._iter_image_files()
-            if path.stem.isdigit() and int(path.stem) == index
-        ]
-        if not candidates:
-            return None
-        return candidates[0]
+        return self.store.find_by_index(index)
 
     def _iter_category_images(self, category: str) -> list[Path]:
-        category_dir = self._category_dir(category)
-        if not category_dir.exists():
-            return []
-        return sorted(
-            [path for path in category_dir.rglob("*") if _is_image_file(path)],
-            key=lambda item: _image_sort_key(item, category_dir),
-        )
+        return self.store.iter_category_images(category)
 
     @staticmethod
     def _bytes_hash(content: bytes) -> str:
-        return hashlib.sha256(content).hexdigest()
+        return GalleryStore.bytes_hash(content)
 
     def _file_hash(self, path: Path) -> str | None:
-        try:
-            digest = hashlib.sha256()
-            with path.open("rb") as f:
-                for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            return digest.hexdigest()
-        except Exception as exc:
-            logger.warning(f"计算文件哈希失败 {path}: {exc}")
-            return None
+        return self.store.file_hash(path)
 
     def _load_hash_index(self) -> None:
-        """加载本地图片哈希索引；索引缺失时会在后续访问中懒加载重建。"""
-        try:
-            if not self._hash_index_path.exists():
-                return
-            data = json.loads(self._hash_index_path.read_text(encoding="utf-8"))
-            self._hash_index = normalize_hash_index(data)
-            self._hash_index_dirty = False
-            logger.info(f"[Gallery] 已加载图片哈希索引：{len(self._hash_index)} 条。")
-        except Exception as exc:
-            self._hash_index = {}
-            self._hash_index_dirty = False
-            logger.warning(f"[Gallery] 加载图片哈希索引失败，将按需重建：{exc}")
+        self.store.load_hash_index()
 
     def _save_hash_index(self, force: bool = False) -> None:
-        with self._hash_index_lock:
-            if not force and not self._hash_index_dirty:
-                return
-            data = {"version": HASH_INDEX_VERSION, "files": self._hash_index}
-            tmp_path = self._hash_index_path.with_suffix(".json.tmp")
-            try:
-                tmp_path.write_text(
-                    json.dumps(data, ensure_ascii=False, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                tmp_path.replace(self._hash_index_path)
-                self._hash_index_dirty = False
-            except Exception as exc:
-                logger.warning(f"[Gallery] 保存图片哈希索引失败：{exc}")
+        self.store.save_hash_index(force=force)
 
     def _hash_index_key(self, path: Path) -> str | None:
-        return self._to_git_path(str(path))
+        return self.store.hash_index_key(path)
 
     @staticmethod
     def _hash_index_stat(path: Path) -> dict[str, int]:
-        stat = path.stat()
-        return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+        return GalleryStore.hash_index_stat(path)
 
     def _remember_file_hash(
         self,
@@ -3624,29 +3619,13 @@ class Main(Star):
         save: bool = True,
         perceptual_hash: str | None = None,
     ) -> None:
-        key = self._hash_index_key(path)
-        if not key:
-            return
-        try:
-            stat_data = self._hash_index_stat(path)
-        except FileNotFoundError:
-            return
-        parts = Path(key).parts
-        category = category or (parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY)
-        with self._hash_index_lock:
-            entry = merge_hash_entry(
-                self._hash_index.get(key),
-                digest=digest,
-                size=stat_data["size"],
-                mtime_ns=stat_data["mtime_ns"],
-                category=_sanitize_component(category),
-                perceptual_hash=perceptual_hash,
-            )
-            if self._hash_index.get(key) != entry:
-                self._hash_index[key] = entry
-                self._hash_index_dirty = True
-        if save:
-            self._save_hash_index()
+        self.store.remember_file_hash(
+            path,
+            digest,
+            category=category,
+            save=save,
+            perceptual_hash=perceptual_hash,
+        )
 
     def _remember_verified_remote_content(
         self,
@@ -3655,97 +3634,23 @@ class Main(Star):
         remote_sha: str,
         save: bool = True,
     ) -> None:
-        local_path = self.gallery_root.parent.joinpath(*Path(git_path).parts)
-        try:
-            stat_data = self._hash_index_stat(local_path)
-        except FileNotFoundError:
-            return
-        parts = Path(git_path).parts
-        category = parts[1] if len(parts) >= 3 else DEFAULT_CATEGORY
-        digest = self._bytes_hash(content)
-        local_sha = git_blob_sha(content)
-        normalized_remote_sha = remote_sha.strip() if isinstance(remote_sha, str) else ""
-        matching_sha = local_sha if local_sha == normalized_remote_sha else None
-        with self._hash_index_lock:
-            previous_entry = self._hash_index.get(git_path)
-        entry = merge_hash_entry(
-            previous_entry,
-            digest=digest,
-            size=stat_data["size"],
-            mtime_ns=stat_data["mtime_ns"],
-            category=_sanitize_component(category),
-            git_blob_sha=matching_sha,
-            remote_sha=matching_sha,
+        self.store.remember_verified_remote_content(
+            git_path, content, remote_sha, save=save
         )
-        with self._hash_index_lock:
-            if self._hash_index.get(git_path) != entry:
-                self._hash_index[git_path] = entry
-                self._hash_index_dirty = True
-        if save:
-            self._save_hash_index()
 
     def _forget_file_hash(self, path_or_key: Path | str, save: bool = True) -> None:
-        if isinstance(path_or_key, Path):
-            key = self._hash_index_key(path_or_key)
-        else:
-            key = path_or_key
-        if not key:
-            return
-        with self._hash_index_lock:
-            if key in self._hash_index:
-                self._hash_index.pop(key, None)
-                self._hash_index_dirty = True
-        if save:
-            self._save_hash_index()
+        self.store.forget_file_hash(path_or_key, save=save)
 
-    def _file_hash_cached(self, path: Path, category: str | None = None, save: bool = True) -> str | None:
-        key = self._hash_index_key(path)
-        if not key:
-            return self._file_hash(path)
-        try:
-            stat_data = self._hash_index_stat(path)
-        except FileNotFoundError:
-            self._forget_file_hash(key, save=save)
-            return None
-        with self._hash_index_lock:
-            entry = self._hash_index.get(key)
-            if (
-                isinstance(entry, dict)
-                and entry.get("size") == stat_data["size"]
-                and entry.get("mtime_ns") == stat_data["mtime_ns"]
-                and entry.get("hash")
-            ):
-                return str(entry["hash"])
-
-        digest = self._file_hash(path)
-        if digest:
-            self._remember_file_hash(path, digest, category=category, save=save)
-        return digest
+    def _file_hash_cached(
+        self, path: Path, category: str | None = None, save: bool = True
+    ) -> str | None:
+        return self.store.file_hash_cached(path, category=category, save=save)
 
     def _category_hashes(self, category: str, save: bool = True) -> set[str]:
-        """返回指定分类内已存在图片的内容哈希集合。"""
-        category = _sanitize_component(category)
-        cached = self._category_hash_cache.get(category)
-        if cached is not None:
-            return cached
-
-        category_dir = self._category_dir(category)
-        hashes: set[str] = set()
-        if category_dir.exists():
-            for path in category_dir.rglob("*"):
-                if not _is_image_file(path):
-                    continue
-                digest = self._file_hash_cached(path, category=category, save=False)
-                if digest:
-                    hashes.add(digest)
-        if save:
-            self._save_hash_index()
-
-        self._category_hash_cache[category] = hashes
-        return hashes
+        return self.store.category_hashes(category, save=save)
 
     def _invalidate_category_hash_cache(self, category: str) -> None:
-        self._category_hash_cache.pop(_sanitize_component(category), None)
+        self.store.invalidate_category_hash_cache(category)
 
     def _store_unique_image_batch(
         self,
