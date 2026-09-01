@@ -6,6 +6,7 @@ on:
       - refactor/gallery-diagnostics-service
     paths:
       - scripts/_stage5_diagnostics_patch.py
+      - scripts/_stage5_diagnostics_test_patch.py
       - .github/workflows/_stage5_diagnostics_patch.yml
 
 permissions:
@@ -23,7 +24,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/_stage5_diagnostics_patch.py
-      - run: git rm scripts/_stage5_diagnostics_patch.py .github/workflows/_stage5_diagnostics_patch.yml
+      - run: python scripts/_stage5_diagnostics_test_patch.py
+      - run: git rm scripts/_stage5_diagnostics_patch.py scripts/_stage5_diagnostics_test_patch.py .github/workflows/_stage5_diagnostics_patch.yml
       - run: python -m py_compile gallery_diagnostics.py main.py
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
