@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import gallery_reporting
 import gallery_safety
 
 
@@ -45,13 +46,18 @@ def test_sync_uses_real_disk_paths_and_converges_to_remote_paths():
 
 
 def test_sync_reports_any_remaining_path_difference_instead_of_false_zero_summary():
-    source = Path("main.py").read_text(encoding="utf-8")
+    report = gallery_reporting.format_sync_report(
+        {
+            "synced": 0,
+            "removed": 0,
+            "remaining_local_only": ("gallery/airi/2.jpg",),
+            "remaining_remote_only": ("gallery/miku/3.png",),
+        }
+    )
 
-    assert "remaining_local_only" in source
-    assert "remaining_remote_only" in source
-    assert "同步后仍未完全一致" in source
-    assert "仅本地" in source
-    assert "仅 GitHub" in source
+    assert "同步后仍未完全一致" in report
+    assert "仅本地：gallery/airi/2.jpg" in report
+    assert "仅 GitHub：gallery/miku/3.png" in report
 
 
 def test_import_gallery_mismatch_includes_concrete_difference_examples():
@@ -62,5 +68,12 @@ def test_import_gallery_mismatch_includes_concrete_difference_examples():
 
     assert "compare_gallery_paths" in renumber
     assert "_format_gallery_path_difference" in renumber
-    assert "仅本地" in source
-    assert "仅 GitHub" in source
+
+    details = gallery_reporting.format_gallery_path_difference(
+        gallery_safety.GalleryPathDifference(
+            local_only=("gallery/airi/9.jpg",),
+            remote_only=("gallery/miku/10.png",),
+        )
+    )
+    assert "仅本地：gallery/airi/9.jpg" in details
+    assert "仅 GitHub：gallery/miku/10.png" in details
