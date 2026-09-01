@@ -83,6 +83,26 @@ except ImportError:
 
 
 try:
+    from .gallery_commands import (
+        normalize_match_text as _normalize_gallery_match_text,
+        parse_aliases as _parse_gallery_aliases,
+        replace_command_aliases as _replace_gallery_command_aliases,
+        resolve_gallery_category_query as _resolve_gallery_category_query_impl,
+        sanitize_component as _sanitize_gallery_component,
+        strip_at_prefix as _strip_gallery_at_prefix,
+    )
+except ImportError:
+    from gallery_commands import (
+        normalize_match_text as _normalize_gallery_match_text,
+        parse_aliases as _parse_gallery_aliases,
+        replace_command_aliases as _replace_gallery_command_aliases,
+        resolve_gallery_category_query as _resolve_gallery_category_query_impl,
+        sanitize_component as _sanitize_gallery_component,
+        strip_at_prefix as _strip_gallery_at_prefix,
+    )
+
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -244,9 +264,9 @@ COMMAND_ALIASES = {
 }
 
 def _sanitize_component(value: str) -> str:
-    cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", value.strip())
-    cleaned = cleaned.strip(". _")
-    return cleaned or DEFAULT_CATEGORY
+    return _sanitize_gallery_component(
+        value, default_category=DEFAULT_CATEGORY
+    )
 
 
 def _is_authenticated_web_request() -> bool:
@@ -3247,92 +3267,26 @@ class Main(Star):
 
     @staticmethod
     def _normalize_match_text(text: str) -> str:
-        return re.sub(r"[\s_\-./\\:：，,。！？!?【】\[\]（）()<>《》\"'“”‘’]+", "", text).lower()
+        return _normalize_gallery_match_text(text)
 
     def _resolve_gallery_category_query(self, query: str) -> str:
-        query = str(query or "").strip()
-        if not query:
-            return ""
-
-        categories = self._list_category_names()
-        if not categories:
-            return _sanitize_component(self._resolve_alias(query))
-
-        alias_to_category = {
-            str(alias): str(category)
-            for alias, category in self.category_aliases.items()
-            if str(alias).strip() and str(category).strip()
-        }
-
-        if query in alias_to_category:
-            resolved = alias_to_category[query]
-            if resolved in categories:
-                return resolved
-        if query in categories:
-            return query
-
-        query_lower = query.lower()
-        category_by_lower = {category.lower(): category for category in categories}
-        alias_by_lower = {alias.lower(): category for alias, category in alias_to_category.items()}
-
-        if query_lower in alias_by_lower and alias_by_lower[query_lower] in categories:
-            return alias_by_lower[query_lower]
-        if query_lower in category_by_lower:
-            return category_by_lower[query_lower]
-
-        normalized_query = self._normalize_match_text(query)
-        candidates: list[tuple[int, int, str]] = []
-
-        for category in categories:
-            normalized = self._normalize_match_text(category)
-            if normalized and normalized in normalized_query:
-                candidates.append((len(normalized), 1, category))
-
-        for alias, category in alias_to_category.items():
-            if category not in categories:
-                continue
-            normalized = self._normalize_match_text(alias)
-            if normalized and normalized in normalized_query:
-                candidates.append((len(normalized), 2, category))
-
-        if candidates:
-            candidates.sort(reverse=True)
-            return candidates[0][2]
-
-        return ""
+        return _resolve_gallery_category_query_impl(
+            query,
+            self._list_category_names(),
+            self.category_aliases,
+        )
 
     @staticmethod
     def _strip_at_prefix(text: str) -> str:
-        """去掉消息文本开头的 @提及 前缀。
-
-        当用户回复消息或在群聊中 @bot 后发送命令时，
-        event.message_str 可能包含 @昵称(QQ号) 前缀，
-        导致以 ^/ 开头的正则无法匹配。这里统一剥离。
-        """
-        stripped = re.sub(r"^@\S+(\(\d+\))?\s*", "", text)
-        return stripped.strip()
+        return _strip_gallery_at_prefix(text)
 
     @staticmethod
     def _replace_command_aliases(text: str) -> str:
-        """将命令快捷方式替换为完整命令，如 /sz → /上传。"""
-        for alias, full_cmd in COMMAND_ALIASES.items():
-            if text == alias:
-                return full_cmd
-            if text.startswith(alias + " ") or text.startswith(alias + "\t"):
-                return full_cmd + text[len(alias):]
-        return text
+        return _replace_gallery_command_aliases(text, COMMAND_ALIASES)
 
     @staticmethod
     def _parse_aliases(entries: list) -> dict[str, str]:
-        aliases: dict[str, str] = {}
-        for entry in entries:
-            if "=" in entry:
-                alias, target = entry.split("=", 1)
-                alias = alias.strip()
-                target = target.strip()
-                if alias and target:
-                    aliases[alias] = target
-        return aliases
+        return _parse_gallery_aliases(entries)
 
     def _build_help_text(self) -> str:
         prefix = self._view_command_prefix()
