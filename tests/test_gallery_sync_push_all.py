@@ -10,7 +10,7 @@ from gallery_sync import GallerySync
 
 def _sync(tmp_path, *, platform="github", batch_size=50):
     root = tmp_path / "gallery"
-    root.mkdir()
+    root.mkdir(parents=True)
     config = {
         "git_platform": platform,
         "git_push_batch_size": batch_size,
