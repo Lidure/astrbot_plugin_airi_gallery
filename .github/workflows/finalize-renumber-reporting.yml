@@ -1,0 +1,58 @@
+name: Finalize renumber reporting extraction
+
+on:
+  push:
+    branches:
+      - refactor/renumber-reporting
+    paths:
+      - .github/workflows/finalize-renumber-reporting.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/renumber-reporting
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Patch main compatibility delegate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("main.py")
+          source = path.read_text(encoding="utf-8")
+
+          old_import = '''    from .gallery_reporting import (\n        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_sync_report as _format_sync_report_impl,\n    )\nexcept ImportError:\n    from gallery_reporting import (\n        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_sync_report as _format_sync_report_impl,\n    )\n'''
+          new_import = '''    from .gallery_reporting import (\n        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_renumber_report as _format_renumber_report_impl,\n        format_sync_report as _format_sync_report_impl,\n    )\nexcept ImportError:\n    from gallery_reporting import (\n        format_gallery_path_difference as _format_gallery_path_difference_impl,\n        format_renumber_report as _format_renumber_report_impl,\n        format_sync_report as _format_sync_report_impl,\n    )\n'''
+
+          old_method = '''    @staticmethod\n    def _format_renumber_report(report: dict) -> str:\n        if not report.get("ok"):\n            return str(report.get("error") or "图库整理失败，未修改编号。")\n        total = int(report.get("total", 0))\n        renamed = int(report.get("renamed", 0))\n        if total <= 0:\n            return "图库整理完成：当前没有图片需要编号。"\n        consistency = "；本地与 GitHub 编号一致" if report.get("remote") else ""\n        return f"图库整理完成：共 {total} 张，编号 1-{total}；重命名 {renamed} 个文件{consistency}。"\n'''
+          new_method = '''    @staticmethod\n    def _format_renumber_report(report: dict) -> str:\n        return _format_renumber_report_impl(report)\n'''
+
+          if source.count(old_import) != 1:
+              raise SystemExit("expected exactly one gallery_reporting import block")
+          if source.count(old_method) != 1:
+              raise SystemExit("expected exactly one renumber formatter implementation")
+
+          source = source.replace(old_import, new_import, 1)
+          source = source.replace(old_method, new_method, 1)
+          path.write_text(source, encoding="utf-8")
+          PY
+      - name: Install focused test dependencies
+        run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Run reporting tests
+        run: python -m pytest tests/test_gallery_reporting.py -q
+      - name: Commit production patch and remove temporary workflow
+        run: |
+          rm .github/workflows/finalize-renumber-reporting.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py .github/workflows/finalize-renumber-reporting.yml
+          git commit -m "refactor: delegate renumber reporting helper"
+          git push origin HEAD:refactor/renumber-reporting
