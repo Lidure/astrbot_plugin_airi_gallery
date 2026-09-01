@@ -189,6 +189,7 @@ try:
         git_blob_sha,
         indexed_images_from_hash_index,
         indexed_images_from_remote_tree,
+        is_remote_gallery_image_path,
         matches_verified_remote_content,
         merge_hash_entry,
         remote_gallery_max_index,
@@ -232,6 +233,7 @@ except ImportError:
         git_blob_sha,
         indexed_images_from_hash_index,
         indexed_images_from_remote_tree,
+        is_remote_gallery_image_path,
         matches_verified_remote_content,
         merge_hash_entry,
         remote_gallery_max_index,
@@ -916,13 +918,7 @@ class Main(Star):
 
     @staticmethod
     def _is_remote_gallery_image(git_path: str) -> bool:
-        parts = Path(git_path).parts
-        return (
-            len(parts) >= 3
-            and parts[0] == "gallery"
-            and ".." not in parts
-            and Path(git_path).suffix.lower() in IMAGE_SUFFIXES
-        )
+        return is_remote_gallery_image_path(git_path, IMAGE_SUFFIXES)
 
     def _find_remote_delete_candidates(self) -> RemoteDeleteReport | None:
         """查找曾被本地索引记录、当前本地缺失且远程仍存在的图片。"""

@@ -15,6 +15,22 @@ from collections.abc import Callable, Iterable, Mapping
 HASH_INDEX_VERSION: int = 3
 
 
+def is_remote_gallery_image_path(
+    git_path: str, supported_suffixes: set[str]
+) -> bool:
+    """Classify Git tree gallery images using platform-independent POSIX semantics."""
+    if "\\" in git_path:
+        return False
+    path = PurePosixPath(git_path)
+    parts = path.parts
+    return (
+        len(parts) >= 3
+        and parts[0] == "gallery"
+        and ".." not in parts
+        and path.suffix.lower() in supported_suffixes
+    )
+
+
 _QQ_MARKETFACE_EMOJI_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
