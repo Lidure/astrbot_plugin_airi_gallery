@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import gallery_reporting
 import gallery_safety
 
@@ -25,17 +23,9 @@ def test_sync_conflict_classifier_preserves_unknown_and_locally_modified_content
     assert helper(local_edit, {}, new_sha)
 
 
-def test_pull_sync_reports_same_path_content_conflicts_instead_of_silent_overwrite():
-    source = Path("main.py").read_text(encoding="utf-8")
-    sync = source.split("    def _git_sync_from_remote", 1)[1].split(
-        "    def _git_push_file", 1
-    )[0]
-
-    assert '"content_conflicts": ()' in sync
-    assert "should_preserve_local_sync_content(" in sync
-    assert "content_conflicts.append(git_path)" in sync
-    assert "本地内容已修改，为避免覆盖予以保留" in sync
-
+def test_sync_report_surfaces_same_path_content_conflicts():
+    # Pull conflict preservation is exercised through GallerySync in
+    # test_gallery_sync_pull.py; this test keeps the user-facing report contract.
     report = gallery_reporting.format_sync_report(
         {
             "synced": 0,
