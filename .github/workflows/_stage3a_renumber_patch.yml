@@ -1,0 +1,43 @@
+name: Stage 3A renumber verified patch
+
+on:
+  push:
+    branches:
+      - refactor/gallery-sync-service
+
+permissions:
+  contents: write
+
+jobs:
+  patch-renumber:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/gallery-sync-service
+          fetch-depth: 0
+
+      - name: Apply renumber migration
+        shell: bash
+        run: python scripts/_stage3a_renumber_patch.py
+
+      - name: Remove temporary migration tooling
+        shell: bash
+        run: git rm .github/workflows/_stage3a_renumber_patch.yml scripts/_stage3a_renumber_patch.py
+
+      - name: Verify migrated working tree
+        shell: bash
+        run: |
+          python -m py_compile gallery_sync.py main.py
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pyyaml quart
+          python -m pytest tests -q
+
+      - name: Commit verified renumber migration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: move renumber transaction to GallerySync"
+          git push origin HEAD:refactor/gallery-sync-service
