@@ -5,6 +5,8 @@ import types
 from pathlib import Path
 from unittest.mock import Mock
 
+from gallery_remote import GalleryRemote
+
 
 class FakeLogger:
     def warning(self, *args, **kwargs):
@@ -166,9 +168,15 @@ def test_remote_branch_mutations_share_one_reentrant_lock():
     source = Path("main.py").read_text(encoding="utf-8")
     init_block = _method_block(source, "__init__")
     assert "self._git_mutation_lock = threading.RLock()" in init_block
+    assert "mutation_lock=self._git_mutation_lock" in init_block
 
+    shared_lock = threading.RLock()
+    remote = GalleryRemote({}, mutation_lock=shared_lock)
+    assert remote.mutation_lock is shared_lock
+
+    # Remote primitives own their lock boundary; transaction policy methods
+    # that still live in Main continue to use the same injected lock.
     for name in (
-        "_git_put_file",
         "_git_delete_file",
         "_git_commit_github_batch",
         "_github_commit_renumber",
@@ -202,24 +210,24 @@ def test_startup_sync_and_timer_have_explicit_shutdown_lifecycle():
 
 
 def test_github_create_only_path_guard_detects_collision_and_truncated_tree():
-    guard = _load_sync_method("_git_github_create_only_paths_exist")
-
-    def make_plugin(payload, status=200):
-        return types.SimpleNamespace(
-            _git_platform=lambda: "github",
-            _git_api_base=lambda: "https://api.github.test",
-            _git_owner=lambda: "owner",
-            _git_repo=lambda: "repo",
-            _git_request=Mock(return_value=(status, payload)),
+    def make_remote(payload, status=200):
+        remote = GalleryRemote(
+            {
+                "git_platform": "github",
+                "git_repo_owner": "owner",
+                "git_repo_name": "repo",
+            }
         )
+        remote.request = Mock(return_value=(status, payload))
+        return remote
 
-    clear = make_plugin({"truncated": False, "tree": [{"path": "gallery/a/1.png"}]})
-    colliding = make_plugin({"truncated": False, "tree": [{"path": "gallery/a/2.png"}]})
-    truncated = make_plugin({"truncated": True, "tree": []})
+    clear = make_remote({"truncated": False, "tree": [{"path": "gallery/a/1.png"}]})
+    colliding = make_remote({"truncated": False, "tree": [{"path": "gallery/a/2.png"}]})
+    truncated = make_remote({"truncated": True, "tree": []})
 
-    assert guard(clear, "tree-sha", {"gallery/a/2.png"}) is False
-    assert guard(colliding, "tree-sha", {"gallery/a/2.png"}) is True
-    assert guard(truncated, "tree-sha", {"gallery/a/2.png"}) is None
+    assert clear.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is False
+    assert colliding.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is True
+    assert truncated.github_create_only_paths_exist("tree-sha", {"gallery/a/2.png"}) is None
 
 
 def test_github_batch_rechecks_create_only_paths_after_ref_conflict():

@@ -4,6 +4,8 @@ import types
 from pathlib import Path
 from unittest.mock import Mock
 
+from gallery_remote import GalleryRemote
+
 
 class FakeLogger:
     def __init__(self):
@@ -46,19 +48,6 @@ def _bind(plugin, *names):
     return plugin
 
 
-def _ref_plugin(status: int):
-    return _bind(
-        types.SimpleNamespace(
-            _git_api_base=lambda: "https://api.github.test",
-            _git_owner=lambda: "owner",
-            _git_repo=lambda: "repo",
-            _git_branch=lambda: "main",
-            _git_request=Mock(return_value=(status, {})),
-        ),
-        "_git_update_github_ref",
-    )
-
-
 def test_ref_update_records_success_conflict_rejected_and_uncertain_outcomes():
     cases = {
         200: (True, "success"),
@@ -72,9 +61,17 @@ def test_ref_update_records_success_conflict_rejected_and_uncertain_outcomes():
     }
 
     for status, (expected_ok, expected_outcome) in cases.items():
-        plugin = _ref_plugin(status)
-        assert plugin._git_update_github_ref("commit-sha") is expected_ok
-        assert plugin._git_ref_update_outcome == expected_outcome
+        remote = GalleryRemote(
+            {
+                "git_platform": "github",
+                "git_repo_owner": "owner",
+                "git_repo_name": "repo",
+                "git_branch": "main",
+            }
+        )
+        remote.request = Mock(return_value=(status, {}))
+        assert remote.update_github_ref("commit-sha") is expected_ok
+        assert remote.ref_update_outcome == expected_outcome
 
 
 def _batch_plugin(update_outcomes, heads, tree_payloads=None):
@@ -109,11 +106,8 @@ def _batch_plugin(update_outcomes, heads, tree_payloads=None):
         return 200, payload
 
     plugin._git_request = Mock(side_effect=request)
-    return _bind(
-        plugin,
-        "_git_github_create_only_paths_exist",
-        "_git_commit_github_batch",
-    )
+    plugin._git_github_create_only_paths_exist = Mock(return_value=False)
+    return _bind(plugin, "_git_commit_github_batch")
 
 
 def _items():

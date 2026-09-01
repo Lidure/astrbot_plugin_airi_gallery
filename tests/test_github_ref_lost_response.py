@@ -68,9 +68,19 @@ def _make_plugin(heads, tree_payloads, update_results):
         return 200, payload
 
     plugin._git_request = Mock(side_effect=request)
-    plugin._git_github_create_only_paths_exist = types.MethodType(
-        _load_sync_method("_git_github_create_only_paths_exist"), plugin
-    )
+
+    def create_only_guard(tree_sha, paths):
+        payload = tree_payloads.get(tree_sha)
+        if payload is None or payload.get("truncated"):
+            return None
+        existing = {
+            entry.get("path")
+            for entry in payload.get("tree", [])
+            if isinstance(entry, dict) and entry.get("path")
+        }
+        return bool(existing.intersection(paths))
+
+    plugin._git_github_create_only_paths_exist = Mock(side_effect=create_only_guard)
     plugin._git_commit_github_batch = types.MethodType(
         _load_sync_method("_git_commit_github_batch"), plugin
     )

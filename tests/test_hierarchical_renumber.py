@@ -1,6 +1,9 @@
 from pathlib import Path
+from unittest.mock import Mock
 
+import gallery_remote
 import gallery_safety
+from gallery_remote import GalleryRemote
 
 
 def _entry(path: str, sha: str, *, mode: str = "100644", type_: str = "blob") -> dict:
@@ -68,47 +71,92 @@ def test_main_renumber_uses_hierarchical_category_trees_and_reports_stage():
 
 
 def test_fixed_github_tree_snapshot_preserves_full_git_layout_metadata():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = source.split("    def _git_list_tree_at", 1)[1].split("\n    def ", 1)[0]
-
-    assert '"type": entry.get("type", "")' in block
-    assert '"mode": entry.get("mode", "")' in block
-    assert 'if entry.get("type") == "blob":' not in block
-
-
-def test_github_tree_creation_retries_transient_gateway_failures_without_version_bump():
-    source = Path("main.py").read_text(encoding="utf-8")
-    block = source.split("    def _git_create_github_tree", 1)[1].split("\n    def ", 1)[0]
-    retry_line = next(
-        line for line in source.splitlines()
-        if line.startswith("GITHUB_TREE_CREATE_RETRY_STATUSES = ")
+    remote = GalleryRemote(
+        {
+            "git_platform": "github",
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+        }
+    )
+    remote.request = Mock(
+        return_value=(
+            200,
+            {
+                "truncated": False,
+                "tree": [
+                    _entry("gallery", "gallery-tree", mode="040000", type_="tree"),
+                    _entry("gallery/airi/1.jpg", "blob-1"),
+                ],
+            },
+        )
     )
 
-    assert "GITHUB_TREE_CREATE_MAX_ATTEMPTS = 3" in source
-    assert "GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}" in source
-    assert "GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0" in source
-    assert "for attempt in range(1, GITHUB_TREE_CREATE_MAX_ATTEMPTS + 1)" in block
-    assert "status not in GITHUB_TREE_CREATE_RETRY_STATUSES" in block
-    assert "time.sleep(" in block
+    result = remote.list_tree_at("fixed-tree")
+
+    assert result == [
+        {
+            "path": "gallery",
+            "sha": "gallery-tree",
+            "size": 0,
+            "type": "tree",
+            "mode": "040000",
+        },
+        {
+            "path": "gallery/airi/1.jpg",
+            "sha": "blob-1",
+            "size": 0,
+            "type": "blob",
+            "mode": "100644",
+        },
+    ]
+
+
+def test_github_tree_creation_retries_transient_gateway_failures_without_version_bump(monkeypatch):
+    remote = GalleryRemote(
+        {
+            "git_platform": "github",
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+        }
+    )
+    remote.request = Mock(
+        side_effect=[
+            (503, {"message": "temporary gateway failure"}),
+            (201, {"sha": "tree-new"}),
+        ]
+    )
+    sleeps = []
+    monkeypatch.setattr(gallery_remote.time, "sleep", sleeps.append)
+
+    assert remote.create_github_tree("base-tree", [{"path": "1.jpg"}]) == "tree-new"
+    assert remote.request.call_count == 2
+    assert sleeps == [1.0]
+    assert gallery_remote.GITHUB_TREE_CREATE_MAX_ATTEMPTS == 3
+    assert gallery_remote.GITHUB_TREE_CREATE_RETRY_STATUSES == {0, 500, 502, 503, 504}
     for permanent_status in (401, 403, 409, 422):
-        assert str(permanent_status) not in retry_line
+        assert permanent_status not in gallery_remote.GITHUB_TREE_CREATE_RETRY_STATUSES
 
 
 def test_large_category_tree_mutations_upsert_before_delete_without_version_bump():
+    remote = GalleryRemote({})
+    remote.create_github_tree = Mock(side_effect=["tree-after-upsert", "tree-after-delete"])
+    upserts = ({"path": "1.jpg", "mode": "100644", "type": "blob", "sha": "new"},)
+    deletes = ({"path": "3.jpg", "mode": "100644", "type": "blob", "sha": None},)
+
+    result = remote.apply_category_tree_delta("airi", "base-tree", deletes, upserts)
+
+    assert result == "tree-after-delete"
+    first, second = remote.create_github_tree.call_args_list
+    assert first.args == ("base-tree", list(upserts))
+    assert "phase=upsert" in first.kwargs["context"]
+    assert second.args == ("tree-after-upsert", list(deletes))
+    assert "phase=delete" in second.kwargs["context"]
+    assert gallery_remote.GITHUB_TREE_MUTATION_CHUNK_SIZE == 100
+
     source = Path("main.py").read_text(encoding="utf-8")
-    helper = source.split("    def _git_apply_category_tree_delta", 1)[1].split("\n    def ", 1)[0]
     renumber = source.split("    def _github_commit_renumber", 1)[1].split(
         "    def _renumber_gallery_consistently_sync", 1
     )[0]
-
-    assert "GITHUB_TREE_MUTATION_CHUNK_SIZE = 100" in source
-    assert "current_tree_sha = base_tree_sha" in helper
-    assert "for entries in (upserts, deletes)" in helper
-    assert 'phase_name = "upsert"' in helper
-    assert 'phase_name = "delete"' in helper
-    assert "GITHUB_TREE_MUTATION_CHUNK_SIZE" in helper
-    assert "self._git_create_github_tree(" in helper
-    assert "context=context" in helper
     assert "self._git_apply_category_tree_delta(" in renumber
     assert "self._git_create_github_tree_incrementally(list(category_entries))" not in renumber
 
