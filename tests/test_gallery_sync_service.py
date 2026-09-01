@@ -153,3 +153,22 @@ def test_main_initialize_and_terminate_delegate_background_sync_lifecycle():
     assert "await self.sync.stop_background_sync()" in terminate
     assert "sync_timer.cancel()" not in terminate
     assert "startup_thread.join" not in terminate
+
+
+def test_main_github_renumber_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_github_commit_renumber")
+
+    assert "return self.sync.commit_github_renumber(" in block
+    assert "with self._git_mutation_lock:" not in block
+    assert "build_renumbered_category_entries" not in block
+    assert "_git_update_github_ref(" not in block
+
+
+def test_main_consistent_renumber_is_only_a_gallery_sync_compatibility_delegate():
+    block = _main_method_block("_renumber_gallery_consistently_sync")
+
+    assert "return self.sync.renumber_gallery_consistently()" in block
+    assert "self._sync_lock.acquire(" not in block
+    assert "build_global_renumber_plan" not in block
+    assert "_stage_local_renumber(" not in block
+    assert "_remap_hash_index(" not in block
