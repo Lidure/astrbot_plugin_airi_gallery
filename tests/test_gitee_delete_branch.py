@@ -1,9 +1,10 @@
 import ast
-import base64
 import threading
 import types
 from pathlib import Path
 from unittest.mock import Mock
+
+from gallery_remote import GalleryRemote
 
 
 class FakeLogger:
@@ -27,20 +28,32 @@ def _load_method(name):
                     item.decorator_list = []
                     module = ast.Module(body=[item], type_ignores=[])
                     ast.fix_missing_locations(module)
-                    namespace = {
-                        "logger": FakeLogger(),
-                        "b64mod": base64,
-                        "remote_put_result": lambda success, sha: (
-                            bool(success),
-                            sha if success and sha else None,
-                        ),
-                    }
+                    namespace = {"logger": FakeLogger()}
                     exec(compile(module, "main.py", "exec"), namespace)
                     return namespace[name]
     raise AssertionError(f"Main.{name} is missing")
 
 
-def _plugin(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
+def _gitee_remote(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
+    remote = GalleryRemote(
+        {
+            "git_platform": "gitee",
+            "git_repo_owner": "owner",
+            "git_repo_name": "repo",
+            "git_branch": "gallery-data",
+            "git_token": "token",
+        },
+        logger=FakeLogger(),
+        mutation_lock=threading.RLock(),
+    )
+    if cached_sha:
+        remote.sha_cache["gallery/airi/1.png"] = cached_sha
+    remote.request = request
+    remote.fetch_file_sha = lambda path: fresh_sha
+    return remote
+
+
+def _delete_plugin(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
     cache = {}
     if cached_sha:
         cache["gallery/airi/1.png"] = cached_sha
@@ -59,10 +72,9 @@ def _plugin(request, *, cached_sha="cached-sha", fresh_sha="fresh-sha"):
 
 def test_gitee_create_targets_configured_branch():
     request = Mock(return_value=(201, {"content": {"sha": "new-sha"}}))
-    plugin = _plugin(request, cached_sha=None)
-    put = types.MethodType(_load_method("_git_put_file"), plugin)
+    remote = _gitee_remote(request, cached_sha=None)
 
-    assert put("gallery/airi/1.png", b"image", "Upload image") == (True, "new-sha")
+    assert remote.put_file("gallery/airi/1.png", b"image", "Upload image") == (True, "new-sha")
     assert request.call_count == 1
     call = request.call_args
     assert call.args[0] == "POST"
@@ -77,10 +89,9 @@ def test_gitee_update_retry_keeps_configured_branch():
             (200, {"content": {"sha": "new-sha"}}),
         ]
     )
-    plugin = _plugin(request)
-    put = types.MethodType(_load_method("_git_put_file"), plugin)
+    remote = _gitee_remote(request)
 
-    assert put("gallery/airi/1.png", b"image", "Update image") == (True, "new-sha")
+    assert remote.put_file("gallery/airi/1.png", b"image", "Update image") == (True, "new-sha")
     assert request.call_count == 2
     first_update = request.call_args_list[0]
     retry_update = request.call_args_list[1]
@@ -94,7 +105,7 @@ def test_gitee_update_retry_keeps_configured_branch():
 
 def test_gitee_delete_targets_configured_branch():
     request = Mock(return_value=(200, {"content": None}))
-    plugin = _plugin(request)
+    plugin = _delete_plugin(request)
     delete = types.MethodType(_load_method("_git_delete_file"), plugin)
 
     assert delete("gallery/airi/1.png", "Delete image") is True
@@ -116,7 +127,7 @@ def test_gitee_stale_sha_retry_keeps_configured_branch():
             (200, {"content": None}),
         ]
     )
-    plugin = _plugin(request)
+    plugin = _delete_plugin(request)
     delete = types.MethodType(_load_method("_git_delete_file"), plugin)
 
     assert delete("gallery/airi/1.png", "Delete image") is True
