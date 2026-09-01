@@ -80,7 +80,7 @@ def _main_method_block(name: str) -> str:
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == "Main":
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == name:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name:
                     return ast.get_source_segment(source, item) or ""
     raise AssertionError(f"Main.{name} is missing")
 
@@ -103,8 +103,6 @@ def test_main_github_batch_is_only_a_gallery_sync_compatibility_delegate():
 
 
 def test_main_pull_sync_is_only_a_gallery_sync_compatibility_delegate():
-    # Pull semantics are covered by test_gallery_sync_pull.py; this test guards
-    # the composition boundary so the transaction cannot drift back into Main.
     block = _main_method_block("_git_sync_from_remote")
 
     assert "return self.sync.sync_from_remote()" in block
@@ -130,3 +128,28 @@ def test_main_push_all_is_only_a_gallery_sync_compatibility_delegate():
     assert "self.gallery_root.rglob(" not in block
     assert "self._git_list_tree()" not in block
     assert "self._git_push_pending_items(" not in block
+
+
+def test_main_startup_and_timer_methods_are_only_gallery_sync_delegates():
+    startup = _main_method_block("_git_startup_sync")
+    start_timer = _main_method_block("_start_sync_timer")
+    timer_cb = _main_method_block("_sync_timer_cb")
+
+    assert "return self.sync.startup_sync()" in startup
+    assert "self._git_sync_from_remote()" not in startup
+    assert "self._git_list_tree()" not in startup
+    assert "return self.sync.start_timer()" in start_timer
+    assert "threading.Timer(" not in start_timer
+    assert "return self.sync.timer_callback()" in timer_cb
+    assert "self._git_sync_from_remote()" not in timer_cb
+
+
+def test_main_initialize_and_terminate_delegate_background_sync_lifecycle():
+    initialize = _main_method_block("initialize")
+    terminate = _main_method_block("terminate")
+
+    assert "self.sync.start_background_sync()" in initialize
+    assert "threading.Thread(" not in initialize
+    assert "await self.sync.stop_background_sync()" in terminate
+    assert "sync_timer.cancel()" not in terminate
+    assert "startup_thread.join" not in terminate
