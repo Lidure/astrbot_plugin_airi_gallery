@@ -150,6 +150,7 @@ def test_gallery_diagnostics_background_lifecycle_cancels_owned_task(tmp_path):
     asyncio.run(scenario())
 
 
+# Main remains the AstrBot adapter; diagnostic mutable state and lifecycle belong here.
 def test_main_wires_gallery_diagnostics_without_duplicate_state():
     source = open("main.py", "r", encoding="utf-8").read()
     constructor = source.split("    def __init__(self, context: Context, config=None) -> None:", 1)[1].split(
