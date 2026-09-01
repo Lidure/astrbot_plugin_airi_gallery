@@ -1,7 +1,9 @@
 name: Temporary reporting patch
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - refactor/reporting-helpers
 
 permissions:
   contents: write
