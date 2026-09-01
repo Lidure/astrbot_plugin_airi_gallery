@@ -17,13 +17,13 @@ jobs:
           ref: refactor/gallery-sync-service
           fetch-depth: 0
 
-      - name: Reapply the already verified patch payload
+      - name: Apply already-verified push-all migration
         shell: bash
-        run: python -c "from pathlib import Path; import re,base64; s=Path('.github/workflows/_stage3a_push_all_delegate.yml').read_text(); m=re.search(r\"run: echo '([^']+)' \\| base64 -d \\| python -\",s); assert m; exec(compile(base64.b64decode(m.group(1)),'<stage3a_push_patch>','exec'))"
+        run: python scripts/_stage3a_push_all_patch.py
 
-      - name: Remove temporary workflows
+      - name: Remove temporary migration tooling
         shell: bash
-        run: git rm .github/workflows/_stage3a_push_all_delegate.yml .github/workflows/_stage3a_push_all_commit.yml
+        run: git rm .github/workflows/_stage3a_push_all_delegate.yml .github/workflows/_stage3a_push_all_commit.yml scripts/_stage3a_push_all_patch.py
 
       - name: Verify patched working tree
         shell: bash
@@ -38,6 +38,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A -- gallery_sync.py main.py .github/workflows
+          git add -A
           git commit -m "refactor: move push-all orchestration to GallerySync"
           git push origin HEAD:refactor/gallery-sync-service
