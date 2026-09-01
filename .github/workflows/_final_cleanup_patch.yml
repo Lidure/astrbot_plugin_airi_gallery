@@ -6,6 +6,7 @@ on:
       - refactor/final-cleanup
     paths:
       - scripts/_final_cleanup_patch.py
+      - scripts/_final_cleanup_test_patch.py
       - .github/workflows/_final_cleanup_patch.yml
 
 permissions:
@@ -23,7 +24,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/_final_cleanup_patch.py
-      - run: git rm scripts/_final_cleanup_patch.py .github/workflows/_final_cleanup_patch.yml
+      - run: python scripts/_final_cleanup_test_patch.py
+      - run: git rm scripts/_final_cleanup_patch.py scripts/_final_cleanup_test_patch.py .github/workflows/_final_cleanup_patch.yml
       - run: python -m py_compile main.py gallery_diagnostics.py
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
