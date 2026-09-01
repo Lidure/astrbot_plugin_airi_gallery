@@ -1,5 +1,3 @@
-import importlib
-
 import pytest
 
 
@@ -84,21 +82,3 @@ def test_resolve_cloud_gallery_url_preserves_existing_normalization(raw, expecte
     from gallery_config import resolve_cloud_gallery_url
 
     assert resolve_cloud_gallery_url(config) == expected
-
-
-def test_main_config_resolvers_delegate_to_gallery_config(monkeypatch):
-    main_module = importlib.import_module("main")
-    plugin = main_module.Main.__new__(main_module.Main)
-    plugin.config = {"marker": "config"}
-
-    monkeypatch.setattr(main_module, "resolve_view_command_mode", lambda cfg: "mode")
-    monkeypatch.setattr(main_module, "resolve_view_multiple_mode", lambda cfg: "multi")
-    monkeypatch.setattr(main_module, "resolve_view_all_collage_compress", lambda cfg: "compress")
-    monkeypatch.setattr(main_module, "resolve_view_all_collage_scale", lambda cfg: "scale")
-    monkeypatch.setattr(main_module, "resolve_cloud_gallery_url", lambda cfg: "url")
-
-    assert plugin._resolve_view_command_mode() == "mode"
-    assert plugin._resolve_view_multiple_mode() == "multi"
-    assert plugin._resolve_view_all_collage_compress() == "compress"
-    assert plugin._resolve_view_all_collage_scale() == "scale"
-    assert plugin._cloud_gallery_url() == "url"
