@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import threading
+from pathlib import Path
 
 
 def test_gallery_sync_owns_transaction_and_lifecycle_state(tmp_path):
@@ -70,3 +72,21 @@ def test_gallery_sync_can_cancel_push_without_main_owned_flag(tmp_path):
     assert sync.git_push_cancelled is True
     sync.reset_push_cancelled()
     assert sync.git_push_cancelled is False
+
+
+def test_main_remote_delete_is_only_a_gallery_sync_compatibility_delegate():
+    source = Path("main.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    method = None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "Main":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "_git_delete_file":
+                    method = item
+                    break
+    assert method is not None
+    block = ast.get_source_segment(source, method) or ""
+
+    assert "return self.sync.delete_file(path, message)" in block
+    assert "with self._git_mutation_lock:" not in block
+    assert "self._git_request(" not in block
