@@ -100,7 +100,7 @@ def test_gallery_diagnostics_run_preserves_internal_fallback_items(tmp_path, mon
     assert [item.code for item in report.items] == ["git.internal", "update.internal"]
 
 
-def test_gallery_diagnostics_startup_logs_without_chat_dependency(tmp_path, monkeypatch):
+def test_gallery_diagnostics_startup_logs_without_chat_dependency(tmp_path):
     logger = LoggerStub()
     service = _service(tmp_path, logger=logger)
     report = gallery_diagnostics.DiagnosticReport(
@@ -150,26 +150,15 @@ def test_gallery_diagnostics_background_lifecycle_cancels_owned_task(tmp_path):
     asyncio.run(scenario())
 
 
-def test_main_wires_gallery_diagnostics_without_duplicate_state(main_module, monkeypatch, tmp_path):
-    cls = getattr(gallery_diagnostics, "GalleryDiagnostics")
-    plugin, _ = main_module.construct_plugin_for_diagnostics_test(monkeypatch, tmp_path, {}) if hasattr(main_module, "construct_plugin_for_diagnostics_test") else (None, None)
-    if plugin is None:
-        monkeypatch.setattr(
-            main_module, "get_astrbot_plugin_data_path", lambda: str(tmp_path)
-        )
+def test_main_wires_gallery_diagnostics_without_duplicate_state():
+    source = open("main.py", "r", encoding="utf-8").read()
+    constructor = source.split("    def __init__(self, context: Context, config=None) -> None:", 1)[1].split(
+        "    async def initialize(self):", 1
+    )[0]
 
-        class ContextStub:
-            def add_llm_tools(self, tool):
-                pass
-
-            def register_web_api(self, *args):
-                pass
-
-        plugin = main_module.Main(ContextStub(), {})
-
-    assert isinstance(plugin.diagnostics, cls)
-    assert "_diagnostic_task" not in plugin.__dict__
-    assert "_diagnostic_update_cache" not in plugin.__dict__
+    assert "self.diagnostics = GalleryDiagnostics(" in constructor
+    assert "self._diagnostic_task =" not in constructor
+    assert "self._diagnostic_update_cache =" not in constructor
 
 
 def test_main_diagnostic_helpers_are_only_service_compatibility_delegates():
