@@ -14,13 +14,13 @@ DEFAULT_COMMAND_ALIASES = {
 def sanitize_component(
     value: str, *, default_category: str = DEFAULT_CATEGORY
 ) -> str:
-    cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", str(value).strip())
+    cleaned = re.sub(r"[\\/:*?\"<>|]+", "_", value.strip())
     cleaned = cleaned.strip(". _")
     return cleaned or default_category
 
 
 def strip_at_prefix(text: str) -> str:
-    stripped = re.sub(r"^@\S+(\(\d+\))?\s*", "", str(text))
+    stripped = re.sub(r"^@\S+(\(\d+\))?\s*", "", text)
     return stripped.strip()
 
 
@@ -68,7 +68,7 @@ def resolve_gallery_category_query(
     categories = list(categories)
     if not categories:
         resolved = category_aliases.get(query, query)
-        return sanitize_component(str(resolved))
+        return sanitize_component(resolved)
 
     alias_to_category = {
         str(alias): str(category)
