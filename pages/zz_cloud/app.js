@@ -1,9 +1,16 @@
+import {
+  GITHUB_MAX_BLOB_BYTES,
+  commitGitHubUploadTransaction,
+  exactRemoteMatch,
+  similarRemoteMatches,
+} from './upload_transaction.mjs';
+
 // ──────────────────────────────────────────────
 // Config & State
 // ──────────────────────────────────────────────
 const LS_KEY = 'airi_gallery_cloud_config';
 const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
-const WRITE_METHODS = new Set(['POST', 'PUT', 'DELETE']);
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 let config = loadConfig();
 let state = {
@@ -347,10 +354,11 @@ async function ghRequest(method, path, { body = null, params = {}, cfg = config,
     try { data = await resp.json(); } catch { data = null; }
   }
 
-  const throwRequestError = message => {
+  const throwRequestError = (message, details = {}) => {
     const err = new Error(message);
     err.status = resp.status;
     err.data = data;
+    Object.assign(err, details);
     throw err;
   };
 
@@ -358,7 +366,9 @@ async function ghRequest(method, path, { body = null, params = {}, cfg = config,
     || resp.headers.get('x-ratelimit-remaining') === '0'
     || /rate limit/i.test(data?.message || ''));
   if (rateLimited) {
-    throwRequestError('API 请求频率超限，请稍后重试');
+    const retryAfterSeconds = Number(resp.headers.get('retry-after') || 0);
+    const retryAfterMs = Math.min(10_000, Math.max(250, retryAfterSeconds * 1000 || 1000));
+    throwRequestError('API 请求频率超限，请稍后重试', { retryable: true, retryAfterMs });
   }
   if (resp.status === 401 || resp.status === 403) {
     throwRequestError('认证失败，请检查 Token');
@@ -498,7 +508,6 @@ async function deleteFile(path, message) {
 
 const GALLERY_INDEX_PATH = 'gallery/gallery_index.json';
 const GALLERY_INDEX_ALGORITHM = 'dhash64-nn-white-v1';
-const PERCEPTUAL_MAX_DISTANCE = 6;
 
 function bytesToBase64(bytes) {
   let binary = '';
@@ -531,7 +540,11 @@ function imageMime(path) {
 }
 
 async function perceptualHash(blob) {
-  const bitmap = await createImageBitmap(blob);
+  const bitmap = await createImageBitmap(blob, {
+    resizeWidth: 9,
+    resizeHeight: 8,
+    resizeQuality: 'pixelated',
+  });
   try {
     const canvas = document.createElement('canvas');
     canvas.width = 9; canvas.height = 8;
@@ -558,13 +571,6 @@ async function perceptualHash(blob) {
   }
 }
 
-function hammingDistanceHex(left, right) {
-  let value = BigInt(`0x${left}`) ^ BigInt(`0x${right}`);
-  let count = 0;
-  while (value) { count += Number(value & 1n); value >>= 1n; }
-  return count;
-}
-
 function normalizeGalleryIndex(payload, remotePaths) {
   const result = {};
   const files = payload && typeof payload === 'object' ? payload.files : null;
@@ -577,7 +583,7 @@ function normalizeGalleryIndex(payload, remotePaths) {
   return result;
 }
 
-async function saveGalleryIndex(index) {
+function galleryIndexBase64(index) {
   const payload = {
     version: 1,
     algorithm: GALLERY_INDEX_ALGORITHM,
@@ -585,15 +591,19 @@ async function saveGalleryIndex(index) {
       ([path, perceptual_hash]) => [path, { perceptual_hash }]
     )),
   };
+  return textToBase64(JSON.stringify(payload));
+}
+
+async function saveGalleryIndex(index) {
   await putFile(
     GALLERY_INDEX_PATH,
-    textToBase64(JSON.stringify(payload)),
+    galleryIndexBase64(index),
     'Update gallery perceptual index'
   );
   state.galleryIndex = { ...index };
 }
 
-async function ensureGalleryIndex(tree) {
+async function ensureGalleryIndex(tree, category) {
   const images = imageEntriesFromTree(tree);
   const remotePaths = new Set(images.map(entry => entry.path));
   let index = {};
@@ -608,7 +618,9 @@ async function ensureGalleryIndex(tree) {
     }
   }
 
-  const missing = images.filter(entry => !index[entry.path]);
+  const missing = images.filter(entry => (
+    entry.path.startsWith(`gallery/${category}/`) && !index[entry.path]
+  ));
   if (missing.length) {
     progressText.textContent = `首次补全相似查重索引 0 / ${missing.length}...`;
     for (let i = 0; i < missing.length; i++) {
@@ -618,34 +630,12 @@ async function ensureGalleryIndex(tree) {
       progressText.textContent = `首次补全相似查重索引 ${i + 1} / ${missing.length}...`;
     }
     if (!canWrite()) throw new Error('远程感知查重索引尚未建立，当前只读连接无法保存索引');
-    await saveGalleryIndex(index);
+    if (config.platform === 'gitee') await saveGalleryIndex(index);
+    else state.galleryIndex = { ...index };
   } else {
     state.galleryIndex = { ...index };
   }
   return index;
-}
-
-function exactRemoteMatch(tree, blobSha) {
-  return imageEntriesFromTree(tree).find(entry => entry.sha === blobSha) || null;
-}
-
-function similarRemoteMatches(index, perceptualHashValue, limit = 3) {
-  const matches = [];
-  for (const [path, phash] of Object.entries(index)) {
-    try {
-      const distance = hammingDistanceHex(perceptualHashValue, phash);
-      if (distance <= PERCEPTUAL_MAX_DISTANCE) {
-        matches.push({
-          path,
-          number: getImageIndex(path),
-          distance,
-          similarity: Math.max(0, 1 - distance / 64),
-        });
-      }
-    } catch {}
-  }
-  matches.sort((a, b) => a.distance - b.distance || a.number - b.number || a.path.localeCompare(b.path));
-  return matches.slice(0, limit);
 }
 
 async function previewUrlForPath(path) {
@@ -1052,18 +1042,15 @@ function digestToHex(digest) {
 }
 
 async function hashFile(file) {
-  const buf = await file.arrayBuffer();
-  const header = new TextEncoder().encode(`blob ${buf.byteLength}\0`);
-  const blobBytes = new Uint8Array(header.length + buf.byteLength);
-  blobBytes.set(header);
-  blobBytes.set(new Uint8Array(buf), header.length);
-  const [contentDigest, blobDigest] = await Promise.all([
-    crypto.subtle.digest('SHA-256', buf),
-    crypto.subtle.digest('SHA-1', blobBytes),
-  ]);
+  const header = new TextEncoder().encode(`blob ${file.size}\0`);
+  const blobDigest = await crypto.subtle.digest(
+    'SHA-1',
+    await new Blob([header, file]).arrayBuffer(),
+  );
+  const blobSha = digestToHex(blobDigest);
   return {
-    signature: digestToHex(contentDigest),
-    blobSha: digestToHex(blobDigest),
+    signature: blobSha,
+    blobSha,
   };
 }
 
@@ -1071,10 +1058,13 @@ async function addFiles(fl) {
   let skipped = 0;
   for (const f of fl) {
     if (!f.type.startsWith('image/')) continue;
-    const [{ signature, blobSha }, perceptualHashValue] = await Promise.all([
-      hashFile(f),
-      perceptualHash(f),
-    ]);
+    if (config.platform === 'github' && f.size > GITHUB_MAX_BLOB_BYTES) {
+      skipped++;
+      toast(`${f.name || '图片'} 超过 GitHub 单文件 100 MiB 限制`, false);
+      continue;
+    }
+    const { signature, blobSha } = await hashFile(f);
+    const perceptualHashValue = await perceptualHash(f);
     if (state.pendingFiles.some(s => s.signature === signature)) {
       skipped++;
       continue;
@@ -1163,7 +1153,7 @@ upBtn.onclick = async () => {
     let tree = await getTree();
     state.shaCache = Object.fromEntries(tree.map(entry => [entry.path, entry.sha]));
     state.categories = parseCategories(tree);
-    const galleryIndex = await ensureGalleryIndex(tree);
+    const galleryIndex = await ensureGalleryIndex(tree, cat);
 
     const uploadQueue = [];
     const rejectedItems = [];
@@ -1171,7 +1161,7 @@ upBtn.onclick = async () => {
     let similarSkipped = 0;
 
     for (const item of state.pendingFiles) {
-      const exact = exactRemoteMatch(tree, item.blobSha);
+      const exact = exactRemoteMatch(tree, item.blobSha, cat);
       if (exact) {
         exactDuplicate++;
         rejectedItems.push(item);
@@ -1185,7 +1175,7 @@ upBtn.onclick = async () => {
         continue;
       }
 
-      const similar = similarRemoteMatches(galleryIndex, item.perceptualHash);
+      const similar = similarRemoteMatches(galleryIndex, item.perceptualHash, cat);
       if (similar.length) {
         const labels = similar.map(match => `#${match.number || '?'} ${(match.similarity * 100).toFixed(1)}%`).join('、');
         let imageUrl = '';
@@ -1206,33 +1196,80 @@ upBtn.onclick = async () => {
     let nextIdx = getNextIndex();
     let uploaded = 0;
     const failedItems = [];
-    for (let i = 0; i < uploadQueue.length; i++) {
-      const item = uploadQueue[i];
-      const f = item.file;
-      const ext = getExt(f.name);
-      progressText.textContent = `上传中 ${i + 1} / ${uploadQueue.length}...`;
-      progressBar.value = uploadQueue.length ? (i / uploadQueue.length) * 100 : 100;
-      try {
-        const b64 = await fileToBase64(f);
-        const result = await uploadFileWithRetry(cat, f, ext, b64, item.blobSha, nextIdx);
-        if (result.duplicate) {
-          exactDuplicate++;
-          rejectedItems.push(item);
-          continue;
+    const plannedUploads = uploadQueue.map(item => {
+      const index = nextIdx++;
+      const fileName = `${index}${getExt(item.file.name)}`;
+      return { item, index, fileName, gitPath: `gallery/${cat}/${fileName}` };
+    });
+
+    if (config.platform === 'github' && plannedUploads.length) {
+      const nextGalleryIndex = { ...galleryIndex };
+      for (const result of plannedUploads) {
+        nextGalleryIndex[result.gitPath] = result.item.perceptualHash;
+      }
+      const uploadConfig = { ...config };
+      const blobConcurrency = plannedUploads.some(
+        result => result.item.file.size > 16 * 1024 * 1024,
+      ) ? 1 : 2;
+      progressText.textContent = `正在建立 ${plannedUploads.length} 张图片的原子提交...`;
+      const transaction = await commitGitHubUploadTransaction({
+        owner: uploadConfig.owner,
+        repo: uploadConfig.repo,
+        branch: uploadConfig.branch || 'main',
+        request: (method, path, options = {}) => ghRequest(
+          method, path, { ...options, cfg: uploadConfig },
+        ),
+        concurrency: blobConcurrency,
+        items: plannedUploads.map(result => ({
+          path: result.gitPath,
+          size: result.item.file.size,
+          expectedBlobSha: result.item.blobSha,
+          loadContentBase64: () => fileToBase64(result.item.file),
+        })),
+        manifest: {
+          path: GALLERY_INDEX_PATH,
+          contentBase64: galleryIndexBase64(nextGalleryIndex),
+        },
+        onProgress: (completed, total) => {
+          progressText.textContent = `准备远端对象 ${completed} / ${total}...`;
+          progressBar.value = (completed / total) * 90;
+        },
+      });
+      uploaded = plannedUploads.length;
+      uploadedResults.push(...plannedUploads);
+      Object.assign(galleryIndex, nextGalleryIndex);
+      state.galleryIndex = { ...nextGalleryIndex };
+      for (const entry of transaction.entries) state.shaCache[entry.path] = entry.sha;
+    } else if (config.platform === 'gitee') {
+      let giteeNextIndex = getNextIndex();
+      for (let i = 0; i < plannedUploads.length; i++) {
+        const plan = plannedUploads[i];
+        const { item } = plan;
+        progressText.textContent = `上传中 ${i + 1} / ${plannedUploads.length}...`;
+        progressBar.value = plannedUploads.length ? (i / plannedUploads.length) * 100 : 100;
+        try {
+          const b64 = await fileToBase64(item.file);
+          const result = await uploadFileWithRetry(
+            cat, item.file, getExt(item.file.name), b64, item.blobSha, giteeNextIndex,
+          );
+          if (result.duplicate) {
+            exactDuplicate++;
+            rejectedItems.push(item);
+            continue;
+          }
+          uploaded++;
+          giteeNextIndex = result.index + 1;
+          galleryIndex[result.gitPath] = item.perceptualHash;
+          uploadedResults.push({ ...result, item });
+          tree.push({ path: result.gitPath, sha: item.blobSha, size: item.file.size });
+        } catch (e) {
+          console.error(`Upload failed: ${item.file.name}`, e);
+          failedItems.push(item);
         }
-        uploaded++;
-        nextIdx = result.index + 1;
-        galleryIndex[result.gitPath] = item.perceptualHash;
-        uploadedResults.push({ ...result, item });
-        // Update the in-memory tree so the next candidate cannot reuse this exact blob.
-        tree.push({ path: result.gitPath, sha: item.blobSha, size: item.file.size });
-      } catch (e) {
-        console.error(`Upload failed: ${f.name}`, e);
-        failedItems.push(item);
       }
     }
 
-    if (uploadedResults.length) {
+    if (config.platform === 'gitee' && uploadedResults.length) {
       try {
         await saveGalleryIndex(galleryIndex);
       } catch (indexError) {
