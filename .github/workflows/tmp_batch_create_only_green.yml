@@ -1,0 +1,39 @@
+name: Temporary Batched Create-only GREEN
+
+on:
+  push:
+    branches:
+      - perf/upload-hot-path-category-scope
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/upload-hot-path-category-scope
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Apply batched create-only GREEN implementation
+        run: python tools/tmp_batch_create_only_green.py
+      - name: Compile changed module
+        run: python -m py_compile gallery_remote.py
+      - name: Run upload hot-path regressions
+        run: python -m pytest tests/test_upload_hot_path_batch_efficiency.py tests/test_upload_hot_path_performance.py -q
+      - name: Run full suite
+        run: python -m pytest tests -q
+      - name: Commit verified implementation and remove migration tools
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f tools/tmp_batch_create_only_green.py .github/workflows/tmp_batch_create_only_green.yml
+          git add gallery_remote.py tests/test_upload_hot_path_performance.py tests/test_upload_hot_path_batch_efficiency.py
+          git commit -m 'perf: batch create-only checks by category'
+          git push origin HEAD:perf/upload-hot-path-category-scope
