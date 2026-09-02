@@ -4,6 +4,7 @@ import {
   exactRemoteMatch,
   similarRemoteMatches,
 } from './upload_transaction.mjs';
+import { createBase64UploadStream } from './blob_stream.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
@@ -11,6 +12,8 @@ import {
 const LS_KEY = 'airi_gallery_cloud_config';
 const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const CLOUD_PROXY_BLOB_THRESHOLD_BYTES = 4 * 1024 * 1024;
+const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 
 let config = loadConfig();
 let state = {
@@ -1109,6 +1112,94 @@ function fileToBase64(file) {
   });
 }
 
+function formatMiB(bytes) {
+  return `${(Number(bytes || 0) / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function largeGitHubBlobProxyPath(cfg) {
+  return `/__gallery-github-blob/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;
+}
+
+function largeBlobRetryable(error) {
+  const status = Number(error?.status || 0);
+  return error?.retryable === true
+    || !status
+    || status === 429
+    || [500, 502, 503, 504].includes(status);
+}
+
+function supportsStreamingRequestUploads() {
+  try {
+    let duplexAccessed = false;
+    const request = new Request(location.origin, {
+      method: 'POST',
+      body: new ReadableStream(),
+      get duplex() {
+        duplexAccessed = true;
+        return 'half';
+      },
+    });
+    return duplexAccessed && !request.headers.has('Content-Type');
+  } catch {
+    return false;
+  }
+}
+
+async function uploadLargeGitHubBlob(file, gitPath, cfg) {
+  if (!cfg.token) throw new Error('大图片上传需要有效 GitHub Token');
+  if (file.size > CLOUD_PROXY_MAX_RAW_BYTES) {
+    throw new Error(`Cloud 稳定上传通道暂支持不超过 ${formatMiB(CLOUD_PROXY_MAX_RAW_BYTES)} 的单图`);
+  }
+  const canStreamRequest = supportsStreamingRequestUploads();
+  let compatibilityBase64 = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    progressText.textContent = `正在${canStreamRequest ? '流式' : '兼容模式'}上传大图片 ${
+      file.name || gitPath
+    }（${formatMiB(file.size)}）${attempt ? `，重试 ${attempt + 1}/3` : ''}...`;
+    try {
+      const body = canStreamRequest
+        ? createBase64UploadStream(file.stream())
+        : (compatibilityBase64 ??= await fileToBase64(file));
+      const resp = await fetch(largeGitHubBlobProxyPath(cfg), {
+        method: 'POST',
+        headers: {
+          Authorization: `token ${cfg.token}`,
+          'Content-Type': 'text/plain',
+          'X-Gallery-Blob-Size': String(file.size),
+          'X-Gallery-Content-Encoding': 'base64',
+        },
+        body,
+        ...(canStreamRequest ? { duplex: 'half' } : {}),
+      });
+      let data = null;
+      try { data = await resp.json(); } catch { data = null; }
+      if (!resp.ok) {
+        const err = new Error(data?.message || `大图片代理上传失败：HTTP ${resp.status}`);
+        err.status = resp.status;
+        const rateLimited = resp.status === 429
+          || resp.headers.get('x-ratelimit-remaining') === '0'
+          || /rate limit/i.test(data?.message || '');
+        if (rateLimited || [500, 502, 503, 504].includes(resp.status)) err.retryable = true;
+        const retryAfterSeconds = Number(resp.headers.get('retry-after') || 0);
+        if (retryAfterSeconds > 0) {
+          err.retryAfterMs = Math.min(10_000, Math.max(250, retryAfterSeconds * 1000));
+        }
+        throw err;
+      }
+      const sha = data?.sha;
+      if (!sha) throw new Error('GitHub 大图片 Blob 创建成功但未返回 SHA');
+      return sha;
+    } catch (error) {
+      lastError = error;
+      if (!largeBlobRetryable(error) || attempt === 2) throw error;
+      const delay = error?.retryAfterMs ?? (500 * (2 ** attempt));
+      await new Promise(resolve => setTimeout(resolve, Math.min(10_000, delay)));
+    }
+  }
+  throw lastError || new Error('大图片代理上传失败');
+}
+
 function categoryBlobShas(category) {
   const found = state.categories.find(item => item.name === category);
   return new Set((found?.files || []).map(file => file.sha).filter(Boolean));
@@ -1209,7 +1300,7 @@ upBtn.onclick = async () => {
       }
       const uploadConfig = { ...config };
       const blobConcurrency = plannedUploads.some(
-        result => result.item.file.size > 16 * 1024 * 1024,
+        result => result.item.file.size >= CLOUD_PROXY_BLOB_THRESHOLD_BYTES,
       ) ? 1 : 2;
       progressText.textContent = `正在建立 ${plannedUploads.length} 张图片的原子提交...`;
       const transaction = await commitGitHubUploadTransaction({
@@ -1220,18 +1311,31 @@ upBtn.onclick = async () => {
           method, path, { ...options, cfg: uploadConfig },
         ),
         concurrency: blobConcurrency,
-        items: plannedUploads.map(result => ({
-          path: result.gitPath,
-          size: result.item.file.size,
-          expectedBlobSha: result.item.blobSha,
-          loadContentBase64: () => fileToBase64(result.item.file),
-        })),
+        items: plannedUploads.map(result => {
+          const useBinaryProxy = result.item.file.size >= CLOUD_PROXY_BLOB_THRESHOLD_BYTES
+            && result.item.file.size <= CLOUD_PROXY_MAX_RAW_BYTES;
+          return {
+            path: result.gitPath,
+            size: result.item.file.size,
+            expectedBlobSha: result.item.blobSha,
+            loadContentBase64: () => fileToBase64(result.item.file),
+            createBlob: useBinaryProxy ? async () => {
+              const sha = await uploadLargeGitHubBlob(result.item.file, result.gitPath, uploadConfig);
+              if (result.item.blobSha && sha !== result.item.blobSha) {
+                throw new Error(`大图片上传完整性校验失败：${result.gitPath}`);
+              }
+              return sha;
+            } : null,
+          };
+        }),
         manifest: {
           path: GALLERY_INDEX_PATH,
           contentBase64: galleryIndexBase64(nextGalleryIndex),
         },
         onProgress: (completed, total) => {
-          progressText.textContent = `准备远端对象 ${completed} / ${total}...`;
+          progressText.textContent = completed === total
+            ? '远端对象准备完成，正在提交图库事务...'
+            : `远端对象已完成 ${completed} / ${total}，正在继续准备...`;
           progressBar.value = (completed / total) * 90;
         },
       });

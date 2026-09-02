@@ -9,7 +9,7 @@
   "assets": {
     "directory": ".",
     "binding": "ASSETS",
-    "run_worker_first": ["/__gallery-image/*"]
+    "run_worker_first": ["/__gallery-image/*", "/__gallery-github-blob/*"]
   },
   "compatibility_flags": [
     "nodejs_compat"
