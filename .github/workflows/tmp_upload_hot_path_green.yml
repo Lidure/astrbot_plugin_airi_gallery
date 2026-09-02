@@ -25,6 +25,8 @@ jobs:
         run: python tools/tmp_fix_upload_hot_path_patcher.py
       - name: Apply GREEN implementation
         run: python tools/tmp_apply_upload_hot_path_green.py
+      - name: Migrate safety tests to fast-path interfaces
+        run: python tools/tmp_migrate_upload_hot_path_tests.py
       - name: Compile changed Python modules
         run: python -m py_compile gallery_store.py gallery_remote.py gallery_sync.py main.py
       - name: Run upload hot-path regression
@@ -35,7 +37,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/tmp_apply_upload_hot_path_green.py tools/tmp_fix_upload_hot_path_patcher.py .github/workflows/tmp_upload_hot_path_green.yml
-          git add gallery_store.py gallery_remote.py gallery_sync.py main.py
+          git rm tools/tmp_apply_upload_hot_path_green.py tools/tmp_fix_upload_hot_path_patcher.py tools/tmp_migrate_upload_hot_path_tests.py .github/workflows/tmp_upload_hot_path_green.yml
+          git add gallery_store.py gallery_remote.py gallery_sync.py main.py tests/test_upload_hot_path_performance.py tests/test_gallery_store_upload_storage.py tests/test_upload_batch_snapshot.py tests/test_gallery_sync_github_batch.py tests/test_github_ref_lost_response.py tests/test_v21112_remote_consistency.py
           git commit -m 'perf: scope upload hot path to target category'
           git push origin HEAD:perf/upload-hot-path-category-scope
