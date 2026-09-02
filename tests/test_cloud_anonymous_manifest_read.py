@@ -3,6 +3,7 @@ import subprocess
 import textwrap
 
 
+# Regression: tokenless public browsing must not consume the 60/hour anonymous GitHub REST budget.
 APP_PATH = Path("pages/zz_cloud/app.js")
 HELPER_PATH = Path("pages/zz_cloud/manifest_tree.mjs")
 APP = APP_PATH.read_text(encoding="utf-8")
