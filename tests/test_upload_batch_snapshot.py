@@ -35,7 +35,8 @@ def _make_store(monkeypatch, tmp_path):
     real_remember = store.remember_file_hash
     real_save = store.save_hash_index
 
-    def indexed_local_images():
+    def indexed_local_images_for_category(category):
+        assert category == "airi"
         counters["local_snapshot"] += 1
         return ()
 
@@ -57,7 +58,9 @@ def _make_store(monkeypatch, tmp_path):
         counters["save"] += 1
         return real_save(force=force)
 
-    monkeypatch.setattr(store, "indexed_local_images", indexed_local_images)
+    monkeypatch.setattr(
+        store, "indexed_local_images_for_category", indexed_local_images_for_category
+    )
     monkeypatch.setattr(store, "next_index", next_index)
     monkeypatch.setattr(store, "remember_file_hash", remember)
     monkeypatch.setattr(store, "save_hash_index", save_hash_index)

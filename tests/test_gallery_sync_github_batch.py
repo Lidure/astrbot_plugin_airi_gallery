@@ -25,7 +25,7 @@ def _sync(*, update_outcomes, heads, trees=None, collision=False):
     remote.create_github_commit = Mock(
         side_effect=lambda message, tree, parent: f"commit-{parent}"
     )
-    remote.github_create_only_paths_exist = Mock(return_value=collision)
+    remote.github_create_only_paths_exist_at_ref = Mock(return_value=collision)
     tree_map = trees or {}
     remote.list_tree_at = Mock(side_effect=lambda tree_sha: tree_map.get(tree_sha))
 
@@ -99,8 +99,8 @@ def test_create_only_collision_fails_before_tree_or_commit_creation():
         "Sync batch",
         create_only_paths={PATH},
     ) is False
-    remote.github_create_only_paths_exist.assert_called_once_with(
-        "tree-old", {PATH}
+    remote.github_create_only_paths_exist_at_ref.assert_called_once_with(
+        "parent-old", {PATH}
     )
     remote.create_github_tree.assert_not_called()
     remote.create_github_commit.assert_not_called()
@@ -112,16 +112,16 @@ def test_create_only_paths_are_rechecked_after_ref_conflict():
         update_outcomes=[(False, "conflict")],
         heads=[("parent-old", "tree-old"), ("parent-fresh", "tree-fresh")],
     )
-    remote.github_create_only_paths_exist.side_effect = [False, True]
+    remote.github_create_only_paths_exist_at_ref.side_effect = [False, True]
 
     assert sync.commit_github_batch(
         ITEMS,
         "Sync batch",
         create_only_paths={PATH},
     ) is False
-    assert remote.github_create_only_paths_exist.call_args_list == [
-        call("tree-old", {PATH}),
-        call("tree-fresh", {PATH}),
+    assert remote.github_create_only_paths_exist_at_ref.call_args_list == [
+        call("parent-old", {PATH}),
+        call("parent-fresh", {PATH}),
     ]
     assert remote.create_github_commit.call_count == 1
     assert remote.update_github_ref.call_count == 1

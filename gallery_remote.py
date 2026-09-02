@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64 as b64mod
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping
+from urllib.parse import quote
 
 try:
     from .gallery_safety import classify_github_http_failure, remote_put_result
@@ -240,6 +242,34 @@ class GalleryRemote:
                     "size": entry.get("size", 0),
                     "type": entry.get("type", ""),
                     "mode": entry.get("mode", ""),
+                }
+            )
+        return result
+
+    def list_category_files(self, category: str) -> list[dict] | None:
+        """List one gallery category without downloading the repository tree."""
+        encoded = "/".join(quote(part, safe="") for part in ("gallery", str(category)))
+        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{encoded}"
+        status, data = self.request("GET", url, params={"ref": self.branch()})
+        if status == 404:
+            return []
+        if status != 200 or not isinstance(data, list):
+            self._warning(
+                f"[Git Sync] 获取远程分类目录失败 {category} (HTTP {status})"
+            )
+            return None
+        result: list[dict] = []
+        for entry in data:
+            if not isinstance(entry, Mapping) or str(entry.get("type", "")) != "file":
+                continue
+            path = str(entry.get("path", "")).strip()
+            if not path:
+                continue
+            result.append(
+                {
+                    "path": path,
+                    "sha": str(entry.get("sha", "")).strip(),
+                    "size": int(entry.get("size", 0) or 0),
                 }
             )
         return result
@@ -509,6 +539,43 @@ class GalleryRemote:
             self.ref_update_outcome = "uncertain"
         else:
             self.ref_update_outcome = "rejected"
+        return False
+
+    def github_create_only_paths_exist_at_ref(
+        self, ref_sha: str, paths: set[str]
+    ) -> bool | None:
+        """Check only the paths being created at one immutable commit ref."""
+        if not paths:
+            return False
+        if self.platform() != "github" or not str(ref_sha).strip():
+            return None
+
+        def check_path(path: str) -> bool | None:
+            encoded = "/".join(quote(part, safe="") for part in str(path).split("/"))
+            url = (
+                f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{encoded}"
+            )
+            status, _ = self.request(
+                "GET", url, params={"ref": str(ref_sha).strip()}, timeout=30
+            )
+            if status == 200:
+                return True
+            if status == 404:
+                return False
+            self._warning(
+                f"[Git Sync] 无法确认 GitHub create-only 路径占用状态 "
+                f"{path} (HTTP {status})。"
+            )
+            return None
+
+        ordered = sorted(paths)
+        max_workers = min(4, len(ordered))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(check_path, ordered))
+        if any(result is True for result in results):
+            return True
+        if any(result is None for result in results):
+            return None
         return False
 
     def github_create_only_paths_exist(

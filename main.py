@@ -1741,8 +1741,11 @@ class Main(Star):
         """Compatibility delegate; GalleryStore owns active local indexed images."""
         return self.store.indexed_local_images()
 
-    def _gallery_manifest_payload(self) -> dict:
-        self._ensure_perceptual_index()
+    def _gallery_manifest_payload(self, category: str | None = None) -> dict:
+        if category:
+            self.store.ensure_perceptual_index_for_category(category)
+        else:
+            self._ensure_perceptual_index()
         with self._hash_index_lock:
             files = {
                 path: {"perceptual_hash": str(entry.get("perceptual_hash", ""))}
@@ -1754,6 +1757,7 @@ class Main(Star):
         return {
             "version": 1,
             "algorithm": GALLERY_INDEX_ALGORITHM,
+            "max_index": self.store.current_max_index(),
             "files": files,
         }
 

@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -22,6 +23,7 @@ try:
         indexed_images_from_remote_tree,
         is_remote_gallery_image_path,
         matches_verified_remote_content,
+        normalize_perceptual_manifest,
         remote_gallery_max_index,
         resolve_gallery_local_path,
         should_preserve_local_sync_content,
@@ -41,6 +43,7 @@ except ImportError:
         indexed_images_from_remote_tree,
         is_remote_gallery_image_path,
         matches_verified_remote_content,
+        normalize_perceptual_manifest,
         remote_gallery_max_index,
         resolve_gallery_local_path,
         should_preserve_local_sync_content,
@@ -296,8 +299,8 @@ class GallerySync:
 
             collision = False
             if create_only_paths:
-                collision = self.remote.github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
+                collision = self.remote.github_create_only_paths_exist_at_ref(
+                    parent_sha, create_only_paths
                 )
             if collision is not False:
                 if collision:
@@ -359,8 +362,8 @@ class GallerySync:
             self._info("[Git Sync] GitHub ref 更新冲突，刷新 HEAD 后重试本批次。")
             retry_collision = False
             if create_only_paths:
-                retry_collision = self.remote.github_create_only_paths_exist(
-                    base_tree_sha, create_only_paths
+                retry_collision = self.remote.github_create_only_paths_exist_at_ref(
+                    parent_sha, create_only_paths
                 )
             if retry_collision is not False:
                 if retry_collision:
@@ -776,20 +779,87 @@ class GallerySync:
     def rollback_stored_image(self, value) -> None:
         setattr(self.store, "rollback_stored_image", value)
 
-    def prepare_remote_upload_guard(
+    @staticmethod
+    def _manifest_max_index(payload: object) -> int | None:
+        if not isinstance(payload, Mapping):
+            return None
+        value = payload.get("max_index")
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
+    def _prepare_github_upload_guard_fast(
+        self, category: str
+    ) -> tuple[bool, tuple[IndexedImage, ...], int] | None:
+        list_category = getattr(self.remote, "list_category_files", None)
+        if not callable(list_category):
+            return None
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                category_future = executor.submit(list_category, category)
+                manifest_future = executor.submit(self.remote.get_file, self.manifest_path)
+                category_entries = category_future.result()
+                manifest_raw = manifest_future.result()
+        except Exception as exc:
+            self._debug(f"[Git Sync] 上传快速快照不可用，回退完整 tree：{exc}")
+            return None
+        if category_entries is None or manifest_raw is None:
+            return None
+        try:
+            payload = json.loads(manifest_raw.decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(payload, Mapping):
+            return None
+        if str(payload.get("algorithm", "")).strip() != self.manifest_algorithm:
+            return None
+        max_index = self._manifest_max_index(payload)
+        if max_index is None:
+            return None
+        manifest = normalize_perceptual_manifest(payload)
+        category_prefix = f"gallery/{category}/"
+        records: list[IndexedImage] = []
+        category_max = 0
+        for entry in category_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            path = str(entry.get("path", "")).strip()
+            if (
+                not path.startswith(category_prefix)
+                or not is_remote_gallery_image_path(path, self.image_suffixes)
+                or len(Path(path).parts) != 3
+            ):
+                continue
+            perceptual_hash = str(manifest.get(path, "")).strip()
+            if not perceptual_hash:
+                return None
+            stem = Path(path).stem
+            if stem.isdigit():
+                category_max = max(category_max, int(stem))
+            records.append(
+                IndexedImage(
+                    path=path,
+                    blob_sha=str(entry.get("sha", "")).strip(),
+                    perceptual_hash=perceptual_hash,
+                )
+            )
+        if category_max > max_index:
+            return None
+        return True, tuple(records), max_index
+
+    def _prepare_remote_upload_guard_legacy(
         self, category: str
     ) -> tuple[bool, tuple[IndexedImage, ...], int]:
-        """Snapshot category-local dedup state and global numbering before upload."""
-        if not self.git_sync_enabled:
-            return True, (), 0
-
         tree = self.remote.list_tree()
         if tree is None:
             return False, (), 0
         if not callable(self.remote_manifest_reader):
             self._warning("[Git Sync] 远程感知索引读取器未配置，拒绝上传。")
             return False, (), 0
-
         manifest_ok, manifest = self.remote_manifest_reader(tree)
         if not manifest_ok:
             return False, (), 0
@@ -800,6 +870,25 @@ class GallerySync:
             tuple(record for record in records if record.path.startswith(category_prefix)),
             remote_gallery_max_index(tree, self.image_suffixes),
         )
+
+    def prepare_remote_upload_guard(
+        self, category: str
+    ) -> tuple[bool, tuple[IndexedImage, ...], int]:
+        """Snapshot category-local dedup state and global numbering before upload."""
+        if not self.git_sync_enabled:
+            return True, (), 0
+
+        if (
+            self.remote.platform() == "github"
+            and str(self.remote.owner()).strip()
+            and str(self.remote.repo()).strip()
+        ):
+            fast = self._prepare_github_upload_guard_fast(category)
+            if fast is not None:
+                return fast
+            self._debug("[Git Sync] 上传快速快照不完整，回退 recursive tree 兼容路径。")
+
+        return self._prepare_remote_upload_guard_legacy(category)
 
     def push_github_items(
         self,
@@ -898,7 +987,7 @@ class GallerySync:
                 return False
             try:
                 manifest_payload = json.dumps(
-                    self.manifest_payload_factory(),
+                    self.manifest_payload_factory(category),
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
@@ -1004,6 +1093,9 @@ class GallerySync:
             for path, sha in self.remote.sha_cache.items()
         }
         self.store.category_hash_cache.clear()
+        invalidate_max_index = getattr(self.store, "invalidate_max_index_cache", None)
+        if callable(invalidate_max_index):
+            invalidate_max_index()
         self.store.save_hash_index(force=True)
 
     def stage_local_renumber(
