@@ -46,5 +46,13 @@ def test_cloud_worker_only_wraps_stream_and_never_base64_encodes_large_files():
     assert 'X-Gallery-Content-Encoding' in WORKER
 
 
+def test_cloud_worker_forwards_large_blob_with_known_content_length():
+    # Generic ReadableStream bodies are sent chunked by Workers; GitHub forwarding must use
+    # FixedLengthStream so the upstream request has an exact Content-Length without buffering.
+    assert 'FixedLengthStream' in WORKER
+    assert 'gitHubBlobJsonLength' in WORKER
+    assert '.pipeTo(' in WORKER
+
+
 def test_cloud_worker_runs_before_static_assets_for_large_blob_route():
     assert '/__gallery-github-blob/*' in WRANGLER
