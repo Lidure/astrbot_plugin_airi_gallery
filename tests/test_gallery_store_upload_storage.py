@@ -65,13 +65,13 @@ def test_store_batch_reuses_one_local_snapshot_and_number_cursor(monkeypatch, tm
         raising=False,
     )
     counters = {"snapshot": 0, "next_index": 0, "save": 0}
-    real_indexed = store.indexed_local_images
+    real_indexed = store.indexed_local_images_for_category
     real_next_index = store.next_index
     real_save = store.save_hash_index
 
-    def indexed_local_images():
+    def indexed_local_images_for_category(category):
         counters["snapshot"] += 1
-        return real_indexed()
+        return real_indexed(category)
 
     def next_index():
         counters["next_index"] += 1
@@ -81,7 +81,9 @@ def test_store_batch_reuses_one_local_snapshot_and_number_cursor(monkeypatch, tm
         counters["save"] += 1
         return real_save(force=force)
 
-    monkeypatch.setattr(store, "indexed_local_images", indexed_local_images)
+    monkeypatch.setattr(
+        store, "indexed_local_images_for_category", indexed_local_images_for_category
+    )
     monkeypatch.setattr(store, "next_index", next_index)
     monkeypatch.setattr(store, "save_hash_index", save_hash_index)
 

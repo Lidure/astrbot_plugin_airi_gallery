@@ -195,7 +195,7 @@ def test_upload_transaction_commits_images_and_manifest_together_on_github():
     )[0]
 
     assert "self.manifest_path" in block
-    assert "self.manifest_payload_factory()" in block
+    assert "self.manifest_payload_factory(category)" in block
     assert "self.push_github_items(" in block
     assert "create_only_paths=image_paths" in block
     assert "self.manifest_publisher" in block  # Gitee compensation path only.

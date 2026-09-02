@@ -32,7 +32,7 @@ def _make_sync(heads, tree_payloads, update_results):
     remote.create_github_commit = Mock(
         side_effect=lambda message, tree, parent: f"commit-{parent}"
     )
-    remote.github_create_only_paths_exist = Mock(return_value=False)
+    remote.github_create_only_paths_exist_at_ref = Mock(return_value=False)
     remote.list_tree_at = Mock(side_effect=lambda tree_sha: tree_payloads.get(tree_sha))
 
     updates = iter(update_results)
