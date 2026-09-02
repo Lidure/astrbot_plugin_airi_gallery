@@ -53,3 +53,14 @@ test('worker JSON wrapper fails once the encoded proxy body limit is exceeded', 
   const body = createGitHubBlobJsonStream(source, { maxBytes: 7 });
   await assert.rejects(new Response(body).text(), /exceeds/i);
 });
+
+test('GitHub blob JSON length is exact for fixed-length upstream requests', async () => {
+  assert.equal(existsSync(helperPath), true, 'streaming helper module must exist');
+  const { gitHubBlobJsonLength } = await import(pathToFileURL(helperPath).href);
+  const encoder = new TextEncoder();
+  for (const rawBytes of [1, 2, 3, 4, 5, 5 * 1024 * 1024 + 1]) {
+    const encoded = Buffer.alloc(rawBytes).toString('base64');
+    const expected = encoder.encode(JSON.stringify({ content: encoded, encoding: 'base64' })).byteLength;
+    assert.equal(gitHubBlobJsonLength(rawBytes), expected, `rawBytes=${rawBytes}`);
+  }
+});
