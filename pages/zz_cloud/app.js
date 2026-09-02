@@ -5,6 +5,7 @@ import {
   similarRemoteMatches,
 } from './upload_transaction.mjs';
 import { createBase64UploadStream } from './blob_stream.mjs';
+import { manifestIndexToTree } from './manifest_tree.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
@@ -385,8 +386,34 @@ async function ghRequest(method, path, { body = null, params = {}, cfg = config,
   return { status: resp.status, data };
 }
 
+async function getPublicManifestTree(cfg = config, { signal = null } = {}) {
+  const owner = encodeURIComponent(cfg.owner);
+  const repo = encodeURIComponent(cfg.repo);
+  const branch = (cfg.branch || 'main').split('/').map(encodeURIComponent).join('/');
+  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/gallery/gallery_index.json`;
+  const resp = await fetch(rawUrl, {
+    signal,
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  });
+  if (!resp.ok) throw new Error(`公开图库索引不可用：HTTP ${resp.status}`);
+  let indexData;
+  try { indexData = await resp.json(); }
+  catch { throw new Error('公开图库索引格式无效'); }
+  return manifestIndexToTree(indexData);
+}
+
 async function getTree(cfg = config, { signal = null } = {}) {
   const owner = cfg.owner, repo = cfg.repo, branch = cfg.branch || 'main';
+
+  if (cfg.platform === 'github' && !cfg.token) {
+    try {
+      return await getPublicManifestTree(cfg, { signal });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      console.warn('[Gallery] 公开图库索引读取失败，回退匿名 GitHub API:', error?.message || error);
+    }
+  }
 
   if (cfg.platform === 'gitee') {
     const { data: branchData } = await ghRequest('GET', `/repos/${owner}/${repo}/branches/${branch}`, { cfg, signal });
