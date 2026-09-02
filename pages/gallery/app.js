@@ -124,6 +124,32 @@ function makeBlobUrl(data, contentType) {
   }
 }
 
+function contentTypeForImageName(name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".bmp")) return "image/bmp";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".jfif")) return "image/jpeg";
+  if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "image/tiff";
+  return "image/png";
+}
+
+function normalizeImagePayload(payload, name) {
+  const fallbackType = contentTypeForImageName(name);
+  if (typeof payload === "string") {
+    return { data: payload, contentType: fallbackType };
+  }
+  if (!payload || typeof payload !== "object") {
+    return { data: "", contentType: fallbackType };
+  }
+  return {
+    data: typeof payload.data === "string" ? payload.data : "",
+    contentType: typeof payload.content_type === "string" && payload.content_type
+      ? payload.content_type
+      : fallbackType,
+  };
+}
+
 function releasePreviewObjectUrls(urls) {
   for (const url of urls) {
     try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale URLs */ }
@@ -138,7 +164,8 @@ function releaseModalObjectUrl() {
 }
 
 function setModalImagePayload(data, alt) {
-  const url = makeBlobUrl(data?.data, data?.content_type);
+  const imagePayload = normalizeImagePayload(data, alt);
+  const url = makeBlobUrl(imagePayload.data, imagePayload.contentType);
   if (!url) return false;
   releaseModalObjectUrl();
   modalObjectUrl = url;
@@ -175,8 +202,9 @@ async function loadGridImage(image) {
   if (!category || !name) return;
   image.dataset.loadState = "loading";
   try {
-    const data = await apiGet("category_image", { category, name });
-    const url = makeBlobUrl(data?.data, data?.content_type);
+    const response = await apiGet("category_image", { category, name });
+    const imagePayload = normalizeImagePayload(response, name);
+    const url = makeBlobUrl(imagePayload.data, imagePayload.contentType);
     if (!url) throw new Error("图片数据为空");
     if (!image.isConnected || image.dataset.category !== category || image.dataset.name !== name) {
       URL.revokeObjectURL(url);
