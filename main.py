@@ -3213,8 +3213,11 @@ class Main(Star):
                 if decision.reason == "exact_duplicate":
                     exact_count += 1
                     await self._send_upload_decision_hint(
-                event, decision, pending_image_bytes=image_bytes, pending_name=pending_name
-            )
+                        event,
+                        decision,
+                        pending_image_bytes=image_bytes,
+                        pending_name=pending_name,
+                    )
                     continue
                 if decision.reason == "similar":
                     similar_count += 1
@@ -3226,8 +3229,11 @@ class Main(Star):
                         fingerprint=decision.fingerprint,
                     )
                     await self._send_upload_decision_hint(
-                event, decision, pending_image_bytes=image_bytes, pending_name=pending_name
-            )
+                        event,
+                        decision,
+                        pending_image_bytes=image_bytes,
+                        pending_name=pending_name,
+                    )
                     # One pending candidate per user/session keeps /强制上传 unambiguous.
                     break
                 continue
