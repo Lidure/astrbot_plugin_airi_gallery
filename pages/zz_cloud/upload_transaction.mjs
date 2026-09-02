@@ -146,7 +146,10 @@ export async function commitGitHubUploadTransaction({
     if (Number(item.size) > GITHUB_MAX_BLOB_BYTES) {
       throw new Error(`${item.path} 超过 GitHub 单文件 100 MiB 限制`);
     }
-    if (!item.path || typeof item.loadContentBase64 !== 'function') {
+    if (
+      !item.path
+      || (typeof item.loadContentBase64 !== 'function' && typeof item.createBlob !== 'function')
+    ) {
       throw new Error('上传图片描述不完整');
     }
   }
@@ -217,23 +220,28 @@ export async function commitGitHubUploadTransaction({
   ];
   let completed = 0;
   const blobEntries = await boundedMap(objects, concurrency, async object => {
-    let content = await object.loadContentBase64();
-    try {
-      const result = await safeObjectRequest(
-        request,
-        'POST',
-        `${api}/git/blobs`,
-        { body: { content, encoding: 'base64' } },
-        sleep,
-      );
-      const sha = result?.data?.sha;
-      if (!sha) throw new Error(`GitHub blob 创建失败：${object.path}`);
-      completed++;
-      onProgress(completed, objects.length);
-      return { path: object.path, mode: '100644', type: 'blob', sha };
-    } finally {
-      content = null;
+    let sha = '';
+    if (typeof object.createBlob === 'function') {
+      sha = await object.createBlob();
+    } else {
+      let content = await object.loadContentBase64();
+      try {
+        const result = await safeObjectRequest(
+          request,
+          'POST',
+          `${api}/git/blobs`,
+          { body: { content, encoding: 'base64' } },
+          sleep,
+        );
+        sha = result?.data?.sha || '';
+      } finally {
+        content = null;
+      }
     }
+    if (!sha) throw new Error(`GitHub blob 创建失败：${object.path}`);
+    completed++;
+    onProgress(completed, objects.length);
+    return { path: object.path, mode: '100644', type: 'blob', sha };
   });
 
   async function createCommit(currentBase) {
