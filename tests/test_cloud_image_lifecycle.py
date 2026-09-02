@@ -41,6 +41,24 @@ def test_cloud_grid_deduplicates_inflight_fetches_and_ignores_stale_renders():
     assert guard_pos < helper_pos
 
 
+def test_cloud_builtin_proxy_falls_back_to_raw_blob_loading_when_image_errors():
+    assert "async function recoverProxyImage(" in SOURCE
+    recover_block = block("async function recoverProxyImage(", "async function loadCategoryImages()")
+    assert "getImageObjectUrl(file)" in recover_block
+    assert "image.onerror = null" in recover_block
+
+    load_block = block("async function loadCategoryImages()", "// ──────────────────────────────────────────────\n// UI: Pagination")
+    assert "recoverProxyImage(img, file, renderToken)" in load_block
+
+
+def test_cloud_github_contents_fallback_encodes_each_path_segment():
+    assert "function encodePathSegments(" in SOURCE
+    content_block = block("async function getFileContent(", "function imageMime(")
+    assert "const encodedPath = encodePathSegments(path);" in content_block
+    assert "/contents/${encodedPath}" in content_block
+    assert "/contents/${path}" not in content_block
+
+
 def test_cloud_page_releases_blob_urls_on_unload_and_modal_close():
     assert "window.addEventListener('beforeunload'" in SOURCE
     assert "clearImageCache();" in SOURCE
