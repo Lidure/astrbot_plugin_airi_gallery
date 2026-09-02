@@ -1,6 +1,6 @@
 const ENCODER = new TextEncoder();
-const JSON_PREFIX = ENCODER.encode('{\"content\":\"');
-const JSON_SUFFIX = ENCODER.encode('\",\"encoding\":\"base64\"}');
+const JSON_PREFIX = ENCODER.encode('{"content":"');
+const JSON_SUFFIX = ENCODER.encode('","encoding":"base64"}');
 const BASE64_BLOCK_BYTES = 3 * 8192;
 
 function bytesToBase64(bytes) {
@@ -20,6 +20,14 @@ function mergeCarry(carry, chunk) {
   merged.set(carry, 0);
   merged.set(chunk, carry.length);
   return merged;
+}
+
+export function gitHubBlobJsonLength(rawBytes) {
+  if (!Number.isSafeInteger(rawBytes) || rawBytes < 0) {
+    throw new TypeError('raw blob size must be a non-negative safe integer');
+  }
+  const encodedBytes = Math.ceil(rawBytes / 3) * 4;
+  return JSON_PREFIX.byteLength + encodedBytes + JSON_SUFFIX.byteLength;
 }
 
 export function createBase64UploadStream(source) {
