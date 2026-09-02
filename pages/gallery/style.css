@@ -358,3 +358,57 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* Upload duplicate/similarity comparison */
+.compare-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(30, 25, 31, 0.68);
+}
+.compare-mask.show { display: flex; }
+.compare-dialog {
+  width: min(980px, 96vw);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.compare-heading { margin-bottom: 14px; }
+.compare-heading h2 { margin: 0; font-size: 18px; }
+.compare-heading p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.compare-list { display: grid; gap: 14px; }
+.compare-row {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+.compare-row h3 { margin: 0 0 8px; font-size: 13px; }
+.compare-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.compare-card { min-width: 0; }
+.compare-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.compare-image,
+.compare-image-placeholder {
+  width: 100%;
+  height: min(32vh, 280px);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.compare-image { display: block; object-fit: contain; cursor: zoom-in; }
+.compare-image-placeholder { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.compare-meta { margin-top: 7px; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+.compare-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 640px) {
+  .compare-dialog { padding: 14px; }
+  .compare-images { grid-template-columns: 1fr; }
+  .compare-image, .compare-image-placeholder { height: min(38vh, 260px); }
+}
