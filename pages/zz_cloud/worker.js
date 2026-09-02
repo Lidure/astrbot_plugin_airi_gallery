@@ -1,4 +1,4 @@
-import { createGitHubBlobJsonStream } from './blob_stream.mjs';
+import { createGitHubBlobJsonStream, gitHubBlobJsonLength } from './blob_stream.mjs';
 
 const IMAGE_ROUTE = '/__gallery-image/';
 const GITHUB_BLOB_ROUTE = '/__gallery-github-blob/';
@@ -89,13 +89,17 @@ async function proxyGitHubBlob(request, target) {
   if (!request.body) return jsonError('上传内容为空', 400);
 
   const declaredSize = Number(request.headers.get('X-Gallery-Blob-Size') || 0);
-  if (!Number.isFinite(declaredSize) || declaredSize <= 0) return jsonError('上传大小无效', 400);
+  if (!Number.isSafeInteger(declaredSize) || declaredSize <= 0) return jsonError('上传大小无效', 400);
   if (declaredSize > CLOUD_PROXY_MAX_RAW_BYTES) {
     return jsonError('Cloud 稳定上传通道单图上限为 64 MiB', 413);
   }
 
   const apiUrl = `${GITHUB_API_ROOT}${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/git/blobs`;
-  const body = createGitHubBlobJsonStream(request.body, { maxBytes: CLOUD_PROXY_MAX_ENCODED_BYTES });
+  const jsonStream = createGitHubBlobJsonStream(request.body, { maxBytes: CLOUD_PROXY_MAX_ENCODED_BYTES });
+  const expectedJsonBytes = gitHubBlobJsonLength(declaredSize);
+  const { readable, writable } = new FixedLengthStream(expectedJsonBytes);
+  const pipePromise = jsonStream.pipeTo(writable);
+
   let upstream;
   try {
     upstream = await fetch(apiUrl, {
@@ -106,11 +110,15 @@ async function proxyGitHubBlob(request, target) {
         'Content-Type': 'application/json',
         'X-GitHub-Api-Version': '2022-11-28',
       },
-      body,
+      body: readable,
     });
+    await pipePromise;
   } catch (error) {
+    try { await pipePromise; } catch {}
     const message = String(error?.message || error || '');
-    if (/exceeds/i.test(message)) return jsonError('大图片上传内容超过代理限制', 413);
+    if (/exceeds|fixed length|length/i.test(message)) {
+      return jsonError('大图片上传长度校验失败，请重新选择文件后重试', 400);
+    }
     return jsonError('Cloudflare 到 GitHub 的大图片上传连接失败', 502);
   }
 
@@ -118,6 +126,7 @@ async function proxyGitHubBlob(request, target) {
     'Content-Type': upstream.headers.get('Content-Type') || 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
+    'X-Gallery-Proxy-Mode': 'fixed-length',
   });
   for (const name of ['retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset']) {
     const value = upstream.headers.get(name);
