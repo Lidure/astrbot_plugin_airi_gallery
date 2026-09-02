@@ -1,6 +1,7 @@
 from pathlib import Path
 
 
+# v2.11.10 is the known-good browsing baseline for both web frontends.
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / "main.py").read_text(encoding="utf-8")
 WEBUI = (ROOT / "pages" / "gallery" / "app.js").read_text(encoding="utf-8")
