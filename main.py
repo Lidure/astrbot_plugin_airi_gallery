@@ -1322,7 +1322,7 @@ class Main(Star):
         suffix = img_path.suffix.lower()
         ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
         data = b64mod.b64encode(img_path.read_bytes()).decode()
-        return jsonify({"data": data, "content_type": ct})
+        return jsonify({"image": data, "content_type": ct})
 
     async def _api_delete_image(self):
         from quart import request, jsonify

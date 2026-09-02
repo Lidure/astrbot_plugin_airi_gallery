@@ -124,6 +124,16 @@ function makeBlobUrl(data, contentType) {
   }
 }
 
+function normalizeImagePayload(payload) {
+  if (typeof payload === "string") {
+    return { image: payload, contentType: "image/png" };
+  }
+  return {
+    image: payload?.image || payload?.data || "",
+    contentType: payload?.content_type || payload?.ct || "image/png",
+  };
+}
+
 function releasePreviewObjectUrls(urls) {
   for (const url of urls) {
     try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale URLs */ }
@@ -138,7 +148,8 @@ function releaseModalObjectUrl() {
 }
 
 function setModalImagePayload(data, alt) {
-  const url = makeBlobUrl(data?.data, data?.content_type);
+  const payload = normalizeImagePayload(data);
+  const url = makeBlobUrl(payload.image, payload.contentType);
   if (!url) return false;
   releaseModalObjectUrl();
   modalObjectUrl = url;
@@ -176,7 +187,8 @@ async function loadGridImage(image) {
   image.dataset.loadState = "loading";
   try {
     const data = await apiGet("category_image", { category, name });
-    const url = makeBlobUrl(data?.data, data?.content_type);
+    const payload = normalizeImagePayload(data);
+  const url = makeBlobUrl(payload.image, payload.contentType);
     if (!url) throw new Error("图片数据为空");
     if (!image.isConnected || image.dataset.category !== category || image.dataset.name !== name) {
       URL.revokeObjectURL(url);

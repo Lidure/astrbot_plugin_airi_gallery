@@ -315,6 +315,20 @@ async function withRetry(fn, maxRetries = 2) {
 // ──────────────────────────────────────────────
 // GitHub / Gitee API
 // ──────────────────────────────────────────────
+function encodeRepoPath(path) {
+  return String(path || '').split('/').map(encodeURIComponent).join('/');
+}
+
+function rawImageUrl(file, cfg = config) {
+  if (cfg.platform === 'gitee') return '';
+  const owner = encodeURIComponent(cfg.owner || '');
+  const repo = encodeURIComponent(cfg.repo || '');
+  const branch = (cfg.branch || 'main').split('/').map(encodeURIComponent).join('/');
+  const path = encodeRepoPath(typeof file === 'string' ? file : file?.path || '');
+  if (!owner || !repo || !path) return '';
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+}
+
 function apiBase(cfg = config) {
   return cfg.platform === 'gitee'
     ? 'https://gitee.com/api/v5'
@@ -438,10 +452,10 @@ async function getTree(cfg = config, { signal = null } = {}) {
 
 async function getFileContent(path, { signal = null, cfg = config } = {}) {
   const branch = cfg.branch || 'main';
+  const encodedPath = encodeRepoPath(path);
 
   // GitHub: prefer raw CDN (no API rate limit, faster, no auth needed for public repos)
   if (cfg.platform !== 'gitee') {
-    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
     const rawUrl = `https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${branch}/${encodedPath}`;
     // No Authorization header — public repos don't need it, and sending one
     // triggers a CORS preflight that raw.githubusercontent.com doesn't support well.
@@ -456,7 +470,7 @@ async function getFileContent(path, { signal = null, cfg = config } = {}) {
     }
     // Fallback: try Contents API (handles private repos & case-insensitive owner)
     try {
-      const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+      const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}`, {
         params: { ref: branch }, cfg, signal
       });
       if (data?.sha) state.shaCache[path] = data.sha;
@@ -478,7 +492,7 @@ async function getFileContent(path, { signal = null, cfg = config } = {}) {
   }
 
   // Gitee: use API (no raw CDN equivalent)
-  const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+  const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}`, {
     params: { ref: branch }, cfg, signal
   });
   if (data?.sha) state.shaCache[path] = data.sha;
@@ -954,14 +968,37 @@ async function loadCategoryImages() {
     div.appendChild(badge);
     if (canWrite()) div.appendChild(del);
 
-    const proxyUrl = useImageProxy() ? imageProxyUrl(file) : null;
-    if (proxyUrl) {
+    const directUrl = config.platform === 'github' ? rawImageUrl(file) : '';
+    if (directUrl) {
       div.innerHTML = '';
       const img = document.createElement('img');
-      img.src = proxyUrl;
+      img.src = directUrl;
       img.loading = 'lazy';
       img.decoding = 'async';
       img.alt = fileName;
+      img.onerror = () => {
+        img.onerror = null;
+        imagePool(() => withRetry(async () => {
+          if (renderToken !== state.imageRenderToken) return;
+          const blobUrl = await getImageObjectUrl(file);
+          if (!blobUrl || renderToken !== state.imageRenderToken) return;
+          img.src = blobUrl;
+        })).catch((err) => {
+          if (renderToken !== state.imageRenderToken) return;
+          console.warn(`[Gallery] raw/CDN fallback failed: ${fileName}`, err?.message);
+          div.replaceChildren();
+          const errorBox = document.createElement('div');
+          errorBox.className = 'grid-error';
+          const errorTitle = document.createElement('span');
+          errorTitle.textContent = '加载失败';
+          const errorHint = document.createElement('span');
+          errorHint.className = 'grid-error-hint';
+          errorHint.textContent = '点击重试';
+          errorBox.append(errorTitle, errorHint);
+          div.append(errorBox, badge);
+          if (canWrite()) div.appendChild(del);
+        });
+      };
       div.appendChild(img);
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
@@ -996,11 +1033,22 @@ async function loadCategoryImages() {
 
     div.onclick = async () => {
       try {
-        if (useImageProxy()) {
-          mimg.src = imageProxyUrl(file);
+        if (config.platform === 'github') {
+          const directUrl = rawImageUrl(file);
+          mimg.onerror = async () => {
+            mimg.onerror = null;
+            try {
+              const fallbackUrl = await getImageObjectUrl(file);
+              if (fallbackUrl) mimg.src = fallbackUrl;
+            } catch {
+              toast('无法加载图片', false);
+            }
+          };
+          mimg.src = directUrl;
           mask.classList.add('show');
           return;
         }
+        mimg.onerror = null;
         const blobUrl = await getImageObjectUrl(file);
         if (!blobUrl) return;
         mimg.src = blobUrl;
