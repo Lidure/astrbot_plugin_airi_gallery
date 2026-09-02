@@ -146,9 +146,9 @@ def test_github_create_only_checks_exact_paths_at_commit_ref_without_recursive_t
 
     def request(method, url, json_body=None, params=None, **kwargs):
         calls.append((method, url, params))
-        assert "/contents/gallery/airi/43.png" in url
+        assert url.endswith("/contents/gallery/airi")
         assert params == {"ref": "commit-sha"}
-        return 404, None
+        return 200, [{"type": "file", "path": "gallery/airi/42.png"}]
 
     remote.request = Mock(side_effect=request)
 

@@ -544,34 +544,50 @@ class GalleryRemote:
     def github_create_only_paths_exist_at_ref(
         self, ref_sha: str, paths: set[str]
     ) -> bool | None:
-        """Check only the paths being created at one immutable commit ref."""
+        """Check create-only paths from bounded immutable directory snapshots."""
         if not paths:
             return False
         if self.platform() != "github" or not str(ref_sha).strip():
             return None
 
-        def check_path(path: str) -> bool | None:
-            encoded = "/".join(quote(part, safe="") for part in str(path).split("/"))
+        groups: dict[str, set[str]] = {}
+        for path in paths:
+            normalized = str(path).strip().strip("/")
+            if not normalized or "/" not in normalized:
+                return None
+            parent, _ = normalized.rsplit("/", 1)
+            groups.setdefault(parent, set()).add(normalized)
+
+        def check_directory(item: tuple[str, set[str]]) -> bool | None:
+            parent, wanted = item
+            encoded = "/".join(quote(part, safe="") for part in parent.split("/"))
             url = (
                 f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{encoded}"
             )
-            status, _ = self.request(
+            status, data = self.request(
                 "GET", url, params={"ref": str(ref_sha).strip()}, timeout=30
             )
-            if status == 200:
-                return True
             if status == 404:
                 return False
-            self._warning(
-                f"[Git Sync] 无法确认 GitHub create-only 路径占用状态 "
-                f"{path} (HTTP {status})。"
-            )
-            return None
+            if status != 200 or not isinstance(data, list):
+                self._warning(
+                    f"[Git Sync] 无法确认 GitHub create-only 目录占用状态 "
+                    f"{parent} (HTTP {status})。"
+                )
+                return None
+            existing = {
+                str(entry.get("path", "")).strip()
+                for entry in data
+                if isinstance(entry, Mapping)
+                and str(entry.get("type", "")).strip() == "file"
+                and str(entry.get("path", "")).strip()
+            }
+            return bool(existing.intersection(wanted))
 
-        ordered = sorted(paths)
-        max_workers = min(4, len(ordered))
+        ordered_groups = sorted(groups.items())
+        max_workers = min(4, len(ordered_groups))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(check_path, ordered))
+            results = list(executor.map(check_directory, ordered_groups))
         if any(result is True for result in results):
             return True
         if any(result is None for result in results):
