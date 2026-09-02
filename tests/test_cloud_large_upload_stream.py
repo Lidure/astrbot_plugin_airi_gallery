@@ -35,6 +35,7 @@ def test_cloud_large_github_files_use_same_origin_streaming_proxy():
 
 
 def test_cloud_worker_only_wraps_stream_and_never_base64_encodes_large_files():
+    # Keep Base64 CPU on the browser side so the Worker remains safe on low CPU quotas.
     assert '/__gallery-github-blob/' in WORKER
     assert 'createGitHubBlobJsonStream' in WORKER
     assert 'btoa(' not in WORKER
