@@ -63,6 +63,7 @@ const pageIndicator = $('page-indicator'), perPageInput = $('per-page-input');
 const themeBtn = $('theme-btn');
 const mask = $('mask'), mimg = $('mimg'), closeBtn = $('close');
 const confirmMask = $('confirm-mask'), confirmText = $('confirm-text');
+const confirmComparisons = $('confirm-comparisons');
 const confirmImg = $('confirm-img');
 const confirmYes = $('confirm-yes'), confirmNo = $('confirm-no');
 
@@ -157,14 +158,114 @@ function toast(text, ok = true) {
   setTimeout(() => el.remove(), 3500);
 }
 
+function cloudComparisonMeta(match) {
+  const parts = [];
+  const number = match?.number || getImageIndex(match?.path || '');
+  if (number) parts.push(`#${number}`);
+  const pathParts = String(match?.path || '').split('/');
+  if (pathParts.length >= 3) {
+    parts.push(`分类 ${pathParts[1]}`);
+    parts.push(pathParts.slice(2).join('/'));
+  }
+  const similarity = Number(match?.similarity);
+  if (Number.isFinite(similarity)) parts.push(`相似度 ${(similarity * 100).toFixed(1)}%`);
+  return parts.join(' · ') || '图库候选';
+}
+
+function openConfirmComparisonImage(url, alt) {
+  if (!url) return;
+  mimg.onerror = null;
+  mimg.src = url;
+  mimg.alt = alt || '图片对比预览';
+  mask.classList.add('show');
+}
+
+function createConfirmComparisonCard(label, imageUrl, meta, alt) {
+  const card = document.createElement('article');
+  card.className = 'compare-card';
+  const heading = document.createElement('strong');
+  heading.className = 'compare-label';
+  heading.textContent = label;
+  card.appendChild(heading);
+  if (imageUrl) {
+    const image = document.createElement('img');
+    image.className = 'compare-image';
+    image.src = imageUrl;
+    image.alt = alt || label;
+    image.addEventListener('click', () => openConfirmComparisonImage(imageUrl, image.alt));
+    card.appendChild(image);
+  } else {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'compare-image-placeholder';
+    placeholder.textContent = '图片暂时无法加载';
+    card.appendChild(placeholder);
+  }
+  const detail = document.createElement('p');
+  detail.className = 'compare-meta';
+  detail.textContent = meta;
+  card.appendChild(detail);
+  return card;
+}
+
+function renderConfirmComparisons(comparisonRows) {
+  confirmComparisons.replaceChildren();
+  const rows = Array.isArray(comparisonRows) ? comparisonRows : [];
+  confirmComparisons.classList.toggle('is-hidden', rows.length === 0);
+  rows.forEach((rowData, index) => {
+    const match = rowData.match || {};
+    const candidateItem = rowData.candidateItem;
+    const row = document.createElement('section');
+    row.className = 'compare-row';
+    const rowTitle = document.createElement('h3');
+    rowTitle.textContent = rows.length > 1 ? `候选 ${index + 1}` : '对比';
+    const images = document.createElement('div');
+    images.className = 'compare-images';
+    const candidateMeta = candidateItem?.file
+      ? `${candidateItem.file.name} · ${formatMiB(candidateItem.file.size)}`
+      : '待上传图片不可用';
+    images.append(
+      createConfirmComparisonCard('库内图片', rowData.libraryUrl || '', cloudComparisonMeta(match), match.path || '库内图片'),
+      createConfirmComparisonCard('待上传图片', rowData.candidateUrl || '', candidateMeta, candidateItem?.file?.name || '待上传图片'),
+    );
+    row.append(rowTitle, images);
+    confirmComparisons.appendChild(row);
+  });
+}
+
+async function buildConfirmComparisonRows(matches, candidateItem) {
+  let candidateUrl = candidateItem ? state.previewObjectUrls[candidateItem.signature] : '';
+  if (!candidateUrl && candidateItem?.file) {
+    candidateUrl = URL.createObjectURL(candidateItem.file);
+    state.previewObjectUrls[candidateItem.signature] = candidateUrl;
+  }
+  const rankedMatches = [...(Array.isArray(matches) ? matches : [])].sort((a, b) => {
+    const aScore = Number(a?.similarity);
+    const bScore = Number(b?.similarity);
+    return (Number.isFinite(bScore) ? bScore : 0) - (Number.isFinite(aScore) ? aScore : 0);
+  });
+  const rows = [];
+  for (const match of rankedMatches) {
+    let libraryUrl = '';
+    try { libraryUrl = await previewUrlForPath(match.path); } catch {}
+    rows.push({ match, libraryUrl, candidateItem, candidateUrl });
+  }
+  return rows;
+}
+
 function confirm2(text, options = {}) {
   return new Promise(resolve => {
-    const { imageUrl = '', yesText = '确认', noText = '取消', hideNo = false } = options;
+    const {
+      imageUrl = '', comparisonRows = [], yesText = '确认', noText = '取消', hideNo = false,
+    } = options;
     confirmText.textContent = text;
     confirmYes.textContent = yesText;
     confirmNo.textContent = noText;
     confirmNo.classList.toggle('is-hidden', hideNo);
-    if (imageUrl) {
+    renderConfirmComparisons(comparisonRows);
+    if (comparisonRows.length) {
+      confirmImg.removeAttribute('src');
+      confirmImg.classList.add('is-hidden');
+    } else if (imageUrl) {
       confirmImg.src = imageUrl;
       confirmImg.classList.remove('is-hidden');
     } else {
@@ -178,7 +279,10 @@ function confirm2(text, options = {}) {
       confirmYes.textContent = '确认';
       confirmNo.textContent = '取消';
       confirmImg.removeAttribute('src');
+      confirmComparisons.replaceChildren();
+      confirmComparisons.classList.add('is-hidden');
       if (imageUrl) revokeObjectUrl(imageUrl);
+      for (const row of comparisonRows) revokeObjectUrl(row.libraryUrl);
       resolve(value);
     };
     confirmYes.onclick = () => finish(true);
@@ -1331,12 +1435,12 @@ upBtn.onclick = async () => {
       if (exact) {
         exactDuplicate++;
         rejectedItems.push(item);
-        let imageUrl = '';
-        try { imageUrl = await previewUrlForPath(exact.path); } catch {}
         const number = getImageIndex(exact.path);
+        const exactMatch = { ...exact, number: exact.number || number, similarity: 1 };
+        const comparisonRows = await buildConfirmComparisonRows([exactMatch], item);
         await confirm2(
           `发现完全重复图片：#${number || '?'}（${exact.path}）。这张图不会重复上传。`,
-          { imageUrl, yesText: '知道了', hideNo: true }
+          { comparisonRows, yesText: '知道了', hideNo: true }
         );
         continue;
       }
@@ -1344,11 +1448,10 @@ upBtn.onclick = async () => {
       const similar = similarRemoteMatches(galleryIndex, item.perceptualHash, cat);
       if (similar.length) {
         const labels = similar.map(match => `#${match.number || '?'} ${(match.similarity * 100).toFixed(1)}%`).join('、');
-        let imageUrl = '';
-        try { imageUrl = await previewUrlForPath(similar[0].path); } catch {}
+        const comparisonRows = await buildConfirmComparisonRows(similar, item);
         const force = await confirm2(
-          `发现相似图片：${labels}。如果确认不是同一张图，可以选择仍然上传。`,
-          { imageUrl, yesText: '仍然上传', noText: '跳过' }
+          `发现相似图片：${labels}。请横向对比后确认是否仍然上传。`,
+          { comparisonRows, yesText: '仍然上传', noText: '跳过' }
         );
         if (!force) {
           similarSkipped++;

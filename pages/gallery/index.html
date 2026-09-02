@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=8" />
+  <link rel="stylesheet" href="./style.css?v=9" />
 </head>
 <body>
   <div class="container">
@@ -135,6 +135,22 @@
     </main>
   </div>
 
+  <div class="compare-mask" id="compare-mask" role="dialog" aria-modal="true" aria-labelledby="compare-title">
+    <section class="compare-dialog">
+      <div class="compare-heading">
+        <div>
+          <h2 id="compare-title">上传图片对比</h2>
+          <p>左侧为图库候选，右侧为待上传图片；点击图片可放大。</p>
+        </div>
+      </div>
+      <div id="compare-list" class="compare-list"></div>
+      <div class="compare-actions">
+        <button class="btn btn-quiet" id="compare-no" type="button">跳过</button>
+        <button class="btn btn-primary" id="compare-yes" type="button">仍然上传</button>
+      </div>
+    </section>
+  </div>
+
   <div class="modal-mask" id="mask" role="dialog" aria-modal="true" aria-label="图片预览">
     <div class="modal">
       <button class="close-btn" id="close" type="button" aria-label="关闭预览">×</button>
@@ -142,6 +158,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=8"></script>
+  <script type="module" src="./app.js?v=9"></script>
 </body>
 </html>
