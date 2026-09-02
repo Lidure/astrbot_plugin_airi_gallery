@@ -1,0 +1,45 @@
+name: Temporary cloud large upload GREEN
+
+on:
+  push:
+    branches: ["fix/cloud-large-upload-stream"]
+    paths:
+      - ".github/workflows/_tmp_cloud_large_upload.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/cloud-large-upload-stream
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Apply approved production patch
+        run: python scripts/_tmp_apply_cloud_large_upload_fix.py
+      - name: Remove temporary migration artifacts before verification
+        run: rm -f scripts/_tmp_apply_cloud_large_upload_fix.py .github/workflows/_tmp_cloud_large_upload.yml
+      - name: Verify JavaScript behavior and syntax
+        run: |
+          node --check pages/zz_cloud/app.js
+          node --check pages/zz_cloud/upload_transaction.mjs
+          node --check pages/zz_cloud/blob_stream.mjs
+          node --check pages/zz_cloud/worker.js
+          node --test tests/js/cloud_large_upload_stream.test.mjs tests/js/cloud_blob_stream.test.mjs
+      - name: Verify full Python suite
+        run: python -m pytest -q
+      - name: Check diff
+        run: git diff --check
+      - name: Commit verified GREEN tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: stream large cloud uploads through worker"
+          git push origin HEAD:fix/cloud-large-upload-stream
