@@ -4,6 +4,7 @@ import {
   exactRemoteMatch,
   similarRemoteMatches,
 } from './upload_transaction.mjs';
+import { createBase64UploadStream } from './blob_stream.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
@@ -12,6 +13,7 @@ const LS_KEY = 'airi_gallery_cloud_config';
 const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CLOUD_PROXY_BLOB_THRESHOLD_BYTES = 4 * 1024 * 1024;
+const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 
 let config = loadConfig();
 let state = {
@@ -1126,23 +1128,49 @@ function largeBlobRetryable(error) {
     || [500, 502, 503, 504].includes(status);
 }
 
+function supportsStreamingRequestUploads() {
+  try {
+    let duplexAccessed = false;
+    const request = new Request(location.origin, {
+      method: 'POST',
+      body: new ReadableStream(),
+      get duplex() {
+        duplexAccessed = true;
+        return 'half';
+      },
+    });
+    return duplexAccessed && !request.headers.has('Content-Type');
+  } catch {
+    return false;
+  }
+}
+
 async function uploadLargeGitHubBlob(file, gitPath, cfg) {
   if (!cfg.token) throw new Error('大图片上传需要有效 GitHub Token');
+  if (file.size > CLOUD_PROXY_MAX_RAW_BYTES) {
+    throw new Error(`Cloud 稳定上传通道暂支持不超过 ${formatMiB(CLOUD_PROXY_MAX_RAW_BYTES)} 的单图`);
+  }
+  const canStreamRequest = supportsStreamingRequestUploads();
+  let compatibilityBase64 = null;
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt++) {
-    progressText.textContent = `正在上传大图片 ${file.name || gitPath}（${formatMiB(file.size)}）${
-      attempt ? `，重试 ${attempt + 1}/3` : ''
-    }...`;
+    progressText.textContent = `正在${canStreamRequest ? '流式' : '兼容模式'}上传大图片 ${
+      file.name || gitPath
+    }（${formatMiB(file.size)}）${attempt ? `，重试 ${attempt + 1}/3` : ''}...`;
     try {
+      const body = canStreamRequest
+        ? createBase64UploadStream(file.stream())
+        : (compatibilityBase64 ??= await fileToBase64(file));
       const resp = await fetch(largeGitHubBlobProxyPath(cfg), {
         method: 'POST',
         headers: {
           Authorization: `token ${cfg.token}`,
-          'Content-Type': 'application/octet-stream',
+          'Content-Type': 'text/plain',
           'X-Gallery-Blob-Size': String(file.size),
-          'X-Gallery-Path': gitPath,
+          'X-Gallery-Content-Encoding': 'base64',
         },
-        body: file,
+        body,
+        ...(canStreamRequest ? { duplex: 'half' } : {}),
       });
       let data = null;
       try { data = await resp.json(); } catch { data = null; }
@@ -1284,7 +1312,8 @@ upBtn.onclick = async () => {
         ),
         concurrency: blobConcurrency,
         items: plannedUploads.map(result => {
-          const useBinaryProxy = result.item.file.size >= CLOUD_PROXY_BLOB_THRESHOLD_BYTES;
+          const useBinaryProxy = result.item.file.size >= CLOUD_PROXY_BLOB_THRESHOLD_BYTES
+            && result.item.file.size <= CLOUD_PROXY_MAX_RAW_BYTES;
           return {
             path: result.gitPath,
             size: result.item.file.size,

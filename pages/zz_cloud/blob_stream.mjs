@@ -22,19 +22,14 @@ function mergeCarry(carry, chunk) {
   return merged;
 }
 
-export function createGitHubBlobJsonStream(source, { maxBytes = 100 * 1024 * 1024 } = {}) {
+export function createBase64UploadStream(source) {
   if (!source || typeof source.getReader !== 'function') {
-    throw new Error('GitHub blob source stream is unavailable');
+    throw new Error('upload source stream is unavailable');
   }
   const reader = source.getReader();
   let carry = new Uint8Array(0);
-  let total = 0;
   let finished = false;
-
   return new ReadableStream({
-    start(controller) {
-      controller.enqueue(JSON_PREFIX);
-    },
     async pull(controller) {
       if (finished) return;
       try {
@@ -42,19 +37,11 @@ export function createGitHubBlobJsonStream(source, { maxBytes = 100 * 1024 * 102
           const { value, done } = await reader.read();
           if (done) {
             if (carry.length) controller.enqueue(ENCODER.encode(bytesToBase64(carry)));
-            controller.enqueue(JSON_SUFFIX);
             controller.close();
             finished = true;
             return;
           }
           const incoming = value instanceof Uint8Array ? value : new Uint8Array(value);
-          total += incoming.byteLength;
-          if (total > maxBytes) {
-            finished = true;
-            try { await reader.cancel('raw blob exceeds limit'); } catch {}
-            controller.error(new Error('raw blob exceeds GitHub 100 MiB limit'));
-            return;
-          }
           const merged = mergeCarry(carry, incoming);
           const completeLength = merged.length - (merged.length % 3);
           if (completeLength) {
@@ -63,6 +50,48 @@ export function createGitHubBlobJsonStream(source, { maxBytes = 100 * 1024 * 102
           carry = merged.slice(completeLength);
           if (controller.desiredSize != null && controller.desiredSize <= 0) return;
         }
+      } catch (error) {
+        finished = true;
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      finished = true;
+      return reader.cancel(reason).catch(() => {});
+    },
+  });
+}
+
+export function createGitHubBlobJsonStream(source, { maxBytes = 90 * 1024 * 1024 } = {}) {
+  if (!source || typeof source.getReader !== 'function') {
+    throw new Error('GitHub blob source stream is unavailable');
+  }
+  const reader = source.getReader();
+  let total = 0;
+  let finished = false;
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(JSON_PREFIX);
+    },
+    async pull(controller) {
+      if (finished) return;
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          controller.enqueue(JSON_SUFFIX);
+          controller.close();
+          finished = true;
+          return;
+        }
+        const incoming = value instanceof Uint8Array ? value : new Uint8Array(value);
+        total += incoming.byteLength;
+        if (total > maxBytes) {
+          finished = true;
+          try { await reader.cancel('encoded blob exceeds proxy limit'); } catch {}
+          controller.error(new Error('encoded blob exceeds proxy limit'));
+          return;
+        }
+        controller.enqueue(incoming);
       } catch (error) {
         finished = true;
         controller.error(error);
