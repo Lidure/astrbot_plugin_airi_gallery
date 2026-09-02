@@ -1,0 +1,45 @@
+name: Temporary Upload Compare GREEN
+
+on:
+  push:
+    branches:
+      - feat/upload-conflict-compare-panel
+    paths:
+      - .github/workflows/tmp_upload_compare_green.yml
+
+permissions:
+  contents: write
+
+jobs:
+  green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: feat/upload-conflict-compare-panel
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply bounded comparison UI patch
+        run: python tools/tmp_upload_compare_green.py
+      - name: Check JavaScript syntax
+        run: |
+          node --check pages/gallery/app.js
+          node --check pages/zz_cloud/app.js
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Run comparison regression
+        run: python -m pytest tests/test_upload_conflict_compare_panel.py -q
+      - name: Run full suite
+        run: python -m pytest tests -q
+      - name: Remove temporary migration files
+        run: rm tools/tmp_upload_compare_green.py .github/workflows/tmp_upload_compare_green.yml
+      - name: Commit verified implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pages/gallery pages/zz_cloud tests/test_upload_conflict_compare_panel.py tools/tmp_upload_compare_green.py .github/workflows/tmp_upload_compare_green.yml
+          git commit -m "feat: compare duplicate uploads side by side"
+          git push origin HEAD:feat/upload-conflict-compare-panel
