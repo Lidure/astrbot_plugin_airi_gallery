@@ -61,3 +61,10 @@ def test_qq_upload_conflict_feedback_receives_pending_image_and_handles_remote_c
     assert "发现完全重复图片" in hint
     assert "发现相似图片" in hint
     assert "/强制上传" in hint
+
+
+def test_temporary_qq_comparison_migration_files_are_not_shipped():
+    assert not (ROOT / ".github/workflows/qq-compare-green.yml").exists()
+    assert not (ROOT / ".github/workflows/qq-compare-format.yml").exists()
+    assert not (ROOT / "tools/qq_compare_green.py").exists()
+    assert not (ROOT / "tools/qq_compare_format.py").exists()
