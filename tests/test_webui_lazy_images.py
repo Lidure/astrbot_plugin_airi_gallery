@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import importlib.util
 import sys
 import types
@@ -123,6 +124,61 @@ def test_category_page_api_returns_names_without_reading_image_bodies(
     assert gallery_reads == []
 
 
+def test_category_image_api_reads_bounded_chunks_instead_of_whole_file(
+    monkeypatch, tmp_path
+):
+    from quart import Quart
+
+    main_module = _load_main(monkeypatch, tmp_path)
+
+    class ContextStub:
+        def add_llm_tools(self, *_args):
+            pass
+
+        def register_web_api(self, *_args):
+            pass
+
+    plugin = main_module.Main(ContextStub(), {})
+    category = plugin.gallery_root / "airi"
+    category.mkdir(parents=True)
+    image_path = category / "1.gif"
+    image_path.write_bytes(b"abcdefghij")
+
+    monkeypatch.setattr(main_module, "_is_authenticated_web_request", lambda: True)
+
+    def forbidden_read_bytes(_path):
+        raise AssertionError("chunked image endpoint must not read the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read_bytes)
+    app = Quart(__name__)
+
+    async def invoke(offset):
+        async with app.test_request_context(
+            f"/image?category=airi&name=1.gif&offset={offset}&limit=4", method="GET"
+        ):
+            response = await plugin._api_category_image()
+            return await response.get_json()
+
+    first = asyncio.run(invoke(0))
+    second = asyncio.run(invoke(4))
+    final = asyncio.run(invoke(8))
+
+    assert base64.b64decode(first["data"]) == b"abcd"
+    assert first["offset"] == 0
+    assert first["next_offset"] == 4
+    assert first["total_size"] == 10
+    assert first["done"] is False
+    assert first["content_type"] == "image/gif"
+
+    assert base64.b64decode(second["data"]) == b"efgh"
+    assert second["next_offset"] == 8
+    assert second["done"] is False
+
+    assert base64.b64decode(final["data"]) == b"ij"
+    assert final["next_offset"] == 10
+    assert final["done"] is True
+
+
 def test_gallery_page_loads_binary_payloads_lazily_and_releases_blob_urls():
     script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
 
@@ -138,3 +194,25 @@ def test_gallery_page_loads_binary_payloads_lazily_and_releases_blob_urls():
     assert "item.data" not in render_grid
     assert "item.ct" not in render_grid
     assert "observeGridImage" in render_grid
+
+
+def test_gallery_page_reassembles_images_from_bounded_bridge_chunks():
+    script = Path("pages/gallery/app.js").read_text(encoding="utf-8")
+
+    assert "IMAGE_READ_CHUNK_BYTES" in script
+    assert "async function loadCategoryImageUrl(" in script
+    chunk_loader = script.split("async function loadCategoryImageUrl(", 1)[1].split(
+        "async function loadGridImage(", 1
+    )[0]
+    assert 'apiGet("category_image"' in chunk_loader
+    assert "offset" in chunk_loader
+    assert "limit: IMAGE_READ_CHUNK_BYTES" in chunk_loader
+    assert "next_offset" in chunk_loader
+    assert "done" in chunk_loader
+    assert "new Blob(chunks" in chunk_loader
+
+    load_grid = script.split("async function loadGridImage(", 1)[1].split(
+        "function observeGridImage(", 1
+    )[0]
+    assert "loadCategoryImageUrl(category, name)" in load_grid
+    assert "makeBlobUrl(data?.data" not in load_grid
