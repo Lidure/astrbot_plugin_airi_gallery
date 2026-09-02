@@ -74,7 +74,7 @@ def test_remote_upload_guard_fails_closed_when_tree_is_unavailable(tmp_path):
     sync.remote_manifest_reader.assert_not_called()
 
 
-def test_remote_upload_guard_uses_manifest_and_global_numbering_snapshot(tmp_path):
+def test_remote_upload_guard_scopes_dedup_to_category_and_keeps_global_numbering(tmp_path):
     sync, _, remote = _sync(tmp_path)
     tree = [
         {"path": "gallery/airi/7.png", "type": "blob", "sha": "blob-7"},
@@ -94,10 +94,7 @@ def test_remote_upload_guard_uses_manifest_and_global_numbering_snapshot(tmp_pat
     ok, records, max_index = sync.prepare_remote_upload_guard("airi")
 
     assert ok is True
-    assert {record.path for record in records} == {
-        "gallery/airi/7.png",
-        "gallery/miku/42.png",
-    }
+    assert {record.path for record in records} == {"gallery/airi/7.png"}
     assert max_index == 42
     sync.remote_manifest_reader.assert_called_once_with(tree)
 

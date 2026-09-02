@@ -388,7 +388,10 @@ class GalleryStore:
         if not candidates:
             return []
         with self.write_lock:
-            local_records = list(self.indexed_local_images())
+            local_records = list(
+                self._records_for_category(self.indexed_local_images(), category)
+            )
+            remote_records = self._records_for_category(remote_records, category)
             next_index = max(self.next_index(), max(1, int(min_index)))
             outcomes: list[tuple[Path | None, IndexedUploadDecision]] = []
             try:
@@ -457,8 +460,10 @@ class GalleryStore:
             candidate = fingerprint or compute_image_fingerprint(image_bytes)
             decision = evaluate_indexed_upload(
                 candidate,
-                local_records=self.indexed_local_images(),
-                remote_records=remote_records,
+                local_records=self._records_for_category(
+                    self.indexed_local_images(), category
+                ),
+                remote_records=self._records_for_category(remote_records, category),
                 remote_checked=remote_checked,
                 perceptual_max_distance=self.perceptual_max_distance,
                 force_similar=force_similar,
@@ -481,6 +486,13 @@ class GalleryStore:
                 perceptual_hash=candidate.perceptual_hash,
             )
             return target_path, decision
+
+    @staticmethod
+    def _records_for_category(
+        records: tuple[IndexedImage, ...] | list[IndexedImage], category: str
+    ) -> tuple[IndexedImage, ...]:
+        prefix = f"gallery/{category}/"
+        return tuple(record for record in records if record.path.startswith(prefix))
 
     def rollback_stored_image(self, path: Path, category: str) -> None:
         """Remove a local staged upload and its index/cache state."""

@@ -779,8 +779,7 @@ class GallerySync:
     def prepare_remote_upload_guard(
         self, category: str
     ) -> tuple[bool, tuple[IndexedImage, ...], int]:
-        """Snapshot global remote exact/perceptual state before upload admission."""
-        del category  # Dedup and numbering are global across gallery categories.
+        """Snapshot category-local dedup state and global numbering before upload."""
         if not self.git_sync_enabled:
             return True, (), 0
 
@@ -794,9 +793,11 @@ class GallerySync:
         manifest_ok, manifest = self.remote_manifest_reader(tree)
         if not manifest_ok:
             return False, (), 0
+        records = indexed_images_from_remote_tree(tree, manifest, self.image_suffixes)
+        category_prefix = f"gallery/{category}/"
         return (
             True,
-            indexed_images_from_remote_tree(tree, manifest, self.image_suffixes),
+            tuple(record for record in records if record.path.startswith(category_prefix)),
             remote_gallery_max_index(tree, self.image_suffixes),
         )
 

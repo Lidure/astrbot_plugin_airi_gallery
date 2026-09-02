@@ -134,6 +134,49 @@ def test_store_batch_adds_accepted_items_to_snapshot_for_in_batch_dedup(
     assert sorted(path.name for path in category_dir.iterdir()) == ["1.png"]
 
 
+def test_store_allows_cross_category_duplicate_but_blocks_same_category_duplicate(
+    monkeypatch, tmp_path
+):
+    store, category_dir = _make_store(tmp_path)
+    monkeypatch.setattr(
+        gallery_store_module,
+        "compute_image_fingerprint",
+        _fingerprint,
+        raising=False,
+    )
+    miku_dir = store.gallery_root / "miku"
+    miku_dir.mkdir()
+    existing = miku_dir / "1.png"
+    existing.write_bytes(b"a")
+    fingerprint = _fingerprint(b"a")
+    store.remember_file_hash(
+        existing,
+        fingerprint.content_hash,
+        category="miku",
+        perceptual_hash=fingerprint.perceptual_hash,
+    )
+
+    cross_category_path, cross_category_decision = store.store_unique_image(
+        category_dir,
+        "airi",
+        ".png",
+        b"a",
+        remote_checked=True,
+    )
+    same_category_path, same_category_decision = store.store_unique_image(
+        category_dir,
+        "airi",
+        ".jpg",
+        b"a",
+        remote_checked=True,
+    )
+
+    assert cross_category_path is not None
+    assert cross_category_decision.allowed is True
+    assert same_category_path is None
+    assert same_category_decision.reason == "exact_duplicate"
+
+
 def test_store_single_force_similar_never_bypasses_exact_duplicate(monkeypatch, tmp_path):
     store, category_dir = _make_store(tmp_path)
     monkeypatch.setattr(
