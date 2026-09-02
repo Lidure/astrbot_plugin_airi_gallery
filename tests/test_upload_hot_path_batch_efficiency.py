@@ -60,8 +60,33 @@ def test_create_only_directory_snapshot_still_detects_exact_collision():
     remote.request.assert_called_once()
 
 
+def test_create_only_uses_one_snapshot_per_parent_directory():
+    remote = _remote()
+    calls = []
+
+    def request(method, url, json_body=None, params=None, **kwargs):
+        calls.append((method, url, params))
+        assert params == {"ref": "parent-sha"}
+        if url.endswith("/contents/gallery/airi"):
+            return 200, [{"type": "file", "path": "gallery/airi/40.png"}]
+        if url.endswith("/contents/gallery/miku"):
+            return 200, [{"type": "file", "path": "gallery/miku/41.png"}]
+        raise AssertionError(url)
+
+    remote.request = Mock(side_effect=request)
+
+    assert remote.github_create_only_paths_exist_at_ref(
+        "parent-sha",
+        {"gallery/airi/43.png", "gallery/miku/44.png"},
+    ) is False
+    assert len(calls) == 2
+    assert {url.rsplit("/", 2)[-1] for _, url, _ in calls} == {"airi", "miku"}
+
+
 def test_upload_hot_path_temporary_migration_files_are_not_shipped():
     assert not Path("tools/tmp_apply_upload_hot_path_green.py").exists()
     assert not Path("tools/tmp_fix_upload_hot_path_patcher.py").exists()
     assert not Path("tools/tmp_migrate_upload_hot_path_tests.py").exists()
     assert not Path(".github/workflows/tmp_upload_hot_path_green.yml").exists()
+    assert not Path("tools/tmp_batch_create_only_green.py").exists()
+    assert not Path(".github/workflows/tmp_batch_create_only_green.yml").exists()
