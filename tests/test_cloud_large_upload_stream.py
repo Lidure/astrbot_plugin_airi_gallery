@@ -15,6 +15,14 @@ def test_cloud_large_upload_javascript_behavior_contract():
     )
 
 
+def test_cloud_worker_streaming_encoder_behavior_contract():
+    subprocess.run(
+        ['node', '--test', 'tests/js/cloud_blob_stream.test.mjs'],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def test_cloud_large_github_files_use_same_origin_binary_proxy():
     assert 'CLOUD_PROXY_BLOB_THRESHOLD_BYTES' in APP
     assert '4 * 1024 * 1024' in APP
