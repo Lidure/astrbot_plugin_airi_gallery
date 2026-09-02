@@ -18,6 +18,9 @@ def test_astrbot_webui_uses_comparison_panel_for_duplicate_and_similar_uploads()
 
     assert "function showUploadComparison(" in script
     assert "function renderComparisonRows(" in script
+    assert "function openComparisonImage(" in script
+    assert "rankedMatches" in script
+    assert "`候选 ${index + 1}`" in script
     assert "candidateFile" in script
     assert "URL.createObjectURL(candidateFile)" in script
     assert 'item.reason === "exact_duplicate"' in script
@@ -43,6 +46,9 @@ def test_cloud_uses_comparison_panel_and_reuses_pending_upload_preview_urls():
 
     assert 'id="confirm-comparisons"' in html
     assert "function renderConfirmComparisons(" in script
+    assert "function openConfirmComparisonImage(" in script
+    assert "rankedMatches" in script
+    assert "`候选 ${index + 1}`" in script
     assert "comparisonRows" in script
     assert "state.previewObjectUrls" in script
     assert "candidateItem.signature" in script
