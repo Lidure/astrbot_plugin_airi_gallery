@@ -124,6 +124,7 @@ except ImportError:
 
 try:
     from .gallery_rendering import (
+        build_upload_comparison_card as _build_upload_comparison_card,
         draw_cute_background as _draw_cute_background,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
@@ -132,6 +133,7 @@ try:
     )
 except ImportError:
     from gallery_rendering import (
+        build_upload_comparison_card as _build_upload_comparison_card,
         draw_cute_background as _draw_cute_background,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
@@ -2957,15 +2959,50 @@ class Main(Star):
     def _upload_match_label(match: UploadMatch) -> str:
         return _format_upload_match_label_impl(match)
 
+    def _load_upload_match_preview_bytes_sync(
+        self, match: UploadMatch
+    ) -> bytes | None:
+        local_path = resolve_gallery_local_path(self.gallery_root.parent, match.path)
+        if local_path is not None and local_path.exists():
+            try:
+                return local_path.read_bytes()
+            except OSError as exc:
+                logger.warning(f"读取本地查重候选失败 {match.path}: {exc}")
+
+        if not self._git_sync_enabled:
+            return None
+        try:
+            return self._git_get_file(match.path)
+        except Exception as exc:
+            logger.warning(f"读取远程查重候选失败 {match.path}: {exc}")
+            return None
+
+    @staticmethod
+    def _format_upload_preview_size(size: int) -> str:
+        if size >= 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MiB"
+        if size >= 1024:
+            return f"{size / 1024:.1f} KiB"
+        return f"{size} B"
+
     async def _send_upload_decision_hint(
-        self, event: AstrMessageEvent, decision: IndexedUploadDecision
+        self,
+        event: AstrMessageEvent,
+        decision: IndexedUploadDecision,
+        *,
+        pending_image_bytes: bytes,
+        pending_name: str | None = None,
     ) -> None:
         matches: list[UploadMatch] = []
-        if decision.exact_match is not None:
+        is_exact = decision.exact_match is not None
+        if is_exact:
             matches = [decision.exact_match]
             label = self._upload_match_label(decision.exact_match).split("（", 1)[0]
             await event.send(
-                event.plain_result(f"发现完全重复图片：{label}。已禁止重复上传。")
+                event.plain_result(
+                    f"发现完全重复图片：{label}。已禁止重复上传。\n"
+                    "下面是图库候选与待上传图片的对比："
+                )
             )
         elif decision.similar_matches:
             matches = list(decision.similar_matches)
@@ -2973,17 +3010,63 @@ class Main(Star):
             await event.send(
                 event.plain_result(
                     f"发现相似图片：{labels}\n"
+                    "下面按相似度从高到低展示图库候选与待上传图片的对比。\n"
                     "如果确认它们不是同一张图，可在 5 分钟内发送 /强制上传。"
                 )
             )
 
-        for match in matches:
-            local_path = resolve_gallery_local_path(self.gallery_root.parent, match.path)
-            if local_path is not None and local_path.exists():
-                try:
-                    await event.send(event.image_result(str(local_path)))
-                except Exception as exc:
-                    logger.warning(f"发送查重提示图失败 {match.path}: {exc}")
+        if not matches:
+            return
+
+        output_dir = self._prepare_generated_output_dir()
+        pending_label = str(pending_name or "").strip() or "待上传图片"
+        pending_detail = (
+            f"{pending_label} · "
+            f"{self._format_upload_preview_size(len(pending_image_bytes))}"
+        )
+
+        for index, match in enumerate(matches, start=1):
+            candidate_bytes = await asyncio.to_thread(
+                self._load_upload_match_preview_bytes_sync, match
+            )
+            match_path = Path(match.path)
+            category = match_path.parent.name or "未知分类"
+            filename = match_path.name or match.path
+            number_text = f"#{match.number}" if match.number is not None else "#?"
+            if is_exact:
+                relation = "完全重复"
+            else:
+                relation = f"相似度 {max(0.0, min(1.0, float(match.similarity))) * 100:.1f}%"
+            candidate_detail = (
+                f"{number_text} · {category} · {filename} · {relation}"
+            )
+            output_path = output_dir / (
+                f"qq_upload_compare_{time.time_ns()}_{index}.png"
+            )
+            try:
+                await asyncio.to_thread(
+                    _build_upload_comparison_card,
+                    candidate_bytes,
+                    pending_image_bytes,
+                    output_path,
+                    candidate_title="库内图片",
+                    candidate_detail=candidate_detail,
+                    pending_title="待上传图片",
+                    pending_detail=pending_detail,
+                )
+                await event.send(event.image_result(str(output_path)))
+            except Exception as exc:
+                logger.warning(f"生成 QQ 查重对比图失败 {match.path}: {exc}")
+                local_path = resolve_gallery_local_path(
+                    self.gallery_root.parent, match.path
+                )
+                if local_path is not None and local_path.exists():
+                    try:
+                        await event.send(event.image_result(str(local_path)))
+                    except Exception as send_exc:
+                        logger.warning(
+                            f"发送查重候选回退图失败 {match.path}: {send_exc}"
+                        )
 
     def _cache_similar_upload(
         self,
@@ -3047,7 +3130,9 @@ class Main(Star):
         if target is None:
             with self._pending_similar_upload_lock:
                 self._pending_similar_uploads.pop(key, None)
-            await self._send_upload_decision_hint(event, decision)
+            await self._send_upload_decision_hint(
+                event, decision, pending_image_bytes=image_bytes
+            )
             return
         committed = await asyncio.to_thread(
             self._push_staged_upload_transaction, [target], category
@@ -3097,13 +3182,15 @@ class Main(Star):
         similar_count = 0
         invalid_count = 0
         batch_candidates: list[tuple[str, bytes]] = []
-        for _, image_bytes in all_images:
+        batch_candidate_names: list[str] = []
+        for source_path, image_bytes in all_images:
             try:
                 validated = validate_image_payload(image_bytes)
             except (UploadPayloadTooLarge, ValueError):
                 invalid_count += 1
                 continue
             batch_candidates.append((validated.extension, validated.content))
+            batch_candidate_names.append(Path(source_path).name)
 
         outcomes = self._store_unique_image_batch(
             category_dir,
@@ -3114,13 +3201,23 @@ class Main(Star):
             min_index=remote_max_index + 1,
             stop_on_similar=True,
         )
-        for (suffix, image_bytes), (target_path, decision) in zip(
-            batch_candidates, outcomes
+        for candidate_index, ((suffix, image_bytes), (target_path, decision)) in enumerate(
+            zip(batch_candidates, outcomes)
         ):
+            pending_name = (
+                batch_candidate_names[candidate_index]
+                if candidate_index < len(batch_candidate_names)
+                else None
+            )
             if target_path is None:
                 if decision.reason == "exact_duplicate":
                     exact_count += 1
-                    await self._send_upload_decision_hint(event, decision)
+                    await self._send_upload_decision_hint(
+                        event,
+                        decision,
+                        pending_image_bytes=image_bytes,
+                        pending_name=pending_name,
+                    )
                     continue
                 if decision.reason == "similar":
                     similar_count += 1
@@ -3131,7 +3228,12 @@ class Main(Star):
                         image_bytes=image_bytes,
                         fingerprint=decision.fingerprint,
                     )
-                    await self._send_upload_decision_hint(event, decision)
+                    await self._send_upload_decision_hint(
+                        event,
+                        decision,
+                        pending_image_bytes=image_bytes,
+                        pending_name=pending_name,
+                    )
                     # One pending candidate per user/session keeps /强制上传 unambiguous.
                     break
                 continue
