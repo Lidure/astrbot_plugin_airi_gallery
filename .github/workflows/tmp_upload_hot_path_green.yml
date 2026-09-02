@@ -21,6 +21,8 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - name: Correct migration anchor
+        run: python tools/tmp_fix_upload_hot_path_patcher.py
       - name: Apply GREEN implementation
         run: python tools/tmp_apply_upload_hot_path_green.py
       - name: Compile changed Python modules
@@ -33,7 +35,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/tmp_apply_upload_hot_path_green.py .github/workflows/tmp_upload_hot_path_green.yml
+          git rm tools/tmp_apply_upload_hot_path_green.py tools/tmp_fix_upload_hot_path_patcher.py .github/workflows/tmp_upload_hot_path_green.yml
           git add gallery_store.py gallery_remote.py gallery_sync.py main.py
           git commit -m 'perf: scope upload hot path to target category'
           git push origin HEAD:perf/upload-hot-path-category-scope
