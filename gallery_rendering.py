@@ -118,3 +118,156 @@ def paste_corner_overlay(
     except Exception as exc:
         if warning_logger is not None:
             warning_logger.warning(f"加载角标图片失败 {overlay_path}: {exc}")
+
+
+def build_upload_comparison_card(
+    candidate_bytes: bytes | None,
+    pending_bytes: bytes,
+    output_path: Path,
+    *,
+    candidate_title: str,
+    candidate_detail: str,
+    pending_title: str,
+    pending_detail: str,
+) -> Path:
+    """Render a QQ-friendly side-by-side duplicate/similarity comparison card."""
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+    from PIL import ImageDraw, ImageOps
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    width = 1240
+    height = 720
+    outer = 34
+    gap = 24
+    header_h = 82
+    card_w = (width - outer * 2 - gap) // 2
+    card_h = height - outer * 2 - header_h
+    image_pad = 20
+    title_h = 54
+    detail_h = 82
+    image_h = card_h - title_h - detail_h - image_pad * 2
+
+    canvas = PILImage.new("RGB", (width, height), (248, 246, 250))
+    drawer = ImageDraw.Draw(canvas)
+    draw_cute_background(drawer, width, height, (255, 242, 248), (242, 244, 255))
+
+    title_font = load_collage_font(32)
+    card_title_font = load_collage_font(27)
+    detail_font = load_collage_font(19)
+    placeholder_font = load_collage_font(22)
+
+    drawer.text((outer, 24), "上传查重对比", fill=(51, 57, 82), font=title_font)
+    drawer.text(
+        (outer + 210, 33),
+        "左侧为图库候选，右侧为本次待上传图片",
+        fill=(103, 109, 137),
+        font=detail_font,
+    )
+
+    def decode_preview(raw: bytes | None):
+        if not raw:
+            return None
+        try:
+            with PILImage.open(BytesIO(raw)) as opened:
+                try:
+                    opened.seek(0)
+                except Exception:
+                    pass
+                image = ImageOps.exif_transpose(opened).convert("RGB")
+                image.load()
+                return image
+        except Exception:
+            return None
+
+    def draw_card(
+        x: int,
+        card_title: str,
+        detail: str,
+        raw: bytes | None,
+        *,
+        missing_text: str,
+    ) -> None:
+        y = outer + header_h
+        drawer.rounded_rectangle(
+            (x, y, x + card_w, y + card_h),
+            radius=24,
+            fill=(255, 255, 255),
+            outline=(218, 218, 231),
+            width=2,
+        )
+        drawer.text(
+            (x + image_pad, y + 15),
+            card_title,
+            fill=(48, 53, 76),
+            font=card_title_font,
+        )
+
+        box_x = x + image_pad
+        box_y = y + title_h
+        box_w = card_w - image_pad * 2
+        box_h = image_h
+        drawer.rounded_rectangle(
+            (box_x, box_y, box_x + box_w, box_y + box_h),
+            radius=18,
+            fill=(247, 247, 250),
+            outline=(229, 229, 238),
+            width=1,
+        )
+
+        preview = decode_preview(raw)
+        if preview is None:
+            text_w, text_h = text_size(drawer, missing_text, placeholder_font)
+            drawer.text(
+                (
+                    box_x + max(12, (box_w - text_w) // 2),
+                    box_y + max(12, (box_h - text_h) // 2),
+                ),
+                missing_text,
+                fill=(132, 136, 153),
+                font=placeholder_font,
+            )
+        else:
+            fitted = ImageOps.contain(
+                preview,
+                (box_w - 16, box_h - 16),
+                method=PILImage.Resampling.LANCZOS,
+            )
+            paste_x = box_x + (box_w - fitted.width) // 2
+            paste_y = box_y + (box_h - fitted.height) // 2
+            canvas.paste(fitted, (paste_x, paste_y))
+
+        detail_y = box_y + box_h + 14
+        for line_index, line in enumerate(
+            wrap_text(drawer, detail, detail_font, box_w)[:3]
+        ):
+            drawer.text(
+                (box_x, detail_y + line_index * 25),
+                line,
+                fill=(88, 94, 119),
+                font=detail_font,
+            )
+
+    left_x = outer
+    right_x = outer + card_w + gap
+    draw_card(
+        left_x,
+        candidate_title,
+        candidate_detail,
+        candidate_bytes,
+        missing_text="候选预览暂不可用",
+    )
+    draw_card(
+        right_x,
+        pending_title,
+        pending_detail,
+        pending_bytes,
+        missing_text="待上传图片预览失败",
+    )
+
+    canvas.save(output_path, format="PNG", optimize=True)
+    return output_path
+
