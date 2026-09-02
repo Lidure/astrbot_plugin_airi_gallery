@@ -118,8 +118,12 @@ function useImageProxy() {
     && (config.branch || 'main') === 'main';
 }
 
+function encodePathSegments(path) {
+  return String(path || '').split('/').map(encodeURIComponent).join('/');
+}
+
 function imageProxyUrl(file) {
-  const path = file.path.split('/').map(encodeURIComponent).join('/');
+  const path = encodePathSegments(file.path);
   const version = file.sha ? `?v=${encodeURIComponent(file.sha)}` : '';
   return `/__gallery-image/${path}${version}`;
 }
@@ -127,7 +131,7 @@ function imageProxyUrl(file) {
 function requireWriteAccess(cfg = config) {
   if (canWrite(cfg)) return true;
   toast('当前为只读模式，上传或删除需要有效 Token', false);
-  // 鍙妯″紡
+  // 只读模式
   return false;
 }
 
@@ -438,11 +442,11 @@ async function getTree(cfg = config, { signal = null } = {}) {
 
 async function getFileContent(path, { signal = null, cfg = config } = {}) {
   const branch = cfg.branch || 'main';
+  const encodedPath = encodePathSegments(path);
 
   // GitHub: prefer raw CDN (no API rate limit, faster, no auth needed for public repos)
   if (cfg.platform !== 'gitee') {
-    const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-    const rawUrl = `https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${branch}/${encodedPath}`;
+    const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/${branch.split('/').map(encodeURIComponent).join('/')}/${encodedPath}`;
     // No Authorization header — public repos don't need it, and sending one
     // triggers a CORS preflight that raw.githubusercontent.com doesn't support well.
     try {
@@ -456,7 +460,7 @@ async function getFileContent(path, { signal = null, cfg = config } = {}) {
     }
     // Fallback: try Contents API (handles private repos & case-insensitive owner)
     try {
-      const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+      const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}`, {
         params: { ref: branch }, cfg, signal
       });
       if (data?.sha) state.shaCache[path] = data.sha;
@@ -478,7 +482,7 @@ async function getFileContent(path, { signal = null, cfg = config } = {}) {
   }
 
   // Gitee: use API (no raw CDN equivalent)
-  const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+  const { data } = await ghRequest('GET', `/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}`, {
     params: { ref: branch }, cfg, signal
   });
   if (data?.sha) state.shaCache[path] = data.sha;
@@ -891,6 +895,22 @@ async function hideDeletedPathImmediately(path) {
 // ──────────────────────────────────────────────
 // UI: Grid (load images for current page)
 // ──────────────────────────────────────────────
+async function recoverProxyImage(image, file, renderToken) {
+  image.onerror = null;
+  if (renderToken !== state.imageRenderToken) return false;
+  try {
+    const blobUrl = await getImageObjectUrl(file);
+    if (!blobUrl || renderToken !== state.imageRenderToken) return false;
+    image.src = blobUrl;
+    return true;
+  } catch (error) {
+    if (error?.name !== 'AbortError') {
+      console.warn(`[Gallery] 图片代理与回退均失败: ${file.path}`, error?.message || error);
+    }
+    return false;
+  }
+}
+
 async function loadCategoryImages() {
   const renderToken = ++state.imageRenderToken;
   const cat = state.categories.find(c => c.name === state.currentCat);
@@ -958,10 +978,13 @@ async function loadCategoryImages() {
     if (proxyUrl) {
       div.innerHTML = '';
       const img = document.createElement('img');
-      img.src = proxyUrl;
       img.loading = 'lazy';
       img.decoding = 'async';
       img.alt = fileName;
+      img.onerror = () => {
+        void recoverProxyImage(img, file, renderToken);
+      };
+      img.src = proxyUrl;
       div.appendChild(img);
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
@@ -997,10 +1020,15 @@ async function loadCategoryImages() {
     div.onclick = async () => {
       try {
         if (useImageProxy()) {
-          mimg.src = imageProxyUrl(file);
+          const proxyPreviewUrl = imageProxyUrl(file);
+          mimg.onerror = () => {
+            void recoverProxyImage(mimg, file, state.imageRenderToken);
+          };
+          mimg.src = proxyPreviewUrl;
           mask.classList.add('show');
           return;
         }
+        mimg.onerror = null;
         const blobUrl = await getImageObjectUrl(file);
         if (!blobUrl) return;
         mimg.src = blobUrl;
@@ -1547,6 +1575,7 @@ syncBtn.onclick = async () => {
 // ──────────────────────────────────────────────
 function closeImageModal() {
   mask.classList.remove('show');
+  mimg.onerror = null;
   mimg.removeAttribute('src');
 }
 closeBtn.onclick = closeImageModal;
