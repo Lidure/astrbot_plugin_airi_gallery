@@ -1,6 +1,7 @@
 from pathlib import Path
 
 
+# Temporary contract: remove together with the SnowLuma/QQ upload diagnostics.
 def test_temporary_snowluma_upload_debug_instruments_collection_and_validation():
     source = Path("main.py").read_text(encoding="utf-8")
     collector = source.split("    async def _get_reply_images", 1)[1].split("\n    async def ", 1)[0]
