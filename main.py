@@ -61,6 +61,7 @@ except ImportError:
 
 try:
     from .gallery_commands import (
+        build_category_card_entry as _build_category_card_entry,
         match_view_all_command as _match_gallery_view_all_command,
         match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
@@ -73,6 +74,7 @@ try:
     )
 except ImportError:
     from gallery_commands import (
+        build_category_card_entry as _build_category_card_entry,
         match_view_all_command as _match_gallery_view_all_command,
         match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
@@ -3443,7 +3445,14 @@ class Main(Star):
 
         output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"category_list_{int(time.time() * 1000)}.png"
-        entries = [(category, self._count_category_images(category)) for category in categories]
+        entries = [
+            _build_category_card_entry(
+                category,
+                self.category_aliases,
+                self._iter_category_images(category),
+            )
+            for category in categories
+        ]
         decoration = Path(__file__).resolve().parent / "assets" / "p2.png"
         try:
             return _render_category_list_poster(
