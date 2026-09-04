@@ -167,12 +167,9 @@ def build_category_card_entry(
     category_aliases: Mapping[str, str],
     images: Sequence[object],
 ) -> tuple[str, int, object | None]:
-    """Build one category overview card using the first configured alias and image."""
+    """Build one category overview card using the folder name and first image."""
     category = str(category)
-    display_name = next(
-        (str(alias) for alias, target in category_aliases.items() if str(target) == category),
-        category,
-    )
+    _ = category_aliases  # kept for call-site compatibility; overview labels use folder names
     image_list = list(images)
     cover = image_list[0] if image_list else None
-    return display_name, len(image_list), cover
+    return category, len(image_list), cover

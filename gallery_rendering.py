@@ -297,7 +297,7 @@ def render_category_list_poster(
     cols = min(4, max(1, len(entries)))
     card_w = (width - outer * 2 - gap_x * (cols - 1)) // cols
     cover_h = 190
-    card_h = 304
+    card_h = 274
     header_h = 190
     rows = (len(entries) + cols - 1) // cols
     height = header_h + rows * card_h + max(0, rows - 1) * gap_y + 48
@@ -306,12 +306,12 @@ def render_category_list_poster(
     title_font = load_collage_font(48, font_path) or ImageFont.load_default()
     subtitle_font = load_collage_font(20, font_path) or ImageFont.load_default()
     meta_font = load_collage_font(17, font_path) or ImageFont.load_default()
-    count_font = load_collage_font(16, font_path) or ImageFont.load_default()
+    count_font = load_collage_font(22, font_path) or ImageFont.load_default()
 
     drawer.text((outer, 42), "Airi 画廊", fill=_INK, font=title_font)
     drawer.text(
         (outer, 102),
-        "每个分类挑一张封面，想看哪一页一眼就知道",
+        "每个分类放一张完整缩略图，想看哪一页一眼就知道",
         fill=_MUTED,
         font=subtitle_font,
     )
@@ -343,17 +343,14 @@ def render_category_list_poster(
         if cover_path:
             try:
                 with PILImage.open(cover_path) as opened:
-                    cover = ImageOps.fit(
+                    cover = ImageOps.contain(
                         opened.convert("RGB"),
-                        (cover_w, cover_h),
+                        (cover_w - 12, cover_h - 12),
                         method=PILImage.Resampling.LANCZOS,
                     )
-                mask = PILImage.new("L", (cover_w, cover_h), 0)
-                mask_draw = ImageDraw.Draw(mask)
-                mask_draw.rounded_rectangle(
-                    (0, 0, cover_w - 1, cover_h - 1), radius=18, fill=255
-                )
-                canvas.paste(cover, (cover_x, cover_y), mask)
+                paste_x = cover_x + (cover_w - cover.width) // 2
+                paste_y = cover_y + (cover_h - cover.height) // 2
+                canvas.paste(cover, (paste_x, paste_y))
                 pasted = True
             except Exception:
                 pasted = False
@@ -368,22 +365,24 @@ def render_category_list_poster(
                 font=meta_font,
             )
 
+        count_text = f"{count} 张"
+        count_w, count_h = text_size(drawer, count_text, count_font)
         name_font, display_name = fit_text_to_width(
             drawer,
             name,
             preferred_size=25,
             min_size=16,
-            max_width=card_w - 36,
+            max_width=max(48, card_w - 36 - count_w - 12),
             font_path=font_path,
         )
-        drawer.text((x + 18, y + 222), display_name, fill=_INK, font=name_font)
-        _draw_small_pill(
-            drawer,
-            (x + 18, y + 258),
-            f"{count} 张",
-            count_font,
-            fill=_PILL_FILLS[index % len(_PILL_FILLS)],
-            ink=_MUTED,
+        name_w, name_h = text_size(drawer, display_name, name_font)
+        label_y = y + 224
+        drawer.text((x + 18, label_y), display_name, fill=_INK, font=name_font)
+        drawer.text(
+            (x + 18 + name_w + 12, label_y + max(0, (name_h - count_h) // 2)),
+            count_text,
+            fill=_MUTED,
+            font=count_font,
         )
 
     output_path = Path(output_path)
