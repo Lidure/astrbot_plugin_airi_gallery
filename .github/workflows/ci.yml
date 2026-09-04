@@ -45,3 +45,36 @@ jobs:
       - run: python -m pip install AstrBot
       - run: python -m pip install -r requirements.txt
       - run: python tests/astrbot_runtime_smoke.py
+
+  apply-category-cover-grid:
+    if: github.ref == 'refs/heads/ui/category-cover-grid' && github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ui/category-cover-grid
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Apply implementation
+        run: python scripts/_tmp_apply_category_cover_grid.py
+      - name: Verify focused contracts
+        run: |
+          python -m pip install -r requirements.txt pytest pyyaml quart
+          python -m pytest tests/test_category_cover_grid.py tests/test_generated_poster_layout.py -q
+      - name: Restore CI and remove temporary patch tools
+        run: |
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/ci.yml
+          rm -f .github/workflows/_tmp_apply_category_cover_grid.yml
+          rm -f scripts/_tmp_apply_category_cover_grid.py
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: show category cover grid'
+          git push origin HEAD:ui/category-cover-grid
