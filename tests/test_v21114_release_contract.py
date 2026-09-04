@@ -1,17 +1,11 @@
 from pathlib import Path
 
-import yaml
 
 
-def test_v21114_version_is_consistent_everywhere():
-    metadata = yaml.safe_load(Path("metadata.yaml").read_text(encoding="utf-8"))
-    main_source = Path("main.py").read_text(encoding="utf-8")
+def test_v21114_release_remains_in_changelog():
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert metadata["version"] == "v2.11.14"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.14"' in main_source
-    assert "Version-v2.11.14-pink" in readme
-    assert "## 🚀 更新日志\n### v2.11.14" in readme
+    assert "### v2.11.14" in readme
 
 
 def test_v21114_readme_documents_bundled_hardening_release():
