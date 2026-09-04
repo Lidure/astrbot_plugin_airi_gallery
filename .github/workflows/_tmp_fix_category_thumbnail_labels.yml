@@ -1,0 +1,38 @@
+name: Temporary category thumbnail fix
+
+on:
+  push:
+    branches:
+      - fix/category-thumbnail-labels
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, 'apply category thumbnail fix') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/category-thumbnail-labels
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python tools/_tmp_fix_category_thumbnail_labels.py
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - run: python -m pytest tests/test_category_cover_grid.py -v
+      - run: python -m pytest tests -q
+      - name: Remove temporary migration files
+        run: |
+          rm tools/_tmp_fix_category_thumbnail_labels.py
+          rm .github/workflows/_tmp_fix_category_thumbnail_labels.yml
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gallery_commands.py gallery_rendering.py tests/test_category_cover_grid.py tools/_tmp_fix_category_thumbnail_labels.py .github/workflows/_tmp_fix_category_thumbnail_labels.yml
+          git commit -m "fix: preserve category thumbnails and labels"
+          git push origin HEAD:fix/category-thumbnail-labels
