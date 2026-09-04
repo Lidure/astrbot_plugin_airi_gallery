@@ -125,6 +125,9 @@ except ImportError:
 try:
     from .gallery_rendering import (
         build_upload_comparison_card as _build_upload_comparison_card,
+        render_aliases_poster as _render_aliases_poster,
+        render_category_list_poster as _render_category_list_poster,
+        render_help_poster as _render_help_poster,
         draw_cute_background as _draw_cute_background,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
@@ -134,6 +137,9 @@ try:
 except ImportError:
     from gallery_rendering import (
         build_upload_comparison_card as _build_upload_comparison_card,
+        render_aliases_poster as _render_aliases_poster,
+        render_category_list_poster as _render_category_list_poster,
+        render_help_poster as _render_help_poster,
         draw_cute_background as _draw_cute_background,
         load_collage_font as _load_collage_font,
         paste_corner_overlay as _paste_corner_overlay_impl,
@@ -3432,152 +3438,26 @@ class Main(Star):
         return output_path
 
     async def _build_category_list_image(self, categories: list[str]) -> Path | None:
-        try:
-            from PIL import Image as PILImage
-            from PIL import ImageDraw, ImageFont
-        except Exception:
-            logger.error("缺少 Pillow 依赖，无法生成分类列表图片")
-            return None
-
         if not categories:
             return None
 
-        title_font = _load_collage_font(54, self.collage_font_path) or ImageFont.load_default()
-        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        category_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
-        count_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        outline_colors = [
-            (224, 183, 205, 238),
-            (197, 214, 241, 238),
-            (206, 228, 201, 238),
-        ]
-
-        cols = 3
-        card_w = 284
-        card_h = 78
-        gap_x = 18
-        gap_y = 14
-        padding_x = 42
-        padding_top = 188
-        padding_bottom = 44
-        rows = math.ceil(len(categories) / cols)
-        width = padding_x * 2 + cols * card_w + (cols - 1) * gap_x
-        height = padding_top + rows * card_h + max(0, rows - 1) * gap_y + padding_bottom
-
-        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
-        drawer = ImageDraw.Draw(canvas)
-
-        _draw_cute_background(drawer, width, height, (255, 238, 246), (248, 236, 255))
-
-        drawer.text((padding_x, 48), "分类列表", fill=(57, 64, 100), font=title_font)
-        drawer.text(
-            (padding_x, 112),
-            f"当前共 {len(categories)} 个分类",
-            fill=(95, 106, 143),
-            font=subtitle_font,
-        )
-
-        # 绘制总图片数说明
-        try:
-            total_images = sum(self._count_category_images(cat) for cat in categories)
-            drawer.text((padding_x, 140), f"总图片数：{total_images}", fill=(95, 106, 143), font=subtitle_font)
-        except Exception:
-            pass
-
-        # 右上角角标（p2）
-        p2_path = Path(__file__).resolve().parent / "assets" / "p2.png"
-        _paste_corner_overlay(
-            canvas,
-            p2_path,
-            (160, 160),
-            margin=22,
-        )
-
-        # 如果存在 p4.png，把它放在 p2 的左侧并与 p2 高度对齐
-        try:
-            p4_path = Path(__file__).resolve().parent / "assets" / "p4.png"
-            if p4_path.exists():
-                from PIL import Image as PILImage
-                # 使用与 p2 相同的最大大小进行缩略以保持高度一致感
-                max_size = (160, 160)
-                # 先得到 p2 的显示尺寸（按相同缩放规则）
-                try:
-                    with PILImage.open(p2_path) as _p2test:
-                        p2_thumb = _p2test.convert("RGBA")
-                        p2_thumb.thumbnail(max_size, PILImage.Resampling.LANCZOS)
-                        p2w, p2h = p2_thumb.size
-                except Exception:
-                    p2w, p2h = max_size
-
-                with PILImage.open(p4_path) as p4img:
-                    p4img = p4img.convert("RGBA")
-                    p4img.thumbnail((p2w, p2h), PILImage.Resampling.LANCZOS)
-                    # 先缩略到与 p2 相近高度，再尝试放大 2 倍，若空间不足则自适应
-                    desired_w = int(p4img.width * 2)
-                    desired_h = int(p4img.height * 2)
-                    spacing = 12
-                    # 可用最大宽度：从左侧 padding 到 p2 左侧位置减去 spacing
-                    max_allowed = max(40, canvas.width - (p2w + 22) - spacing - padding_x)
-                    final_w = min(desired_w, max_allowed)
-                    final_h = max(1, int(final_w * (p4img.height / max(1, p4img.width))))
-                    try:
-                        p4_resized = p4img.resize((int(final_w), int(final_h)), PILImage.Resampling.LANCZOS)
-                    except Exception:
-                        p4_resized = p4img
-                    # 微调偏移：向左 / 向上 移动一些以避免与标题区域重合
-                    shift_left = 70
-                    shift_up = 12
-                    x = canvas.width - (p2w + 22) - spacing - p4_resized.width - shift_left
-                    y = 22 + max(0, (p2h - p4_resized.height) // 2) - shift_up
-                    canvas.alpha_composite(p4_resized, (max(0, int(x)), max(0, int(y))))
-        except Exception:
-            pass
-
-        # p3 support removed — 角标 p3 的逻辑已移除以简化布局
-
-        for index, category in enumerate(categories):
-            row = index // cols
-            col = index % cols
-            x = padding_x + col * (card_w + gap_x)
-            y = padding_top + row * (card_h + gap_y)
-
-            row_card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-            row_drawer = ImageDraw.Draw(row_card)
-            row_drawer.rounded_rectangle(
-                (0, 0, card_w - 1, card_h - 1),
-                radius=22,
-                fill=(255, 255, 255, 182),
-                outline=outline_colors[index % len(outline_colors)],
-                width=2,
-            )
-
-            image_count = self._count_category_images(category)
-            row_drawer.text((20, 18), category, fill=(32, 38, 59), font=category_font)
-            count_text = f"{image_count} 张"
-            count_w, count_h = _text_size(row_drawer, count_text, count_font)
-            row_drawer.text(
-                (card_w - count_w - 20, (card_h - count_h) / 2 - 1),
-                count_text,
-                fill=(100, 109, 136),
-                font=count_font,
-            )
-
-            canvas.alpha_composite(row_card, (x, y))
-
         output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"category_list_{int(time.time() * 1000)}.png"
-        canvas.convert("RGB").save(output_path, format="PNG")
-        return output_path
-
-    async def _build_aliases_image(self) -> Path | None:
+        entries = [(category, self._count_category_images(category)) for category in categories]
+        decoration = Path(__file__).resolve().parent / "assets" / "p2.png"
         try:
-            from PIL import Image as PILImage
-            from PIL import ImageDraw, ImageFont
-        except Exception:
-            logger.error("缺少 Pillow 依赖，无法生成昵称列表图片")
+            return _render_category_list_poster(
+                entries,
+                output_path,
+                font_path=self.collage_font_path,
+                decoration_path=decoration,
+            )
+        except Exception as exc:
+            logger.error(f"生成分类列表图片失败: {exc}")
             return None
 
-        aliases = sorted(self.category_aliases.items(), key=lambda x: x[1].lower())
+    async def _build_aliases_image(self) -> Path | None:
+        aliases = sorted(self.category_aliases.items(), key=lambda item: (item[1].lower(), item[0].lower()))
         if not aliases:
             return None
 
@@ -3585,74 +3465,19 @@ class Main(Star):
         for alias, category in aliases:
             grouped.setdefault(category, []).append(alias)
 
-        title_font = _load_collage_font(48, self.collage_font_path) or ImageFont.load_default()
-        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        cat_font = _load_collage_font(28, self.collage_font_path) or ImageFont.load_default()
-        alias_font = _load_collage_font(20, self.collage_font_path) or ImageFont.load_default()
-
-        padding_x = 42
-        padding_top = 170
-        padding_bottom = 44
-        card_gap_x = 18
-        card_gap_y = 14
-        card_w = 380
-        card_h = 100
-        cols = 2 if len(grouped) > 4 else 1
-        row_items = list(grouped.items())
-        rows = math.ceil(len(row_items) / cols)
-        width = padding_x * 2 + cols * card_w + (cols - 1) * card_gap_x
-        height = padding_top + rows * card_h + max(0, rows - 1) * card_gap_y + padding_bottom
-
-        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
-        drawer = ImageDraw.Draw(canvas)
-        _draw_cute_background(drawer, width, height, (255, 238, 246), (248, 236, 255))
-
-        drawer.text((padding_x, 42), "分类昵称映射", fill=(57, 64, 100), font=title_font)
-        drawer.text(
-            (padding_x, 106),
-            f"共 {len(grouped)} 个分类，{len(aliases)} 个昵称",
-            fill=(95, 106, 143),
-            font=subtitle_font,
-        )
-
-        p2_path = Path(__file__).resolve().parent / "assets" / "p2.png"
-        _paste_corner_overlay(canvas, p2_path, (140, 140), margin=22)
-
-        outline_colors = [
-            (224, 183, 205, 238),
-            (197, 214, 241, 238),
-            (206, 228, 201, 238),
-        ]
-
-        for index, (category, alias_list) in enumerate(row_items):
-            col = index % cols
-            row = index // cols
-            x = padding_x + col * (card_w + card_gap_x)
-            y = padding_top + row * (card_h + card_gap_y)
-
-            row_card = PILImage.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-            row_drawer = ImageDraw.Draw(row_card)
-            row_drawer.rounded_rectangle(
-                (0, 0, card_w - 1, card_h - 1),
-                radius=18,
-                fill=(255, 255, 255, 182),
-                outline=outline_colors[index % len(outline_colors)],
-                width=2,
-            )
-
-            row_drawer.text((20, 16), category, fill=(58, 64, 101), font=cat_font)
-
-            alias_text = "、".join(alias_list)
-            alias_lines = _wrap_text(row_drawer, alias_text, alias_font, card_w - 40)
-            for li, line in enumerate(alias_lines[:2]):
-                row_drawer.text((20, 52 + li * 26), line, fill=(120, 100, 130), font=alias_font)
-
-            canvas.alpha_composite(row_card, (x, y))
-
         output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"alias_list_{int(time.time() * 1000)}.png"
-        canvas.convert("RGB").save(output_path, format="PNG")
-        return output_path
+        decoration = Path(__file__).resolve().parent / "assets" / "p2.png"
+        try:
+            return _render_aliases_poster(
+                grouped,
+                output_path,
+                font_path=self.collage_font_path,
+                decoration_path=decoration,
+            )
+        except Exception as exc:
+            logger.error(f"生成昵称列表图片失败: {exc}")
+            return None
 
     async def _build_help_image(self) -> Path | None:
         try:
@@ -3703,150 +3528,18 @@ class Main(Star):
             ),
         ]
 
-        padding = 46
-        width = 1080
-        header_h = 236
-        section_gap = 22
-        section_inner_gap = 12
-        card_gap_x = 14
-        card_gap_y = 12
-        section_title_h = 64
-        card_h = 82
-        section_width = width - padding * 2
-        section_specs = []
-        total_sections_h = 0
-        for section_index, (_, _, cards) in enumerate(help_sections):
-            cols = 2 if len(cards) > 3 else 1
-            rows = math.ceil(len(cards) / cols)
-            section_h = (
-                section_title_h
-                + rows * card_h
-                + max(0, rows - 1) * card_gap_y
-                + section_inner_gap
-                + 24
-            )
-            section_specs.append((cols, rows, section_h))
-            total_sections_h += section_h
-            if section_index:
-                total_sections_h += section_gap
-        height = header_h + total_sections_h + 42
-
-        canvas = PILImage.new("RGBA", (width, height), (0, 0, 0, 255))
-        drawer = ImageDraw.Draw(canvas)
-
-        _draw_cute_background(drawer, width, height, (255, 238, 246), (247, 235, 255))
-
-        title_font = _load_collage_font(60, self.collage_font_path) or ImageFont.load_default()
-        subtitle_font = _load_collage_font(22, self.collage_font_path) or ImageFont.load_default()
-        section_font = _load_collage_font(30, self.collage_font_path) or ImageFont.load_default()
-        section_desc_font = _load_collage_font(18, self.collage_font_path) or ImageFont.load_default()
-        name_font = _load_collage_font(24, self.collage_font_path) or ImageFont.load_default()
-        desc_font = _load_collage_font(17, self.collage_font_path) or ImageFont.load_default()
-        outline_colors = [
-            (224, 183, 205, 238),
-            (197, 214, 241, 238),
-            (206, 228, 201, 238),
-            (241, 218, 182, 238),
-        ]
-
-        drawer.text((padding, 54), "Airi 画廊插件", fill=(58, 64, 101), font=title_font)
-        drawer.text(
-            (padding, 126),
-            "帮助说明 · 看命令模式随配置变化 · 管理命令用 /",
-            fill=(98, 106, 140),
-            font=subtitle_font,
-        )
-        drawer.text(
-            (padding, 160),
-            f"当前模式：{self._get_view_command_mode_text()}",
-            fill=(92, 98, 128),
-            font=subtitle_font,
-        )
-        llm_text = "LLM 表情包工具：已启用 ✅" if self.llm_tool_enabled else "LLM 表情包工具：未启用"
-        drawer.text(
-            (padding, 188),
-            llm_text,
-            fill=(92, 98, 128),
-            font=subtitle_font,
-        )
-
-
-        # 帮助图角标 p1，向左移动半个图片宽度以避免贴边过紧
-        try:
-            p1_path = Path(__file__).resolve().parent / "assets" / "p1.png"
-            if p1_path.exists():
-                from PIL import Image as PILImage
-                with PILImage.open(p1_path) as p1_img:
-                    p1_img = p1_img.convert("RGBA")
-                    p1_img.thumbnail((180, 180), PILImage.Resampling.LANCZOS)
-                    # 默认 margin
-                    margin = 22
-                    # 向左移动半个图片宽度
-                    x = canvas.width - p1_img.width - margin - (p1_img.width // 2)
-                    y = margin
-                    canvas.alpha_composite(p1_img, (max(0, int(x)), max(0, int(y))))
-        except Exception:
-            pass
-
-        y_cursor = header_h
-        section_colors = [
-            ((255, 255, 255, 150), (224, 183, 205, 245)),
-            ((255, 255, 255, 150), (197, 214, 241, 245)),
-            ((255, 255, 255, 150), (206, 228, 201, 245)),
-        ]
-
-        for section_index, ((title, section_desc, cards), (cols, _, section_h)) in enumerate(zip(help_sections, section_specs)):
-            fill_color, outline_color = section_colors[section_index % len(section_colors)]
-            section = PILImage.new("RGBA", (section_width, section_h), (0, 0, 0, 0))
-            section_drawer = ImageDraw.Draw(section)
-            section_drawer.rounded_rectangle(
-                (0, 0, section_width - 1, section_h - 1),
-                radius=24,
-                fill=fill_color,
-                outline=outline_color,
-                width=2,
-            )
-            section_drawer.text((24, 18), title, fill=(48, 55, 88), font=section_font)
-            section_drawer.text((170, 25), section_desc, fill=(102, 110, 143), font=section_desc_font)
-
-            card_width = (
-                section_width - 48 - (cols - 1) * card_gap_x
-            ) // cols
-            for card_index, (command, desc) in enumerate(cards):
-                row = card_index // cols
-                col = card_index % cols
-                x = 24 + col * (card_width + card_gap_x)
-                y = section_title_h + row * (card_h + card_gap_y)
-
-                card = PILImage.new("RGBA", (card_width, card_h), (0, 0, 0, 0))
-                card_drawer = ImageDraw.Draw(card)
-                card_drawer.rounded_rectangle(
-                    (0, 0, card_width - 1, card_h - 1),
-                    radius=16,
-                    fill=(255, 255, 255, 196),
-                    outline=outline_colors[(section_index + card_index) % len(outline_colors)],
-                    width=1,
-                )
-                card_drawer.text((18, 12), command, fill=(35, 40, 61), font=name_font)
-
-                desc_lines = _wrap_text(card_drawer, desc, desc_font, card_width - 36)
-                desc_lines = desc_lines[:2]
-                line_height = _text_size(card_drawer, "测", desc_font)[1]
-                desc_y = 45
-                for line_index, desc_line in enumerate(desc_lines):
-                    card_drawer.text(
-                        (18, desc_y + line_index * (line_height + 4)),
-                        desc_line,
-                        fill=(95, 105, 132),
-                        font=desc_font,
-                    )
-
-                section.alpha_composite(card, (x, y))
-
-            canvas.alpha_composite(section, (padding, y_cursor))
-            y_cursor += section_h + section_gap
-
         output_dir = self._prepare_generated_output_dir()
         output_path = output_dir / f"help_{int(time.time() * 1000)}.png"
-        canvas.convert("RGB").save(output_path, format="PNG")
-        return output_path
+        decoration = Path(__file__).resolve().parent / "assets" / "p1.png"
+        try:
+            return _render_help_poster(
+                help_sections,
+                output_path,
+                mode_text=self._get_view_command_mode_text(),
+                llm_enabled=self.llm_tool_enabled,
+                font_path=self.collage_font_path,
+                decoration_path=decoration,
+            )
+        except Exception as exc:
+            logger.error(f"生成帮助图片失败: {exc}")
+            return None
