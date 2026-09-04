@@ -46,7 +46,8 @@ def test_category_poster_uses_four_column_cover_grid(tmp_path):
 
     assert output.exists()
     with Image.open(output).convert("RGB") as poster:
-        assert poster.width >= 1360
+        assert poster.width == 1440
+        # Five cards must occupy two rows when the overview uses exactly four columns.
         assert poster.height >= 700
         pixels = list(poster.getdata())
         for color in colors:
