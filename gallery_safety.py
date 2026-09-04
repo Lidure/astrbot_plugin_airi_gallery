@@ -148,7 +148,7 @@ def validate_image_payload(
     content: bytes,
     *,
     max_bytes: int = 20 * 1024 * 1024,
-    max_pixels: int = 40_000_000,
+    max_pixels: int = 80_000_000,
 ) -> ValidatedImagePayload:
     """Validate image bytes and derive the canonical extension from content."""
     if not isinstance(content, (bytes, bytearray)):
@@ -199,7 +199,7 @@ def decode_upload_image_batch(
     max_count: int = 100,
     max_image_bytes: int = 20 * 1024 * 1024,
     max_request_bytes: int = 100 * 1024 * 1024,
-    max_pixels: int = 40_000_000,
+    max_pixels: int = 80_000_000,
 ) -> list[tuple[str, ValidatedImagePayload]]:
     """Strictly decode one Web upload batch before storage or remote work."""
     if not isinstance(images, list) or not images:
