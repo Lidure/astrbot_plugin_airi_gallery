@@ -6,6 +6,13 @@ import gallery_commands as commands
 import gallery_rendering as rendering
 
 
+def _pixel_data(image):
+    flattened = getattr(image, "get_flattened_data", None)
+    if callable(flattened):
+        return flattened()
+    return image.getdata()
+
+
 def test_category_card_entry_uses_folder_name_and_first_image():
     aliases = {
         "爱莉": "airi",
@@ -49,7 +56,7 @@ def test_category_poster_uses_four_column_cover_grid(tmp_path):
         assert poster.width == 1440
         # Five cards must occupy two rows when the overview uses exactly four columns.
         assert poster.height >= 700
-        pixels = list(poster.getdata())
+        pixels = list(_pixel_data(poster))
         for color in colors:
             assert pixels.count(color) > 1000
 
@@ -70,7 +77,7 @@ def test_category_thumbnail_preserves_both_edges_of_wide_image(tmp_path):
 
     with Image.open(output).convert("RGB") as poster:
         first_cover = poster.crop((64, 206, 354, 396))
-        pixels = list(first_cover.getdata())
+        pixels = list(_pixel_data(first_cover))
         assert pixels.count((230, 40, 40)) > 20
         assert pixels.count((40, 80, 230)) > 20
 
@@ -88,5 +95,9 @@ def test_category_count_is_drawn_inline_to_the_right_of_name(tmp_path):
         # The first card starts at x=48. With the short label "A", dark pixels
         # farther right on the same text band must come from the inline count.
         inline_band = poster.crop((95, 408, 200, 445))
-        dark_pixels = sum(1 for r, g, b in inline_band.getdata() if r < 120 and g < 120 and b < 140)
+        dark_pixels = sum(
+            1
+            for r, g, b in _pixel_data(inline_band)
+            if r < 120 and g < 120 and b < 140
+        )
         assert dark_pixels > 20
