@@ -30,6 +30,9 @@ def test_main_delegates_generated_posters_to_shared_rendering_module():
     assert "_render_category_list_poster" in category
     assert "_render_aliases_poster" in aliases
     assert "_render_help_poster" in help_image
+    assert "p4.png" not in category
+    assert "shift_left" not in category
+    assert "shift_up" not in category
 
 
 def test_fit_text_to_width_never_exceeds_requested_width():
@@ -129,3 +132,8 @@ def test_adaptive_posters_render_long_content_without_fixed_height_clipping(tmp_
             assert image.height >= 300
             assert image.width <= 1600
             assert image.height <= 6000
+
+
+def test_temporary_poster_redesign_tools_are_not_shipped():
+    assert not Path("scripts/_tmp_apply_poster_redesign.py").exists()
+    assert not Path(".github/workflows/_tmp_apply_poster_redesign.yml").exists()
