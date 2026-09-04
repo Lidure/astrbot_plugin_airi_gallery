@@ -160,3 +160,19 @@ def parse_view_target(target: str) -> tuple[str, object]:
     if target.isdigit():
         return "number", int(target)
     return "category", target
+
+
+def build_category_card_entry(
+    category: str,
+    category_aliases: Mapping[str, str],
+    images: Sequence[object],
+) -> tuple[str, int, object | None]:
+    """Build one category overview card using the first configured alias and image."""
+    category = str(category)
+    display_name = next(
+        (str(alias) for alias, target in category_aliases.items() if str(target) == category),
+        category,
+    )
+    image_list = list(images)
+    cover = image_list[0] if image_list else None
+    return display_name, len(image_list), cover
