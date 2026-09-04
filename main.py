@@ -2734,13 +2734,27 @@ class Main(Star):
         """提取回复消息中的所有图片，支持多图、转发及 QQ 下载/商城表情。"""
         results: list[tuple[Path, bytes]] = []
         components = list(event.get_messages())
-        for image_component in self._extract_image_components(components):
+        extracted_components = self._extract_image_components(components)
+        logger.info(
+            "[AiriGallery DEBUG upload] collector "
+            f"message_components={len(components)} image_components={len(extracted_components)}"
+        )
+        for image_component in extracted_components:
             try:
                 image_path = Path(await image_component.convert_to_file_path())
                 if image_path.exists():
-                    results.append((image_path, image_path.read_bytes()))
+                    payload = image_path.read_bytes()
+                    logger.info(
+                        "[AiriGallery DEBUG upload] collector materialized "
+                        f"route=message_component path={str(image_path)!r} bytes={len(payload)}"
+                    )
+                    results.append((image_path, payload))
             except Exception as exc:
-                logger.warning(f"读取引用图片失败: {exc}")
+                logger.warning(
+                    f"读取引用图片失败: {exc}; "
+                    f"[AiriGallery DEBUG upload] route=message_component "
+                    f"error={type(exc).__name__}: {exc}"
+                )
 
         try:
             from astrbot.core.utils.quoted_message import extract_quoted_message_images
@@ -2770,8 +2784,16 @@ class Main(Star):
         # QQ 下载/商城表情的 CDN URL 若在当前环境不可达，需要回到原消息保留 file
         # 候选，并通过 NapCat get_image 恢复；正常引用已经成功时不触发此额外请求。
         if not results:
+            logger.info(
+                "[AiriGallery DEBUG upload] collector entering_raw_onebot_fallback=true"
+            )
             seen_refs: set[str] = set()
-            for image_ref in await self._get_reply_onebot_image_refs(event):
+            raw_onebot_refs = await self._get_reply_onebot_image_refs(event)
+            logger.info(
+                "[AiriGallery DEBUG upload] collector "
+                f"raw_onebot_ref_count={len(raw_onebot_refs)}"
+            )
+            for image_ref in raw_onebot_refs:
                 if image_ref in seen_refs:
                     continue
                 seen_refs.add(image_ref)
@@ -2779,6 +2801,10 @@ class Main(Star):
                 if materialized:
                     results.append(materialized)
 
+        logger.info(
+            "[AiriGallery DEBUG upload] collector "
+            f"raw_candidates={len(results)} entering_content_dedup=true"
+        )
         return deduplicate_upload_candidates_by_content(results)
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):
@@ -3154,6 +3180,46 @@ class Main(Star):
             self._pending_similar_uploads.pop(key, None)
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
 
+    def _debug_upload_payload(
+        self,
+        source_path: Path,
+        image_bytes: bytes,
+        *,
+        stage: str,
+        validated=None,
+        error: Exception | None = None,
+    ) -> None:
+        """Temporary QQ/SnowLuma upload diagnostics; remove after root cause is known."""
+        try:
+            path = Path(source_path)
+            payload = bytes(image_bytes)
+            sha_prefix = hashlib.sha256(payload).hexdigest()[:16]
+            head16 = payload[:16].hex()
+            details = [
+                f"stage={stage}",
+                f"path={str(path)!r}",
+                f"name={path.name!r}",
+                f"suffix={path.suffix.lower()!r}",
+                f"bytes={len(payload)}",
+                f"sha256={sha_prefix}",
+                f"head16={head16}",
+            ]
+            if validated is not None:
+                details.extend(
+                    [
+                        f"format={validated.format_name}",
+                        f"size={validated.width}x{validated.height}",
+                        f"extension={validated.extension}",
+                    ]
+                )
+            if error is not None:
+                details.append(f"error={type(error).__name__}: {error}")
+            logger.info("[AiriGallery DEBUG upload] " + " ".join(details))
+        except Exception as debug_exc:
+            logger.warning(
+                f"[AiriGallery DEBUG upload] diagnostic logging failed: {debug_exc}"
+            )
+
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
@@ -3193,12 +3259,31 @@ class Main(Star):
         invalid_count = 0
         batch_candidates: list[tuple[str, bytes]] = []
         batch_candidate_names: list[str] = []
+        logger.info(
+            "[AiriGallery DEBUG upload] upload_batch "
+            f"category={category_name!r} collected={len(all_images)}"
+        )
         for source_path, image_bytes in all_images:
+            self._debug_upload_payload(
+                source_path, image_bytes, stage="before_validate"
+            )
             try:
                 validated = validate_image_payload(image_bytes)
-            except (UploadPayloadTooLarge, ValueError):
+            except (UploadPayloadTooLarge, ValueError) as exc:
+                self._debug_upload_payload(
+                    source_path,
+                    image_bytes,
+                    stage="validate_failed",
+                    error=exc,
+                )
                 invalid_count += 1
                 continue
+            self._debug_upload_payload(
+                source_path,
+                image_bytes,
+                stage="validate_ok",
+                validated=validated,
+            )
             batch_candidates.append((validated.extension, validated.content))
             batch_candidate_names.append(Path(source_path).name)
 
