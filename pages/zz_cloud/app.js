@@ -540,11 +540,18 @@ function imageMime(path) {
 }
 
 async function perceptualHash(blob) {
-  const bitmap = await createImageBitmap(blob, {
-    resizeWidth: 9,
-    resizeHeight: 8,
-    resizeQuality: 'pixelated',
-  });
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob, {
+      resizeWidth: 9,
+      resizeHeight: 8,
+      resizeQuality: 'pixelated',
+    });
+  } catch (resizeError) {
+    // Older browsers reject resize options; preserve upload usability with the
+    // original decode path, then downsample through the existing canvas logic.
+    bitmap = await createImageBitmap(blob);
+  }
   try {
     const canvas = document.createElement('canvas');
     canvas.width = 9; canvas.height = 8;
@@ -1034,8 +1041,17 @@ async function rollbackUploadedResults(uploadedResults, galleryIndex) {
 dropZone.onclick = () => fileInput.click();
 dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
 dropZone.ondragleave = () => dropZone.classList.remove('dragover');
-dropZone.ondrop = async e => { e.preventDefault(); dropZone.classList.remove('dragover'); await addFiles(e.dataTransfer.files); };
-fileInput.onchange = async () => { await addFiles(fileInput.files); fileInput.value = ''; };
+dropZone.ondrop = async e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const files = Array.from(e.dataTransfer.files);
+  await addFiles(files);
+};
+fileInput.onchange = async () => {
+  const files = Array.from(fileInput.files);
+  fileInput.value = '';
+  await addFiles(files);
+};
 
 function digestToHex(digest) {
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');

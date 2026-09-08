@@ -66,6 +66,36 @@ def test_cloud_file_admission_avoids_hash_and_image_decode_memory_overlap():
     assert "resizeHeight: 8" in perceptual
 
 
+def test_cloud_perceptual_decode_falls_back_when_resize_options_are_unsupported():
+    perceptual = SOURCE.split("async function perceptualHash(blob)", 1)[1].split(
+        "function normalizeGalleryIndex", 1
+    )[0]
+
+    assert "try {" in perceptual
+    assert "createImageBitmap(blob);" in perceptual
+
+
+def test_cloud_file_change_snapshots_and_resets_picker_before_async_hashing():
+    change_handler = SOURCE.split("fileInput.onchange =", 1)[1].split(
+        "function digestToHex", 1
+    )[0]
+
+    assert "const files = Array.from(fileInput.files);" in change_handler
+    assert "fileInput.value = '';" in change_handler
+    assert change_handler.index("fileInput.value = '';") < change_handler.index(
+        "await addFiles(files)"
+    )
+
+
+def test_cloud_drop_handler_snapshots_files_before_async_hashing():
+    drop_handler = SOURCE.split("dropZone.ondrop =", 1)[1].split(
+        "fileInput.onchange =", 1
+    )[0]
+
+    assert "const files = Array.from(e.dataTransfer.files);" in drop_handler
+    assert "await addFiles(files)" in drop_handler
+
+
 def test_cloud_manifest_backfill_only_downloads_images_in_upload_category():
     ensure_index = SOURCE.split("async function ensureGalleryIndex(tree, category)", 1)[1].split(
         "async function previewUrlForPath", 1
