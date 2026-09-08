@@ -80,4 +80,3 @@ def test_cloud_request_marks_rate_limits_retryable_and_protects_patch_writes():
     assert "const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);" in SOURCE
     assert "retryable: true" in SOURCE
     assert "retryAfterMs" in SOURCE
-
