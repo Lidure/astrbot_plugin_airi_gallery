@@ -33,6 +33,7 @@ def test_manifest_tree_helper_builds_safe_image_entries_without_api_sha():
           files: {
             'gallery/A/1.png': { perceptual_hash: 'a' },
             'gallery/猫/2.gif': { perceptual_hash: 'b' },
+            'gallery/Bang/.airi-renumber-1-1787908336064376247-3797.gif': { perceptual_hash: 'c' },
             'gallery/A/readme.txt': {},
             'gallery/A/sub/3.png': {},
             'gallery/../4.png': {},

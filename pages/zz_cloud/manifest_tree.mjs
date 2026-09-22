@@ -8,6 +8,7 @@ function isSafeGalleryImagePath(path) {
   if (parts.length !== 3 || parts[0] !== 'gallery') return false;
   if (parts.some(part => !part || part === '.' || part === '..')) return false;
   const fileName = parts[2];
+  if (fileName.startsWith('.airi-renumber-')) return false;
   const dot = fileName.lastIndexOf('.');
   if (dot <= 0) return false;
   return IMAGE_SUFFIXES.has(fileName.slice(dot).toLowerCase());
