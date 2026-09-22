@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,8 +13,8 @@ def test_worker_scopes_blog_upload_cors_to_exact_origin_and_repo():
     assert 'Access-Control-Allow-Headers' in WORKER
     assert 'OPTIONS' in WORKER
     assert "origin === BLOG_ORIGIN" in WORKER
-    assert "target.owner === BLOG_GITHUB_OWNER" in WORKER
-    assert "target.repo === BLOG_GITHUB_REPO" in WORKER
+    assert re.search(r"target\?*\.owner\s*===\s*BLOG_GITHUB_OWNER", WORKER)
+    assert re.search(r"target\?*\.repo\s*===\s*BLOG_GITHUB_REPO", WORKER)
 
 
 def test_worker_keeps_streaming_invariants():
