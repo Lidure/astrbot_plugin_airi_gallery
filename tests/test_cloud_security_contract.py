@@ -78,3 +78,14 @@ def test_cloud_external_javascript_has_valid_syntax():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_cloud_worker_blog_origin_policy_is_exact_and_fixed_target():
+    worker = (CLOUD_DIR / "worker.js").read_text(encoding="utf-8")
+    assert "const BLOG_ORIGIN = 'https://lidure22.xyz'" in worker
+    assert "const BLOG_GITHUB_OWNER = 'Lidure'" in worker
+    assert "const BLOG_GITHUB_REPO = 'airi-gallery-images'" in worker
+    assert "origin === BLOG_ORIGIN" in worker
+    assert "target?.owner === BLOG_GITHUB_OWNER" in worker
+    assert "target?.repo === BLOG_GITHUB_REPO" in worker
+    assert "'*'" not in worker.split('Access-Control-Allow-Origin')[-1][:120]
