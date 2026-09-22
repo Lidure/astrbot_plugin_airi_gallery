@@ -78,3 +78,13 @@ def test_cloud_external_javascript_has_valid_syntax():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_large_upload_worker_scopes_blog_cors_to_exact_origin_and_repo():
+    worker = (CLOUD_DIR / "worker.js").read_text(encoding="utf-8")
+    assert "const BLOG_ORIGIN = 'https://lidure22.xyz'" in worker
+    assert "const BLOG_GITHUB_OWNER = 'Lidure'" in worker
+    assert "const BLOG_GITHUB_REPO = 'airi-gallery-images'" in worker
+    assert "Access-Control-Allow-Origin" in worker
+    assert "Access-Control-Allow-Headers" in worker
+    assert "OPTIONS" in worker

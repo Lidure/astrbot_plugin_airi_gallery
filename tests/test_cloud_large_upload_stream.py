@@ -23,6 +23,14 @@ def test_cloud_streaming_helpers_behavior_contract():
     )
 
 
+def test_cloud_large_upload_cors_behavior_contract():
+    subprocess.run(
+        ['node', '--test', 'tests/js/cloud_large_upload_cors.test.mjs'],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def test_cloud_large_github_files_use_same_origin_streaming_proxy():
     assert 'CLOUD_PROXY_BLOB_THRESHOLD_BYTES' in APP
     assert '4 * 1024 * 1024' in APP
