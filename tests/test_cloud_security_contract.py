@@ -23,7 +23,9 @@ def test_cloud_page_uses_external_assets_and_csp_without_inline_code():
     assert "style-src 'self'" in headers
     assert "object-src 'none'" in headers
     assert "base-uri 'none'" in headers
-    assert "frame-ancestors 'none'" in headers
+    assert "frame-ancestors https://lidure22.xyz" in headers
+    assert "frame-ancestors 'none'" not in headers
+    assert "X-Frame-Options: DENY" not in headers
 
 
 def test_cloud_csp_allows_every_explicit_remote_fetch_origin():
