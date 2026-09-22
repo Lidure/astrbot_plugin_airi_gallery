@@ -56,3 +56,12 @@ def test_cloud_worker_forwards_large_blob_with_known_content_length():
 
 def test_cloud_worker_runs_before_static_assets_for_large_blob_route():
     assert '/__gallery-github-blob/*' in WRANGLER
+
+
+def test_large_upload_worker_scopes_blog_cors_to_exact_origin_and_repo():
+    assert "const BLOG_ORIGIN = 'https://lidure22.xyz'" in WORKER
+    assert "const BLOG_GITHUB_OWNER = 'Lidure'" in WORKER
+    assert "const BLOG_GITHUB_REPO = 'airi-gallery-images'" in WORKER
+    assert 'Access-Control-Allow-Origin' in WORKER
+    assert 'Access-Control-Allow-Headers' in WORKER
+    assert 'OPTIONS' in WORKER
