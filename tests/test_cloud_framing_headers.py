@@ -15,15 +15,19 @@ def _csp(text: str) -> str:
     raise AssertionError("Content-Security-Policy header is missing")
 
 
+def _directive(csp: str, name: str) -> str:
+    for directive in csp.split(";"):
+        stripped = directive.strip()
+        if stripped == name or stripped.startswith(f"{name} "):
+            return stripped
+    raise AssertionError(f"{name} directive is missing")
+
+
 def test_cloud_allows_only_canonical_blog_origin_to_frame():
     text = _header_text()
     csp = _csp(text)
 
-    assert "frame-ancestors https://lidure22.xyz" in csp
-    assert "frame-ancestors 'none'" not in csp
-    assert "frame-ancestors *" not in csp
-    assert "frame-ancestors https:" not in csp
-    assert "*.lidure22.xyz" not in csp
+    assert _directive(csp, "frame-ancestors") == "frame-ancestors https://lidure22.xyz"
     assert "X-Frame-Options: DENY" not in text
 
 
