@@ -4,6 +4,9 @@ const IMAGE_ROUTE = '/__gallery-image/';
 const GITHUB_BLOB_ROUTE = '/__gallery-github-blob/';
 const GITHUB_IMAGE_ROOT = 'https://raw.githubusercontent.com/Lidure/airi-gallery-images/main/';
 const GITHUB_API_ROOT = 'https://api.github.com/repos/';
+const BLOG_ORIGIN = 'https://lidure22.xyz';
+const BLOG_GITHUB_OWNER = 'Lidure';
+const BLOG_GITHUB_REPO = 'airi-gallery-images';
 const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 const CLOUD_PROXY_MAX_ENCODED_BYTES = Math.ceil(CLOUD_PROXY_MAX_RAW_BYTES / 3) * 4;
 const IMAGE_PATTERN = /^gallery\/.+\.(?:bmp|gif|jpe?g|jfif|png|tiff?|webp)$/i;
@@ -34,6 +37,31 @@ function getGitHubBlobTarget(url) {
   return { owner, repo };
 }
 
+function isAllowedBlogOrigin(origin) {
+  return origin === BLOG_ORIGIN;
+}
+
+function isAllowedBlogBlobTarget(target) {
+  return target?.owner === BLOG_GITHUB_OWNER && target?.repo === BLOG_GITHUB_REPO;
+}
+
+function corsHeadersFor(origin) {
+  if (!isAllowedBlogOrigin(origin)) return {};
+  return {
+    'Access-Control-Allow-Origin': BLOG_ORIGIN,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Gallery-Content-Encoding, X-Gallery-Blob-Size',
+    'Access-Control-Max-Age': '600',
+    Vary: 'Origin',
+  };
+}
+
+function withCors(headers, origin) {
+  const result = new Headers(headers);
+  for (const [name, value] of Object.entries(corsHeadersFor(origin))) result.set(name, value);
+  return result;
+}
+
 function upstreamUrl(path, version) {
   const url = new URL(GITHUB_IMAGE_ROOT + path);
   if (version && /^[a-f\d]{7,64}$/i.test(version)) url.searchParams.set('v', version);
@@ -60,38 +88,55 @@ async function proxyImage(request, path) {
   return new Response(response.body, { status: response.status, headers });
 }
 
-function jsonError(message, status) {
+function jsonError(message, status, origin = '') {
   return new Response(JSON.stringify({ message }), {
     status,
-    headers: {
+    headers: withCors({
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
-    },
+    }, origin),
   });
 }
 
-async function proxyGitHubBlob(request, target) {
-  if (request.method !== 'POST') {
-    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
+function preflightResponse(request, target) {
+  const origin = request.headers.get('Origin') || '';
+  if (!isAllowedBlogOrigin(origin) || !isAllowedBlogBlobTarget(target)) {
+    return new Response('Forbidden', { status: 403 });
   }
+  const requestedMethod = request.headers.get('Access-Control-Request-Method') || '';
+  if (requestedMethod.toUpperCase() !== 'POST') {
+    return new Response('Forbidden', { status: 403 });
+  }
+  return new Response(null, { status: 204, headers: corsHeadersFor(origin) });
+}
+
+async function proxyGitHubBlob(request, target) {
+  if (request.method === 'OPTIONS') return preflightResponse(request, target);
+  if (request.method !== 'POST') {
+    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST, OPTIONS' } });
+  }
+
   const requestUrl = new URL(request.url);
-  const origin = request.headers.get('Origin');
-  if (origin && origin !== requestUrl.origin) return jsonError('跨站上传请求已拒绝', 403);
+  const origin = request.headers.get('Origin') || '';
+  const sameOrigin = !origin || origin === requestUrl.origin;
+  const allowedBlogCrossOrigin = isAllowedBlogOrigin(origin) && isAllowedBlogBlobTarget(target);
+  if (!sameOrigin && !allowedBlogCrossOrigin) return jsonError('跨站上传请求已拒绝', 403);
+  const corsOrigin = allowedBlogCrossOrigin ? origin : '';
 
   const authorization = request.headers.get('Authorization') || '';
   if (!/^(?:token|Bearer)\s+\S+$/i.test(authorization)) {
-    return jsonError('GitHub Token 缺失或格式无效', 401);
+    return jsonError('GitHub Token 缺失或格式无效', 401, corsOrigin);
   }
   if (request.headers.get('X-Gallery-Content-Encoding') !== 'base64') {
-    return jsonError('大图片上传编码无效', 400);
+    return jsonError('大图片上传编码无效', 400, corsOrigin);
   }
-  if (!request.body) return jsonError('上传内容为空', 400);
+  if (!request.body) return jsonError('上传内容为空', 400, corsOrigin);
 
   const declaredSize = Number(request.headers.get('X-Gallery-Blob-Size') || 0);
-  if (!Number.isSafeInteger(declaredSize) || declaredSize <= 0) return jsonError('上传大小无效', 400);
+  if (!Number.isSafeInteger(declaredSize) || declaredSize <= 0) return jsonError('上传大小无效', 400, corsOrigin);
   if (declaredSize > CLOUD_PROXY_MAX_RAW_BYTES) {
-    return jsonError('Cloud 稳定上传通道单图上限为 64 MiB', 413);
+    return jsonError('Cloud 稳定上传通道单图上限为 64 MiB', 413, corsOrigin);
   }
 
   const apiUrl = `${GITHUB_API_ROOT}${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/git/blobs`;
@@ -117,17 +162,17 @@ async function proxyGitHubBlob(request, target) {
     try { await pipePromise; } catch {}
     const message = String(error?.message || error || '');
     if (/exceeds|fixed length|length/i.test(message)) {
-      return jsonError('大图片上传长度校验失败，请重新选择文件后重试', 400);
+      return jsonError('大图片上传长度校验失败，请重新选择文件后重试', 400, corsOrigin);
     }
-    return jsonError('Cloudflare 到 GitHub 的大图片上传连接失败', 502);
+    return jsonError('Cloudflare 到 GitHub 的大图片上传连接失败', 502, corsOrigin);
   }
 
-  const headers = new Headers({
+  const headers = withCors({
     'Content-Type': upstream.headers.get('Content-Type') || 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'X-Gallery-Proxy-Mode': 'fixed-length',
-  });
+  }, corsOrigin);
   for (const name of ['retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset']) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
