@@ -18,3 +18,29 @@ if 'merged_manifest_payload = merge_remote_category_manifest(' not in source:
     source = source.replace(old, new, 1)
 
 path.write_text(source, encoding='utf-8')
+
+empty_manifest_expr = '''json.dumps(\n        {\n            "version": 1,\n            "algorithm": MANIFEST_ALGORITHM,\n            "max_index": 0,\n            "files": {},\n        }\n    ).encode("utf-8")'''
+
+transaction_test = Path('tests/test_gallery_sync_upload_transaction.py')
+transaction_source = transaction_test.read_text(encoding='utf-8')
+transaction_marker = '''    sync.set_sync_enabled(enabled)\n    sync.remote_manifest_reader = Mock(return_value=(True, {}))\n'''
+transaction_replacement = f'''    sync.set_sync_enabled(enabled)\n    remote.get_file = Mock(return_value={empty_manifest_expr})\n    sync.remote_manifest_reader = Mock(return_value=(True, {{}}))\n'''
+if 'remote.get_file = Mock(return_value=json.dumps(' not in transaction_source:
+    if transaction_marker not in transaction_source:
+        raise SystemExit('transaction test fixture marker not found')
+    transaction_source = transaction_source.replace(
+        transaction_marker, transaction_replacement, 1
+    )
+transaction_test.write_text(transaction_source, encoding='utf-8')
+
+performance_test = Path('tests/test_upload_hot_path_performance.py')
+performance_source = performance_test.read_text(encoding='utf-8')
+performance_marker = '''    sync.set_sync_enabled(True)\n    return sync, store, remote\n'''
+performance_replacement = f'''    sync.set_sync_enabled(True)\n    remote.get_file = Mock(return_value={empty_manifest_expr})\n    return sync, store, remote\n'''
+if 'remote.get_file = Mock(return_value=json.dumps(' not in performance_source.split('def test_category_local_index', 1)[0]:
+    if performance_marker not in performance_source:
+        raise SystemExit('performance test fixture marker not found')
+    performance_source = performance_source.replace(
+        performance_marker, performance_replacement, 1
+    )
+performance_test.write_text(performance_source, encoding='utf-8')
