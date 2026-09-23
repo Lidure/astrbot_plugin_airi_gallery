@@ -51,6 +51,12 @@ except ImportError:
     )
 
 
+try:
+    from .gallery_manifest import merge_remote_category_manifest
+except ImportError:
+    from gallery_manifest import merge_remote_category_manifest
+
+
 _UNCERTAIN_DELETE_STATUSES = {0, 500, 502, 503, 504}
 _DELETE_CONFLICT_STATUSES = {409, 422}
 
@@ -986,14 +992,27 @@ class GallerySync:
                 self._rollback_staged_uploads(staged_paths, category)
                 return False
             try:
+                remote_manifest_raw = self.remote.get_file(self.manifest_path)
+                if remote_manifest_raw is None:
+                    raise ValueError("无法读取远端全局感知索引")
+                remote_manifest_payload = json.loads(
+                    remote_manifest_raw.decode("utf-8")
+                )
+                category_manifest_payload = self.manifest_payload_factory(category)
+                merged_manifest_payload = merge_remote_category_manifest(
+                    remote_manifest_payload,
+                    category_manifest_payload,
+                    category=category,
+                    algorithm=self.manifest_algorithm,
+                )
                 manifest_payload = json.dumps(
-                    self.manifest_payload_factory(category),
+                    merged_manifest_payload,
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
                 ).encode("utf-8")
             except Exception as exc:
-                self._warning(f"[Git Sync] 生成上传感知索引失败: {exc}")
+                self._warning(f"[Git Sync] 合并上传感知索引失败: {exc}")
                 self._rollback_staged_uploads(staged_paths, category)
                 return False
 
