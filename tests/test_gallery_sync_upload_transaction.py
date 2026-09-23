@@ -29,6 +29,14 @@ def _sync(tmp_path: Path, *, platform: str = "github", enabled: bool = True):
         manifest_algorithm=MANIFEST_ALGORITHM,
     )
     sync.set_sync_enabled(enabled)
+    remote.get_file = Mock(return_value=json.dumps(
+        {
+            "version": 1,
+            "algorithm": MANIFEST_ALGORITHM,
+            "max_index": 0,
+            "files": {},
+        }
+    ).encode("utf-8"))
     sync.remote_manifest_reader = Mock(return_value=(True, {}))
     sync.manifest_payload_factory = Mock(
         return_value={"version": 1, "algorithm": MANIFEST_ALGORITHM, "files": {}}
