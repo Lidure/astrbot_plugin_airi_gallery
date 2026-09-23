@@ -1,0 +1,38 @@
+name: Patch Gallery Sync Manifest
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/gallery-global-manifest-catalog-fix
+    paths:
+      - 'scripts/patch_gallery_sync_manifest_merge.py'
+      - '.github/workflows/patch-gallery-sync-manifest.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: codex/gallery-global-manifest-catalog-fix
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python scripts/patch_gallery_sync_manifest_merge.py
+      - run: python -m pip install -r requirements.txt pytest pyyaml quart
+      - run: python -m pytest tests/test_gallery_catalog_manifest_merge.py tests/test_gallery_sync_upload_transaction.py tests/test_upload_hot_path_performance.py -q
+      - name: Commit verified patch
+        run: |
+          if git diff --quiet -- gallery_sync.py; then
+            echo 'No gallery_sync.py changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add gallery_sync.py
+          git commit -m 'fix: preserve global Gallery manifest on upload'
+          git push origin HEAD:codex/gallery-global-manifest-catalog-fix
