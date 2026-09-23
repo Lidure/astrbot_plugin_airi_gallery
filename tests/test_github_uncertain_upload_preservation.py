@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -14,6 +15,16 @@ def _transaction(tmp_path: Path, *, initial_outcome=None):
     remote = GalleryRemote({"git_platform": "github"})
     sync = GallerySync(store, remote, remote.config, image_suffixes={".png"})
     sync.set_sync_enabled(True)
+    remote.get_file = Mock(
+        return_value=json.dumps(
+            {
+                "version": 1,
+                "algorithm": "dhash64-nn-white-v1",
+                "max_index": 0,
+                "files": {},
+            }
+        ).encode("utf-8")
+    )
     sync.manifest_payload_factory = Mock(return_value={"version": 1, "files": {}})
     sync.rollback_stored_image = Mock()
     remote.ref_update_outcome = initial_outcome

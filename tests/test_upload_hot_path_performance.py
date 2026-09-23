@@ -48,6 +48,14 @@ def _sync(tmp_path: Path) -> tuple[GallerySync, GalleryStore, GalleryRemote]:
         manifest_algorithm=MANIFEST_ALGORITHM,
     )
     sync.set_sync_enabled(True)
+    remote.get_file = Mock(return_value=json.dumps(
+        {
+            "version": 1,
+            "algorithm": MANIFEST_ALGORITHM,
+            "max_index": 0,
+            "files": {},
+        }
+    ).encode("utf-8"))
     return sync, store, remote
 
 
