@@ -2,8 +2,10 @@ import { createGitHubBlobJsonStream, gitHubBlobJsonLength } from './blob_stream.
 
 const IMAGE_ROUTE = '/__gallery-image/';
 const GITHUB_BLOB_ROUTE = '/__gallery-github-blob/';
+const CATALOG_ROUTE = '/__gallery-catalog';
 const GITHUB_IMAGE_ROOT = 'https://raw.githubusercontent.com/Lidure/airi-gallery-images/main/';
 const GITHUB_API_ROOT = 'https://api.github.com/repos/';
+const GITHUB_CATALOG_TREE_URL = 'https://api.github.com/repos/Lidure/airi-gallery-images/git/trees/main?recursive=1';
 const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 const CLOUD_PROXY_MAX_ENCODED_BYTES = Math.ceil(CLOUD_PROXY_MAX_RAW_BYTES / 3) * 4;
 const IMAGE_PATTERN = /^gallery\/.+\.(?:bmp|gif|jpe?g|jfif|png|tiff?|webp)$/i;
@@ -62,10 +64,92 @@ function withCors(headers, origin) {
   return result;
 }
 
+function catalogHeaders() {
+  return {
+    'Access-Control-Allow-Origin': BLOG_ORIGIN,
+    'Cache-Control': 'public, max-age=60, s-maxage=300, stale-while-revalidate=3600',
+    'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+    Vary: 'Origin',
+  };
+}
+
+function isCatalogImagePath(path) {
+  if (typeof path !== 'string' || !IMAGE_PATTERN.test(path)) return false;
+  const parts = path.split('/');
+  if (parts.length !== 3 || parts[0] !== 'gallery') return false;
+  if (parts.some(part => !part || part === '.' || part === '..' || part.includes('\\'))) return false;
+  return !parts[2].startsWith('.airi-renumber-');
+}
+
 function upstreamUrl(path, version) {
   const url = new URL(GITHUB_IMAGE_ROOT + path);
   if (version && /^[a-f\d]{7,64}$/i.test(version)) url.searchParams.set('v', version);
   return url;
+}
+
+async function proxyGalleryCatalog(request) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
+  }
+  const origin = request.headers.get('Origin') || '';
+  if (origin && !isAllowedBlogOrigin(origin)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  let upstream;
+  try {
+    upstream = await fetch(GITHUB_CATALOG_TREE_URL, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Airi-Gallery-Cloud',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      cf: {
+        cacheEverything: true,
+        cacheTtl: 300,
+        cacheTtlByStatus: { '200-299': 300, '400-499': 30, '500-599': 0 },
+      },
+    });
+  } catch {
+    return new Response(JSON.stringify({ message: 'Gallery catalog unavailable' }), {
+      status: 502,
+      headers: catalogHeaders(),
+    });
+  }
+  if (!upstream.ok) {
+    return new Response(JSON.stringify({ message: `GitHub catalog request failed: ${upstream.status}` }), {
+      status: 502,
+      headers: catalogHeaders(),
+    });
+  }
+
+  let payload;
+  try { payload = await upstream.json(); }
+  catch {
+    return new Response(JSON.stringify({ message: 'GitHub catalog response is invalid' }), {
+      status: 502,
+      headers: catalogHeaders(),
+    });
+  }
+  if (payload?.truncated || !Array.isArray(payload?.tree)) {
+    return new Response(JSON.stringify({ message: 'GitHub catalog tree is incomplete' }), {
+      status: 502,
+      headers: catalogHeaders(),
+    });
+  }
+
+  const files = {};
+  for (const entry of payload.tree) {
+    if (entry?.type !== 'blob' || !isCatalogImagePath(entry.path)) continue;
+    files[entry.path] = {};
+  }
+  const body = JSON.stringify({ version: 1, source: 'github-tree', files });
+  return new Response(request.method === 'HEAD' ? null : body, {
+    status: 200,
+    headers: catalogHeaders(),
+  });
 }
 
 async function proxyImage(request, path) {
@@ -180,6 +264,8 @@ async function proxyGitHubBlob(request, target) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === CATALOG_ROUTE) return proxyGalleryCatalog(request);
+
     const blobTarget = getGitHubBlobTarget(url);
     if (blobTarget) return proxyGitHubBlob(request, blobTarget);
 
