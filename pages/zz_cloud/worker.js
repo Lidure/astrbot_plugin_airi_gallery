@@ -11,6 +11,7 @@ const CLOUD_PROXY_MAX_ENCODED_BYTES = Math.ceil(CLOUD_PROXY_MAX_RAW_BYTES / 3) *
 const IMAGE_PATTERN = /^gallery\/.+\.(?:bmp|gif|jpe?g|jfif|png|tiff?|webp)$/i;
 const REPO_COMPONENT = /^[A-Za-z0-9_.-]{1,100}$/;
 const BLOG_ORIGIN = 'https://lidure22.xyz';
+const BLOG_GALLERY_MANAGER = `${BLOG_ORIGIN}/gallery/manage`;
 const BLOG_GITHUB_OWNER = 'Lidure';
 const BLOG_GITHUB_REPO = 'airi-gallery-images';
 
@@ -264,6 +265,9 @@ async function proxyGitHubBlob(request, target) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      return Response.redirect(BLOG_GALLERY_MANAGER, 302);
+    }
     if (url.pathname === CATALOG_ROUTE) return proxyGalleryCatalog(request);
 
     const blobTarget = getGitHubBlobTarget(url);
