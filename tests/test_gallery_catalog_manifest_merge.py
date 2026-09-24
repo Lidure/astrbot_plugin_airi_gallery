@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -85,3 +86,14 @@ def test_cloud_worker_redirects_legacy_root_ui_to_blog_gallery_manager():
     assert "const BLOG_GALLERY_MANAGER = `${BLOG_ORIGIN}/gallery/manage`" in source
     assert "url.pathname === '/' || url.pathname === '/index.html'" in source
     assert "Response.redirect(BLOG_GALLERY_MANAGER, 302)" in source
+
+
+def test_cloud_entry_and_backend_routes_run_worker_before_static_assets():
+    config = json.loads(Path("pages/zz_cloud/wrangler.jsonc").read_text(encoding="utf-8"))
+    worker_first = config["assets"]["run_worker_first"]
+
+    assert "/" in worker_first
+    assert "/index.html" in worker_first
+    assert "/__gallery-catalog" in worker_first
+    assert "/__gallery-image/*" in worker_first
+    assert "/__gallery-github-blob/*" in worker_first
