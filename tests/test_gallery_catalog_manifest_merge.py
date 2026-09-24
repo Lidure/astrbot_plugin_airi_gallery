@@ -77,3 +77,11 @@ def test_cloud_worker_exposes_cached_public_gallery_catalog():
     assert "gallery_index.json" not in source.split("async function proxyGalleryCatalog", 1)[1].split("async function", 1)[0]
     assert "Access-Control-Allow-Origin" in source
     assert "BLOG_ORIGIN" in source
+
+
+def test_cloud_worker_redirects_legacy_root_ui_to_blog_gallery_manager():
+    source = Path("pages/zz_cloud/worker.js").read_text(encoding="utf-8")
+
+    assert "const BLOG_GALLERY_MANAGER = `${BLOG_ORIGIN}/gallery/manage`" in source
+    assert "url.pathname === '/' || url.pathname === '/index.html'" in source
+    assert "Response.redirect(BLOG_GALLERY_MANAGER, 302)" in source
