@@ -490,6 +490,18 @@ class GallerySync:
                 content = self.remote.get_file(git_path)
                 if content is None:
                     self._warning(f"[Git Sync] 未能同步远端图片：{git_path}")
+                    if getattr(
+                        getattr(self.remote, "request_state", None),
+                        "failure",
+                        None,
+                    ) == "rate_limit":
+                        self._warning(
+                            "[Git Sync] GitHub API 请求额度已用完，本次停止拉取；"
+                            "下次定时同步将继续下载未完成的图片。"
+                        )
+                        result["failed"] = True
+                        result["error"] = "GitHub API 请求额度已用完，等待下次同步"
+                        break
                     continue
 
                 # 路径一致性优先：即使相同内容已存在于另一路径，也必须落盘

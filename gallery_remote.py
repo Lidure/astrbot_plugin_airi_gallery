@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64 as b64mod
+import hashlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -288,14 +289,64 @@ class GalleryRemote:
         size = data.get("size", 0)
         content_b64 = data.get("content", "")
         if not content_b64 and size > 0:
+            # GitHub Contents API omits inline base64 for blobs > 1 MiB.
+            # In restricted networks raw.githubusercontent.com (download_url)
+            # can be reset while api.github.com remains reachable.
+            # Prefer Git Blob API and verify bytes against the content SHA.
+            if self.platform() == "github" and sha:
+                blob_url = (
+                    f"{self.api_base()}/repos/{self.owner()}/{self.repo()}"
+                    f"/git/blobs/{quote(str(sha), safe='')}"
+                )
+                blob_status, blob_data = self.request(
+                    "GET", blob_url, timeout=60
+                )
+                if blob_status == 200 and isinstance(blob_data, Mapping):
+                    try:
+                        if blob_data.get("encoding") != "base64":
+                            raise ValueError("unsupported Git blob encoding")
+                        blob_bytes = b64mod.b64decode(
+                            str(blob_data.get("content", "")).replace("\n", ""),
+                            validate=True,
+                        )
+                        actual_sha = hashlib.sha1(
+                            b"blob " + str(len(blob_bytes)).encode() + b"\0" + blob_bytes
+                        ).hexdigest()
+                        if (
+                            len(blob_bytes) == int(size)
+                            and actual_sha == str(sha)
+                        ):
+                            return blob_bytes
+                        self._warning(
+                            f"[Git Sync] Git Blob 校验失败 {path}: 内容长度或 SHA 不匹配"
+                        )
+                    except Exception as exc:
+                        self._warning(
+                            f"[Git Sync] Git Blob 解码失败 {path}: {type(exc).__name__}"
+                        )
+                elif blob_status in (403, 429):
+                    # Respect GitHub API rate limits; don't repeatedly hammer
+                    # an unavailable raw endpoint for every missing picture.
+                    return None
+
             dl_url = data.get("download_url", "")
             if dl_url:
                 import requests as req_lib
 
                 try:
-                    resp = req_lib.get(dl_url, timeout=60)
+                    resp = req_lib.get(dl_url, timeout=20)
                     if resp.status_code == 200:
-                        return resp.content
+                        payload = resp.content
+                        if sha and self.platform() == "github":
+                            actual_sha = hashlib.sha1(
+                                b"blob " + str(len(payload)).encode() + b"\0" + payload
+                            ).hexdigest()
+                            if actual_sha != str(sha):
+                                self._warning(
+                                    f"[Git Sync] download_url SHA 校验失败 {path}"
+                                )
+                                return None
+                        return payload
                 except Exception as exc:
                     self._warning(f"[Git Sync] download_url 获取失败 {path}: {exc}")
             return None
