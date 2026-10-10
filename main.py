@@ -105,6 +105,12 @@ except ImportError:
     )
 
 try:
+    from .gallery_upload_once import UploadOnceGuard
+except ImportError:
+    from gallery_upload_once import UploadOnceGuard
+
+
+try:
     from .gallery_store import GalleryStore
 except ImportError:
     from gallery_store import GalleryStore
@@ -226,7 +232,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.15"
+CURRENT_PLUGIN_VERSION = "v2.11.17"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -436,6 +442,7 @@ class Main(Star):
         self._remote_delete_preview_lock = threading.RLock()
         self._pending_similar_uploads: dict[str, dict] = {}
         self._pending_similar_upload_lock = threading.RLock()
+        self._upload_once = UploadOnceGuard()
         self._pending_api_similar_uploads: dict[str, dict] = {}
         self._pending_api_similar_upload_lock = threading.RLock()
 
@@ -3100,6 +3107,9 @@ class Main(Star):
             }
 
     async def _handle_force_similar_upload(self, event: AstrMessageEvent) -> None:
+        if not self._upload_once.claim(event, "force_similar_upload"):
+            logger.debug("[Gallery] 同一 QQ 消息的重复强制上传入口已忽略。")
+            return
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
             return
@@ -3157,6 +3167,9 @@ class Main(Star):
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
+        if not self._upload_once.claim(event, "upload"):
+            logger.debug("[Gallery] 同一 QQ 消息的重复上传入口已忽略。")
+            return
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
             return
