@@ -3107,11 +3107,11 @@ class Main(Star):
             }
 
     async def _handle_force_similar_upload(self, event: AstrMessageEvent) -> None:
-        if not self._upload_once.claim(event, "force_similar_upload"):
-            logger.debug("[Gallery] 同一 QQ 消息的重复强制上传入口已忽略。")
-            return
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._upload_once.claim(event, "force_similar_upload"):
+            logger.debug("[Gallery] 同一 QQ 消息的重复强制上传入口已忽略。")
             return
         key = self._remote_delete_preview_key(event)
         with self._pending_similar_upload_lock:
@@ -3167,11 +3167,11 @@ class Main(Star):
         await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
-        if not self._upload_once.claim(event, "upload"):
-            logger.debug("[Gallery] 同一 QQ 消息的重复上传入口已忽略。")
-            return
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
+            return
+        if not self._upload_once.claim(event, "upload"):
+            logger.debug("[Gallery] 同一 QQ 消息的重复上传入口已忽略。")
             return
         category_dir = self._resolve_existing_category_dir(category)
         if not category_dir:

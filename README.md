@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.15-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.17-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -343,6 +343,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.17
+- 修复 QQ 单条上传命令可能由事件监听和命令注册同时执行，造成上传完成后又出现一次相似图片提示。
+- 增加上传入口防重复执行：独立 QQ 消息和强制上传仍保留完整查重与权限控制。
+
 ### v2.11.15
 
 - **大图上传与上传性能**：Cloud GitHub 上传改为原子批量事务，大文件通过同源 Worker 流式转发并使用固定 Content-Length；普通上传热路径改为分类级索引与目录快照，减少整库扫描。QQ/本地校验的单图字节上限仍为 20 MiB，默认像素上限从 4000 万提高到 8000 万像素，正常高分辨率图片不再因为压缩后文件很小但像素较高而被误判为“过大”。
