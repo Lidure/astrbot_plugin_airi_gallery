@@ -739,17 +739,73 @@ def build_category_tree_delta_entries(
     return tuple(deletes), tuple(upserts)
 
 
+def _quoted_image_render_preview(content: bytes) -> tuple[tuple[int, int], bytes] | None:
+    """Small colour preview for matching differently encoded copies of one QQ image.
+
+    Do not confuse this strict *same-rendering* check with the gallery's normal
+    perceptual-similarity check: two merely similar artworks must be kept.
+    """
+    try:
+        from PIL import Image, ImageOps
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(content)) as opened:
+                if opened.width * opened.height > 80_000_000:
+                    return None
+                oriented = ImageOps.exif_transpose(opened)
+                # Use the same matte for JPEG and transparent PNG rendering.
+                rgba = oriented.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                background.alpha_composite(rgba)
+                rgb = background.convert("RGB")
+                small = rgb.resize((48, 48), Image.Resampling.BILINEAR)
+                return rgb.size, small.tobytes()
+    except Exception:
+        # Leave broken/unsupported images for the normal payload validator.
+        return None
+
+
+def _quoted_same_rendering(
+    first: tuple[tuple[int, int], bytes] | None,
+    second: tuple[tuple[int, int], bytes] | None,
+) -> bool:
+    """Match the same image in QQ's JPEG/PNG wrappers, not look-alike images."""
+    if first is None or second is None or first[0] != second[0]:
+        return False
+    left, right = first[1], second[1]
+    if len(left) != len(right) or not left:
+        return False
+    # An extremely low 0..255 RGB mean pixel error, measured after reducing
+    # 680x453 variants to 48x48. Distinct perceptually similar images fail.
+    return sum(abs(a - b) for a, b in zip(left, right)) <= len(left) * 2.0
+
+
 def deduplicate_upload_candidates_by_content(
     candidates: Iterable[tuple[Path, bytes]],
+    *,
+    collapse_quoted_renderings: bool = False,
 ) -> list[tuple[Path, bytes]]:
-    """Collapse duplicate upload candidates emitted by overlapping reply sources."""
+    """Collapse repeat quoted QQ images, optionally across JPEG/PNG re-encodes.
+
+    Visual equivalence is only enabled at QQ reply extraction. The normal
+    gallery deduplication, multi-image similarity check and forced upload are
+    unchanged. This also avoids accidentally uploading the same QQ image twice
+    when AstrBot returns one original and one materialized PNG version.
+    """
     seen_hashes: set[bytes] = set()
     unique: list[tuple[Path, bytes]] = []
+    previews: list[tuple[tuple[int, int], bytes] | None] = []
     for path, content in candidates:
         digest = hashlib.sha256(content).digest()
         if digest in seen_hashes:
             continue
         seen_hashes.add(digest)
+        if collapse_quoted_renderings:
+            preview = _quoted_image_render_preview(content)
+            if any(_quoted_same_rendering(old, preview) for old in previews):
+                continue
+            previews.append(preview)
         unique.append((path, content))
     return unique
 

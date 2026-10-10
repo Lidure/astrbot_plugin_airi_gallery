@@ -24,4 +24,5 @@ def test_reply_image_collector_deduplicates_after_all_sources_are_combined():
     block = source.split("    async def _get_reply_images", 1)[1].split("\n    async def ", 1)[0]
 
     assert "deduplicate_upload_candidates_by_content" in block
-    assert "return deduplicate_upload_candidates_by_content(results)" in block
+    assert "collapse_quoted_renderings=True" in block
+    assert "return unique" in block

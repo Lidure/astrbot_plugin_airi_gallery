@@ -232,7 +232,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.17"
+CURRENT_PLUGIN_VERSION = "v2.11.18"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -2788,7 +2788,15 @@ class Main(Star):
                 if materialized:
                     results.append(materialized)
 
-        return deduplicate_upload_candidates_by_content(results)
+        unique = deduplicate_upload_candidates_by_content(
+            results, collapse_quoted_renderings=True
+        )
+        if len(unique) < len(results):
+            logger.info(
+                f"[Gallery] 引用消息提取到 {len(results)} 份图片数据，"
+                f"已合并为 {len(unique)} 张实际图片。"
+            )
+        return unique
 
     async def _handle_view_number(self, event: AstrMessageEvent, index: int):
         image_path = self._find_by_index(index)
