@@ -69,10 +69,10 @@ def test_release_version_is_current_everywhere():
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.18"
-    assert badge == "v2.11.18"
-    assert changelog == "v2.11.18"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.18"' in main_source
+    assert metadata["version"] == "v2.11.19"
+    assert badge == "v2.11.19"
+    assert changelog == "v2.11.19"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.19"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
