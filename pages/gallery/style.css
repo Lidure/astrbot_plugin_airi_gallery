@@ -195,6 +195,10 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
 
 .upload-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 .upload-hint { margin-top: 9px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.fast-upload-progress { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.fast-upload-progress progress { display: block; width: 100%; height: 12px; accent-color: var(--green); }
+.fast-upload-progress p { margin-top: 7px; font-size: 12px; color: var(--text); line-height: 1.6; white-space: pre-wrap; }
+
 
 .btn {
   display: inline-flex;

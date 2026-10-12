@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.20-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.21-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -343,6 +343,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.21
+- AstrBot 画廊 WebUI 的「快速上传（不查重）」新增自动分批上传：每批最多 30 张、48 MiB 原始图片，依次上传，单次选择可以超过后端单请求 100 MiB 和 100 张的限制。
+- 上传时展示批次、已成功数量和进度条；只在发送当前批次时编码图片，避免把整组选中的大量图片同时转换为 Base64。
+- 批次失败后立即停止后续请求，仅从列表移除已确认成功的图片；保留失败批次和未开始上传的图片。若网络中断导致远端提交结果不明，明确提示先核对图库再手动重试，以免重复上传。
+- 在正式提交第一批前检查所有文件的单张大小（20 MiB 上限）。原普通上传、图片查重、安全校验和 GitHub 事务保持不变。
+
 ### v2.11.20
 - AstrBot 内置画廊 WebUI 新增「快速上传（不查重）」按钮，使用独立已认证接口 `/fast_upload`。批量上传时跳过精确重复判断与感知相似比较，也无需强制上传确认；允许同内容图片重复入库。
 - 仍然执行必要的图片内容格式、大小、像素量和数量限制，分配独立全局编号，采用无覆盖的文件创建方式，并沿用 GitHub/Gitee 远端提交及失败补偿。

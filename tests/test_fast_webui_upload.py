@@ -198,7 +198,7 @@ def test_webui_fast_button_routes_to_distinct_endpoint():
     js = Path("pages/gallery/app.js").read_text(encoding="utf-8")
     main = Path("main.py").read_text(encoding="utf-8")
     assert 'id="up-fast-btn"' in html
-    assert 'apiPost("fast_upload", { category, images })' in js
+    assert 'sendBatch: payload => apiPost("fast_upload", payload)' in js
     assert 'apiPost("upload", { category, images })' in js
     assert 'f"/{PLUGIN_NAME}/fast_upload"' in main
     assert "self._api_fast_upload_images" in main

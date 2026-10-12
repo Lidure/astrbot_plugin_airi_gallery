@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=10" />
+  <link rel="stylesheet" href="./style.css?v=11" />
 </head>
 <body>
   <div class="container">
@@ -55,6 +55,11 @@
           <button class="btn btn-save" id="up-fast-btn" type="button" title="跳过重复与相似图片比较，允许上传相同内容">快速上传（不查重）</button>
         </div>
         <p class="upload-hint">快速上传会保留重复或相似图片，不弹出查重确认；仍会验证图片格式及大小、分配新编号并正常同步 GitHub。</p>
+        <div id="fast-upload-progress" class="fast-upload-progress" role="status" aria-live="polite" hidden>
+          <progress id="fast-upload-progress-bar" value="0" max="1"></progress>
+          <p id="fast-upload-progress-text">准备分批上传…</p>
+        </div>
+        <p class="upload-hint">快速上传自动分批（每批最多 30 张、48 MiB）；单张最大 20 MiB。遇到失败将停止，并保留未确认成功的图片。</p>
       </section>
 
       <section class="card" aria-labelledby="gallery-title">
@@ -160,6 +165,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=10"></script>
+  <script type="module" src="./app.js?v=11"></script>
 </body>
 </html>

@@ -1,3 +1,5 @@
+import { uploadFastBatches } from "./fast_upload_batches.mjs";
+
 let bridge;
 try { bridge = window.AstrBotPluginPage; } catch (error) { bridge = null; }
 try { if (bridge) await bridge.ready(); } catch (error) { bridge = null; }
@@ -34,6 +36,7 @@ let currentPage = 1;
 let totalPages = 1;
 let perPage = 21;
 let pendingFiles = [];
+let fastUploadRunning = false;
 let activeView = "gallery";
 let aliases = [];
 let aliasesLoaded = false;
@@ -57,6 +60,9 @@ const preview = $("preview");
 const upActions = $("up-actions");
 const upBtn = $("up-btn");
 const fastUpBtn = $("up-fast-btn");
+const fastUploadProgress = $("fast-upload-progress");
+const fastUploadProgressText = $("fast-upload-progress-text");
+const fastUploadProgressBar = $("fast-upload-progress-bar");
 const upCount = $("up-count");
 const mask = $("mask");
 const modalImage = $("mimg");
@@ -445,11 +451,11 @@ perPageInput.addEventListener("keydown", event => {
   if (event.key === "Enter") perPageInput.dispatchEvent(new Event("change"));
 });
 
-dropZone.addEventListener("click", () => fileInput.click());
+dropZone.addEventListener("click", () => { if (!fastUploadRunning) fileInput.click(); });
 dropZone.addEventListener("keydown", event => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    fileInput.click();
+    if (!fastUploadRunning) fileInput.click();
   }
 });
 dropZone.addEventListener("dragover", event => {
@@ -468,6 +474,7 @@ fileInput.addEventListener("change", () => {
 });
 
 function addFiles(fileList) {
+  if (fastUploadRunning) return;
   for (const file of fileList) {
     if (!file.type.startsWith("image/")) continue;
     pendingFiles.push(file);
@@ -492,6 +499,7 @@ function renderPreview() {
     const removeButton = document.createElement("button");
     removeButton.type = "button";
     removeButton.className = "rm";
+    removeButton.disabled = fastUploadRunning;
     removeButton.textContent = "×";
     removeButton.setAttribute("aria-label", `移除 ${file.name}`);
     removeButton.addEventListener("click", () => {
@@ -739,43 +747,92 @@ upBtn.addEventListener("click", async () => {
   }
 });
 
+function setFastUploadProgress({ batchNumber, totalBatches, uploaded, total, stage }) {
+  fastUploadProgress.hidden = false;
+  fastUploadProgressBar.max = total;
+  fastUploadProgressBar.value = uploaded;
+  fastUploadProgressText.textContent = stage === "sending"
+    ? `正在上传第 ${batchNumber}/${totalBatches} 批 · 已成功 ${uploaded}/${total} 张`
+    : `第 ${batchNumber}/${totalBatches} 批完成 · 已成功 ${uploaded}/${total} 张`;
+}
+
 fastUpBtn.addEventListener("click", async () => {
-  if (upBtn.disabled || fastUpBtn.disabled) return;
+  if (fastUploadRunning || upBtn.disabled || fastUpBtn.disabled) return;
   const category = upInput.value.trim() || upSel.value;
   if (!category) { showMsg("请选择或输入分类", false); return; }
   if (!pendingFiles.length) { showMsg("请选择图片", false); return; }
 
   const files = [...pendingFiles];
+  fastUploadRunning = true;
   upBtn.disabled = true;
   fastUpBtn.disabled = true;
-  fastUpBtn.textContent = `快速上传中（${files.length} 张）...`;
+  fileInput.disabled = true;
+  upInput.disabled = true;
+  upSel.disabled = true;
+  fastUpBtn.textContent = "快速分批上传中...";
+  // Disable removing thumbnails while the immutable snapshot is being sent.
+  preview.querySelectorAll(".rm").forEach(button => { button.disabled = true; });
+  fastUploadProgress.hidden = false;
+  fastUploadProgressBar.max = files.length;
+  fastUploadProgressBar.value = 0;
+  fastUploadProgressText.textContent = "正在规划分批上传...";
+  let uploadedFiles = [];
+  let completedSuccessfully = false;
   try {
-    // Dedicated API: no exact or perceptual similarity comparison/confirmation.
-    const images = await Promise.all(files.map(encodeUploadFile));
-    const result = await apiPost("fast_upload", { category, images });
-    if (result?.ok !== true) throw new Error(result?.error || "快速上传失败");
-    const uploaded = Number(result.count) || 0;
-    pendingFiles = [];
-    renderPreview();
-    showMsg(`快速上传成功：${uploaded} 张到“${category}”（已跳过查重）`);
-    clearImageCache();
-    try {
-      await loadCats();
-      if (categories.includes(category)) {
-        currentCat = category;
-        currentPage = 1;
-        renderTabs();
-        await loadImgs();
+    const result = await uploadFastBatches(files, {
+      category,
+      encodeFile: encodeUploadFile,
+      sendBatch: payload => apiPost("fast_upload", payload),
+      onProgress: setFastUploadProgress,
+    });
+    uploadedFiles = result.uploadedFiles;
+    // Identify files by File object identity, NOT by filename. Selecting two
+    // identical images intentionally uploads both in quick mode.
+    const completedSet = new Set(uploadedFiles);
+    pendingFiles = pendingFiles.filter(file => !completedSet.has(file));
+    if (!result.ok) {
+      const status = result.uncertain
+        ? "失败批次可能已提交，请核对图库后再重试剩余图片。"
+        : "失败批次尚未发送，剩余图片可以重试。";
+      fastUploadProgressText.textContent =
+        `第 ${result.failedBatch}/${result.totalBatches} 批失败；已确认成功 ${uploadedFiles.length} 张，剩余 ${pendingFiles.length} 张。 ${status}`;
+      showMsg(`快速上传中断：${result.error}。已确认成功 ${uploadedFiles.length} 张。`, false);
+    } else {
+      completedSuccessfully = true;
+      fastUploadProgressBar.value = files.length;
+      fastUploadProgressText.textContent =
+        `上传完成：${uploadedFiles.length} 张，共 ${result.totalBatches} 批（已跳过查重）`;
+      showMsg(`快速上传成功：${uploadedFiles.length} 张到“${category}”，共 ${result.totalBatches} 批`);
+    }
+    if (uploadedFiles.length) {
+      clearImageCache();
+      try {
+        await loadCats();
+        if (categories.includes(category)) {
+          currentCat = category;
+          currentPage = 1;
+          renderTabs();
+          await loadImgs();
+        }
+      } catch (refreshError) {
+        console.warn("[gallery] fast batches uploaded but refresh failed", refreshError);
       }
-    } catch (refreshError) {
-      console.warn("[gallery] fast upload succeeded but refresh failed", refreshError);
     }
   } catch (error) {
-    showMsg(error.message || "快速上传失败", false);
+    // Planning failures (e.g. a >20 MiB file) occur before any submission.
+    fastUploadProgressText.textContent = error.message || "分批准备失败";
+    showMsg(error.message || "分批准备失败", false);
   } finally {
+    fastUploadRunning = false;
     upBtn.disabled = false;
     fastUpBtn.disabled = false;
+    fileInput.disabled = false;
+    upInput.disabled = false;
+    upSel.disabled = false;
     fastUpBtn.textContent = "快速上传（不查重）";
+    // Rebuild the previews only once after the batch loop; uploaded entries
+    // disappear and the remaining/uncertain batch is retained in place.
+    renderPreview();
   }
 });
 
