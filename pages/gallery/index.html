@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=9" />
+  <link rel="stylesheet" href="./style.css?v=10" />
 </head>
 <body>
   <div class="container">
@@ -52,7 +52,9 @@
         <div id="preview" class="preview-grid" hidden></div>
         <div id="up-actions" class="upload-actions" hidden>
           <button class="btn btn-primary" id="up-btn" type="button">上传 <span id="up-count">0</span> 张</button>
+          <button class="btn btn-save" id="up-fast-btn" type="button" title="跳过重复与相似图片比较，允许上传相同内容">快速上传（不查重）</button>
         </div>
+        <p class="upload-hint">快速上传会保留重复或相似图片，不弹出查重确认；仍会验证图片格式及大小、分配新编号并正常同步 GitHub。</p>
       </section>
 
       <section class="card" aria-labelledby="gallery-title">
@@ -158,6 +160,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=9"></script>
+  <script type="module" src="./app.js?v=10"></script>
 </body>
 </html>

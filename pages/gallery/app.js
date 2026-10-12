@@ -56,6 +56,7 @@ const fileInput = $("file");
 const preview = $("preview");
 const upActions = $("up-actions");
 const upBtn = $("up-btn");
+const fastUpBtn = $("up-fast-btn");
 const upCount = $("up-count");
 const mask = $("mask");
 const modalImage = $("mimg");
@@ -469,7 +470,6 @@ fileInput.addEventListener("change", () => {
 function addFiles(fileList) {
   for (const file of fileList) {
     if (!file.type.startsWith("image/")) continue;
-    if (pendingFiles.some(saved => saved.name === file.name && saved.size === file.size)) continue;
     pendingFiles.push(file);
   }
   renderPreview();
@@ -658,6 +658,7 @@ upBtn.addEventListener("click", async () => {
   if (!category) { showMsg("请选择或输入分类", false); return; }
   if (!pendingFiles.length) { showMsg("请选择图片", false); return; }
   upBtn.disabled = true;
+  fastUpBtn.disabled = true;
   upBtn.textContent = "上传中...";
   try {
     const byName = new Map(pendingFiles.map(file => [file.name, file]));
@@ -733,7 +734,48 @@ upBtn.addEventListener("click", async () => {
     showMsg(error.message || "上传失败", false);
   } finally {
     upBtn.disabled = false;
-    upBtn.textContent = `上传 ${pendingFiles.length} 张`;
+    fastUpBtn.disabled = false;
+    upBtn.replaceChildren(document.createTextNode("上传 "), upCount, document.createTextNode(" 张"));
+  }
+});
+
+fastUpBtn.addEventListener("click", async () => {
+  if (upBtn.disabled || fastUpBtn.disabled) return;
+  const category = upInput.value.trim() || upSel.value;
+  if (!category) { showMsg("请选择或输入分类", false); return; }
+  if (!pendingFiles.length) { showMsg("请选择图片", false); return; }
+
+  const files = [...pendingFiles];
+  upBtn.disabled = true;
+  fastUpBtn.disabled = true;
+  fastUpBtn.textContent = `快速上传中（${files.length} 张）...`;
+  try {
+    // Dedicated API: no exact or perceptual similarity comparison/confirmation.
+    const images = await Promise.all(files.map(encodeUploadFile));
+    const result = await apiPost("fast_upload", { category, images });
+    if (result?.ok !== true) throw new Error(result?.error || "快速上传失败");
+    const uploaded = Number(result.count) || 0;
+    pendingFiles = [];
+    renderPreview();
+    showMsg(`快速上传成功：${uploaded} 张到“${category}”（已跳过查重）`);
+    clearImageCache();
+    try {
+      await loadCats();
+      if (categories.includes(category)) {
+        currentCat = category;
+        currentPage = 1;
+        renderTabs();
+        await loadImgs();
+      }
+    } catch (refreshError) {
+      console.warn("[gallery] fast upload succeeded but refresh failed", refreshError);
+    }
+  } catch (error) {
+    showMsg(error.message || "快速上传失败", false);
+  } finally {
+    upBtn.disabled = false;
+    fastUpBtn.disabled = false;
+    fastUpBtn.textContent = "快速上传（不查重）";
   }
 });
 

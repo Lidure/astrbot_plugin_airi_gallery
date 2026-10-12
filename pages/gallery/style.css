@@ -193,7 +193,8 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
   cursor: pointer;
 }
 
-.upload-actions { margin-top: 14px; }
+.upload-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+.upload-hint { margin-top: 9px; font-size: 12px; color: var(--muted); line-height: 1.6; }
 
 .btn {
   display: inline-flex;

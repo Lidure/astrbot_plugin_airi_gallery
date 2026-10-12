@@ -425,6 +425,56 @@ class GalleryStore:
         if changed:
             self.save_hash_index()
 
+    def store_fast_image_batch(
+        self,
+        category_dir: Path,
+        category: str,
+        candidates: list[tuple[str, bytes]],
+        *,
+        min_index: int = 1,
+    ) -> list[Path]:
+        """Store every validated image without exact/perceptual comparisons.
+
+        Retain collision-safe global numbering and the content hashes required
+        for later ordinary uploads and the remote perceptual manifest. This
+        path never reads an image-dedup index or evaluates similarity.
+        """
+        if not candidates:
+            return []
+        staged: list[Path] = []
+        with self.write_lock:
+            next_index = max(self.next_index(), max(1, int(min_index)))
+            try:
+                for extension, content in candidates:
+                    if extension.lower() not in self.image_suffixes:
+                        raise ValueError("不支持的图片格式")
+                    while True:
+                        path = category_dir / f"{next_index}{extension}"
+                        next_index += 1
+                        try:
+                            with path.open("xb") as target:
+                                target.write(content)
+                            break
+                        except FileExistsError:
+                            continue
+                    staged.append(path)
+                    fingerprint = compute_image_fingerprint(content)
+                    self.remember_file_hash(
+                        path,
+                        fingerprint.content_hash,
+                        category=category,
+                        perceptual_hash=fingerprint.perceptual_hash,
+                        save=False,
+                    )
+                self.invalidate_category_hash_cache(category)
+                return staged
+            except Exception:
+                for path in reversed(staged):
+                    self.rollback_stored_image(path, category)
+                raise
+            finally:
+                self.save_hash_index()
+
     def store_unique_image_batch(
         self,
         category_dir: Path,

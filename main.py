@@ -232,7 +232,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.19"
+CURRENT_PLUGIN_VERSION = "v2.11.20"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -478,6 +478,12 @@ class Main(Star):
             self._api_upload_images,
             ["POST"],
             "Upload images to category",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/fast_upload",
+            self._api_fast_upload_images,
+            ["POST"],
+            "Fast upload images without content duplicate checks",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/category_image",
@@ -1321,6 +1327,106 @@ class Main(Star):
         except Exception as exc:
             logger.error(f"上传API错误: {exc}")
             return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def _fast_upload_remote_max_index(self) -> int:
+        """Read only global numbering metadata; never compare image contents."""
+        if not self._git_sync_enabled:
+            return 0
+        if self.remote.platform() == "github":
+            raw = self.remote.get_file(GALLERY_INDEX_PATH)
+            if raw is None:
+                raise RuntimeError("无法读取远端编号索引，快速上传未执行")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("远端编号索引格式错误")
+            if str(payload.get("algorithm", "")) != GALLERY_INDEX_ALGORITHM:
+                raise ValueError("远端索引算法不匹配")
+            number = payload.get("max_index")
+            if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+                raise ValueError("远端全局编号无效")
+            return number
+
+        # Gitee does not support the atomic GitHub manifest transaction.
+        # Only inspect remote filenames to avoid reusing a numeric id.
+        tree = self.remote.list_tree()
+        if tree is None:
+            raise RuntimeError("无法读取远端文件编号，快速上传未执行")
+        max_index = 0
+        for entry in tree:
+            if not isinstance(entry, dict):
+                continue
+            path = str(entry.get("path", ""))
+            parts = Path(path).parts
+            if len(parts) != 3 or parts[0] != "gallery":
+                continue
+            if Path(path).suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            if Path(path).stem.isdecimal():
+                max_index = max(max_index, int(Path(path).stem))
+        return max_index
+
+    async def _api_fast_upload_images(self):
+        """WebUI-only opt-in upload: skip exact/perceptual duplicate rejection."""
+        from quart import request, jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        try:
+            data = await request.get_json()
+            if not isinstance(data, dict):
+                return jsonify({"ok": False, "error": "请求数据格式错误"}), 400
+            category = str(data.get("category", "")).strip()
+            if not category:
+                return jsonify({"ok": False, "error": "请选择分类"}), 400
+            category = _sanitize_component(category)
+            images = data.get("images", [])
+            if not images:
+                return jsonify({"ok": False, "error": "请选择要上传的图片"}), 400
+            try:
+                validated = decode_upload_image_batch(
+                    images, max_count=UPLOAD_BATCH_MAX
+                )
+            except UploadPayloadTooLarge as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 413
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            category_dir = resolve_gallery_category_dir(self.gallery_root, category)
+            if category_dir is None:
+                return jsonify({"ok": False, "error": "invalid category"}), 400
+
+            # This remote read is only to reserve collision-free global
+            # numbers, not to download/compare any existing images.
+            try:
+                remote_max = await asyncio.to_thread(self._fast_upload_remote_max_index)
+            except (OSError, RuntimeError, ValueError, TypeError) as exc:
+                logger.warning(f"[Gallery] 快速上传编号预检失败: {exc}")
+                return jsonify({"ok": False, "error": "远端编号索引不可用，未上传任何图片"}), 503
+
+            category_dir.mkdir(parents=True, exist_ok=True)
+            candidates = [(item.extension, item.content) for _, item in validated]
+            staged = await asyncio.to_thread(
+                self.store.store_fast_image_batch,
+                category_dir, category, candidates,
+                min_index=remote_max + 1,
+            )
+            if staged:
+                committed = await asyncio.to_thread(
+                    self._push_staged_upload_transaction, staged, category
+                )
+                if not committed:
+                    return jsonify({
+                        "ok": False,
+                        "error": "快速上传远程提交失败，已启动一致性补偿，请核对同步状态",
+                        "files": [],
+                    }), 502
+            return jsonify({
+                "ok": True,
+                "count": len(staged),
+                "files": [path.name for path in staged],
+                "mode": "fast",
+            })
+        except Exception as exc:
+            logger.error(f"[Gallery] 快速上传 API 错误: {type(exc).__name__}: {exc}")
+            return jsonify({"ok": False, "error": "快速上传失败，请检查服务日志"}), 500
 
     async def _api_category_image(self):
         from quart import request, jsonify

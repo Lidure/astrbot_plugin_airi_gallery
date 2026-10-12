@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.19-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.20-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -343,6 +343,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.20
+- AstrBot 内置画廊 WebUI 新增「快速上传（不查重）」按钮，使用独立已认证接口 `/fast_upload`。批量上传时跳过精确重复判断与感知相似比较，也无需强制上传确认；允许同内容图片重复入库。
+- 仍然执行必要的图片内容格式、大小、像素量和数量限制，分配独立全局编号，采用无覆盖的文件创建方式，并沿用 GitHub/Gitee 远端提交及失败补偿。
+- 快速模式保留用于后续常规上传与远端同步的一致性索引，但不利用索引对本次图片查重；原「上传」按钮仍走完整查重流程。
+- 仅 AstrBot 本地管理 WebUI 提供此快捷入口，不改变公开 Token 上传接口或云端匿名路径的安全边界。
+
 ### v2.11.19
 - 修复分类上传时，感知索引错误包含其他分类路径而导致 GitHub 事务回滚。
 - 保持全量索引导出不变；单分类上传只提交对应分类的感知索引。
