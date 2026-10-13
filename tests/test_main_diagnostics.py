@@ -427,7 +427,7 @@ def test_real_boolean_true_keeps_permission_and_llm_tool_enabled(
     assert plugin.use_permission is True
     assert plugin.llm_tool_enabled is True
     assert len(context.llm_tools) == 2
-    assert {tool.name for tool in context.llm_tools} == {"gallery_catalog", "gallery_send"}
+    assert {type(tool).__name__ for tool in context.llm_tools} == {"GalleryCatalogTool", "GalleryTool"}
 
 
 @pytest.mark.parametrize("value", ["false", 1, object()])
