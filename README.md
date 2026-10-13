@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.21-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.22-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -343,6 +343,13 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.22
+- **LLM 动态画廊目录**：新增只读 Function Calling 工具 `gallery_catalog(keyword, page)`，按需查询全部真实分类、最新 WebUI 中文昵称/别名与分类图片数，支持关键词搜索及分页（每页 20 个分类），不再只向模型注入前 30 个分类与前 30 条别名。
+- **自然语言智能选图**：增强 `gallery_send(category, count)`，由插件解析所有分类名和别名；用户要求具体角色但未匹配时明确报告并建议查询目录，不再意外从全图库随机发送。仅明确要求随机或未指定角色的通用发图请求才允许随机。
+- **会话去重**：使用内存中最近 20 张图片的记录，优先挑选本群/私聊未发送过的图片；最多维护 500 个会话，插件重启后重置，不写图库或新增数据库。
+- **Token 控制与兼容性**：工具描述保持简短，目录只在 LLM 调用时实时读取；不产生额外 LLM 请求，不改 QQ 手动看图/上传命令、图库索引、云端同步和 WebUI 数据。
+- 暂不进行情绪识别或图片语义标签功能。
+
 ### v2.11.21
 - AstrBot 画廊 WebUI 的「快速上传（不查重）」新增自动分批上传：每批最多 30 张、48 MiB 原始图片，依次上传，单次选择可以超过后端单请求 100 MiB 和 100 张的限制。
 - 上传时展示批次、已成功数量和进度条；只在发送当前批次时编码图片，避免把整组选中的大量图片同时转换为 Base64。

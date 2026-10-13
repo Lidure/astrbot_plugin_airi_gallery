@@ -20,6 +20,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
 
 try:
+    from .gallery_llm import GalleryLLMService, event_session_key, request_allows_random
+except ImportError:
+    from gallery_llm import GalleryLLMService, event_session_key, request_allows_random
+
+try:
     from astrbot.core.utils.quoted_message.onebot_client import OneBotClient
 except Exception:
     OneBotClient = None
@@ -232,7 +237,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.21"
+CURRENT_PLUGIN_VERSION = "v2.11.22"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -291,16 +296,56 @@ def _image_sort_key(path: Path, base: Path | None = None) -> tuple[int, int, str
     return (1, 0, rel)
 
 
+class GalleryCatalogTool(FunctionTool):
+    """Read-only live folder / alias discovery for the main AstrBot LLM."""
+
+    def __init__(self, plugin: "Main"):
+        super().__init__(
+            name="gallery_catalog",
+            description=(
+                "查询机器人自己的 Airi Gallery 画廊：实际有哪些表情包分类、"
+                "对应角色别名、图片数量。用户问画廊有什么或某个名称是否可用时调用。"
+                "所有分类和别名均实时从画廊与 WebUI 昵称配置读取，分页返回，不能编造。"
+                "需要发图片时再调用 gallery_send。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "可选：分类名、角色昵称或关键词；省略可分页浏览整个画廊。",
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "从 1 开始的页码，默认 1，每页最多 20 个分类。",
+                    },
+                },
+                "required": [],
+            },
+        )
+        self._plugin = plugin
+
+    async def call(self, context, **kwargs):
+        keyword = str(kwargs.get("keyword") or "").strip()
+        try:
+            page = int(kwargs.get("page", 1))
+        except (TypeError, ValueError):
+            page = 1
+        return self._plugin.gallery_llm_service.catalog(keyword, page)
+
+
 class GalleryTool(FunctionTool):
+    """Send category images, never fall back to random for unknown targets."""
+
     def __init__(self, plugin: "Main"):
         super().__init__(
             name="gallery_send",
             description=(
-                "从 Airi 画廊图库中随机发送表情包或图片。"
-                "当用户说“发一张/来一张/发表情包/发图片/发某某的表情包”时应调用。"
-                "如果用户提到分类名或昵称，例如“发一张 airi 的表情包”，"
-                "应把 category 填为该关键词；没有明确分类时留空随机发送。"
-                f"{plugin._llm_gallery_hint()}"
+                "从机器人自己的 Airi Gallery 画廊实际发送图片/表情包到当前 QQ 会话。"
+                "仅在用户明确要求发送图片或对话确实适合发表情包时调用；不要只因提到角色就发图。"
+                "category 填用户的角色名、别名或分类名（可用 gallery_catalog 查询）。"
+                "未指定角色且明确要求随机图片时才允许留空；找不到指定分类绝不随机乱发。"
+                "不要虚构分类、别名或图片内容。"
             ),
             parameters={
                 "type": "object",
@@ -308,14 +353,13 @@ class GalleryTool(FunctionTool):
                     "category": {
                         "type": "string",
                         "description": (
-                            "要发送的图片分类名、分类昵称，或用户原话中的分类关键词。"
-                            "例如用户说“发一张 airi 的表情包”，category 应填 airi。"
-                            "留空则插件会尝试从用户消息中匹配分类；仍无匹配时从所有分类随机选取。"
+                            "用户要求的分类名或任意中文别名，如 桃井爱莉；"
+                            "只有明确想随机发图时才留空或填写'随机'。"
                         ),
                     },
                     "count": {
                         "type": "integer",
-                        "description": "要发送的图片数量，默认 1，最大随配置变化。",
+                        "description": "发送数量，默认 1，受画廊配置上限限制。",
                     },
                 },
                 "required": [],
@@ -325,37 +369,55 @@ class GalleryTool(FunctionTool):
 
     async def call(self, context, **kwargs):
         event = context.context.event
-        category = kwargs.get("category", "")
-        count = kwargs.get("count", 1)
+        plugin = self._plugin
+        service = plugin.gallery_llm_service
+        requested = str(kwargs.get("category") or "").strip()
+        original_message = str(getattr(event, "message_str", "") or "").strip()
+        query = requested or original_message
+
+        if requested:
+            category = service.resolve(requested)
+            if not category and requested not in ("随机", "随便", "任意"):
+                return (
+                    f"画廊没有找到“{requested}”对应的分类或昵称，未发送任何图片。"
+                    "请先调用 gallery_catalog 查询正确的名称，或询问用户。"
+                )
+        else:
+            category = service.resolve(original_message)
+            if not category and not request_allows_random(original_message):
+                return (
+                    "无法确定用户想看的画廊分类，未发送图片。"
+                    "请先调用 gallery_catalog 查找角色/别名；"
+                    "只有用户明确要求随机图时才可以不指定分类。"
+                )
+
         try:
-            count = int(count)
+            count = int(kwargs.get("count", 1))
         except (TypeError, ValueError):
             count = 1
-        count = max(1, min(self._plugin.view_multiple_max, count))
-
-        plugin = self._plugin
-        query = str(category or "").strip()
-        if not query:
-            query = str(getattr(event, "message_str", "") or "").strip()
-        category = plugin._resolve_gallery_category_query(query)
-
-        if category:
-            images = plugin._iter_category_images(category)
-        else:
-            images = plugin._iter_image_files()
-
+        count = max(1, min(plugin.view_multiple_max, count))
+        images = service.images_for(category)
         if not images:
-            if category:
-                return f"图库分类 {category} 中没有可用的图片。"
-            return "图库中没有可用的图片。"
-
-        picks = images if len(images) <= count else random.sample(images, count)
+            return (
+                f"图库分类“{category}”目前没有图片，未发送。" if category
+                else "画廊中目前没有可发送的图片。"
+            )
+        session = event_session_key(event)
+        picks = service.choose(images, count, session)
+        sent = 0
         for path in picks:
-            await event.send(event.image_result(str(path)))
-
+            try:
+                await event.send(event.image_result(str(path)))
+            except Exception as exc:
+                logger.warning(f"[Gallery LLM] 图片发送失败：{type(exc).__name__}")
+                break
+            service.remember(path, session)
+            sent += 1
+        if sent != len(picks):
+            return f"画廊图片发送中断，已成功发送 {sent}/{len(picks)} 张。"
         if category:
-            return f"已从 {category} 分类发送 {len(picks)} 张图片。"
-        return f"已发送 {len(picks)} 张图片。"
+            return f"已从 {category} 分类发送 {sent} 张图片。"
+        return f"已从画廊随机发送 {sent} 张图片。"
 
 
 class Main(Star):
@@ -407,6 +469,13 @@ class Main(Star):
         )
         self.category_aliases = self._parse_aliases(self.config.get("category_aliases") or [])
 
+        self.gallery_llm_service = GalleryLLMService(
+            list_categories=self._list_category_names,
+            get_aliases=lambda: self.category_aliases,
+            category_images=self._iter_category_images,
+            all_images=self._iter_image_files,
+        )
+
         # Git 远程同步事务状态由 GallerySync 单独拥有；Main 仅保留兼容代理。
         self._gallery_write_lock = self.store.write_lock
         self.remote = GalleryRemote(
@@ -447,6 +516,7 @@ class Main(Star):
         self._pending_api_similar_upload_lock = threading.RLock()
 
         if self.llm_tool_enabled:
+            self.context.add_llm_tools(GalleryCatalogTool(self))
             self.context.add_llm_tools(GalleryTool(self))
 
         context.register_web_api(
@@ -2150,16 +2220,8 @@ class Main(Star):
         return self.store.list_category_names()
 
     def _llm_gallery_hint(self) -> str:
-        categories = self._list_category_names()
-        hints: list[str] = []
-        if categories:
-            hints.append("当前可用分类包括：" + "、".join(categories[:30]))
-        if self.category_aliases:
-            alias_items = [f"{alias}={cat}" for alias, cat in sorted(self.category_aliases.items())[:30]]
-            hints.append("分类昵称包括：" + "、".join(alias_items))
-        if not hints:
-            return ""
-        return " " + "；".join(hints) + "。"
+        """Compact capability hint; never inject full catalog into every prompt."""
+        return "可以通过 gallery_catalog 实时查询全部分类和别名。"
 
     @staticmethod
     def _normalize_match_text(text: str) -> str:
