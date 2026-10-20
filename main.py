@@ -136,6 +136,11 @@ except ImportError:
     from gallery_migration import GalleryMigration, parse_migration_request
 
 try:
+    from .gallery_web_migration import GalleryWebMigration
+except ImportError:
+    from gallery_web_migration import GalleryWebMigration
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -272,7 +277,7 @@ def _sanitize_component(value: str) -> str:
     )
 
 
-def _is_authenticated_web_request() -> bool:
+def _authenticated_web_username() -> str:
     username = None
     try:
         from astrbot.api.web import request as plugin_request
@@ -281,15 +286,18 @@ def _is_authenticated_web_request() -> bool:
     except (ImportError, RuntimeError, AttributeError):
         pass
     if isinstance(username, str) and username.strip():
-        return True
+        return username.strip()
 
     try:
         from quart import g
-
         username = getattr(g, "username", None)
     except (ImportError, RuntimeError, AttributeError):
-        return False
-    return isinstance(username, str) and bool(username.strip())
+        return ""
+    return username.strip() if isinstance(username, str) else ""
+
+
+def _is_authenticated_web_request() -> bool:
+    return bool(_authenticated_web_username())
 
 
 def _is_image_file(path: Path) -> bool:
@@ -504,6 +512,7 @@ class Main(Star):
             manifest_publisher=self._publish_gallery_manifest,
         )
         self.migration = GalleryMigration(self.store, self.sync, self.remote)
+        self.web_migration = GalleryWebMigration(self.migration, self.sync)
         self._migration_previews: dict[str, dict] = {}
         self._migration_preview_lock = threading.RLock()
         self.diagnostics = GalleryDiagnostics(
@@ -576,6 +585,12 @@ class Main(Star):
             self._api_delete_image,
             ["POST"],
             "Delete image from category",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/move_images",
+            self._api_move_images,
+            ["POST"],
+            "Preview, confirm, or cancel a safe category move",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/pub/categories",
@@ -1613,6 +1628,30 @@ class Main(Star):
         if not await self._delete_image_consistently(img_path, category):
             return jsonify({"ok": False, "error": "远程删除失败，本地文件已保留"}), 502
         return jsonify({"ok": True})
+
+    async def _api_move_images(self):
+        from quart import request, jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        data = await request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"ok": False, "error": "JSON 请求格式无效"}), 400
+        action = data.get("action")
+        if action == "preview":
+            result = await asyncio.to_thread(
+                self.web_migration.preview,
+                actor, data.get("source"), data.get("target"), data.get("names"),
+            )
+        elif action == "confirm":
+            result = await asyncio.to_thread(
+                self.web_migration.confirm, actor, data.get("ticket"),
+            )
+        elif action == "cancel":
+            result = self.web_migration.cancel(actor, data.get("ticket"))
+        else:
+            return jsonify({"ok": False, "error": "不支持的迁移操作"}), 400
+        return jsonify(result)
 
     def _check_upload_token(self, token: str) -> bool:
         expected = str(self.config.get("upload_token", "")).strip()

@@ -1,4 +1,5 @@
 import { uploadFastBatches } from "./fast_upload_batches.mjs";
+import { MoveSelection } from "./move_selection.mjs";
 
 let bridge;
 try { bridge = window.AstrBotPluginPage; } catch (error) { bridge = null; }
@@ -37,6 +38,10 @@ let totalPages = 1;
 let perPage = 21;
 let pendingFiles = [];
 let fastUploadRunning = false;
+let moveMode = false;
+let moveDialogState = null;
+let moveBusy = false;
+const moveSelection = new MoveSelection(50);
 let activeView = "gallery";
 let aliases = [];
 let aliasesLoaded = false;
@@ -88,6 +93,19 @@ const aliasSaveBtn = $("alias-save-btn");
 const aliasReloadBtn = $("alias-reload-btn");
 const aliasSummary = $("alias-summary");
 const aliasDirtyState = $("alias-dirty-state");
+const moveModeBtn = $("move-mode-btn");
+const moveToolbar = $("move-toolbar");
+const moveCount = $("move-selected-count");
+const moveSelectPage = $("move-select-page");
+const moveClear = $("move-clear");
+const moveOpen = $("move-open");
+const moveMask = $("move-mask");
+const moveDescription = $("move-description");
+const moveTargetSelect = $("move-target-select");
+const moveTargetNew = $("move-target-new");
+const moveReview = $("move-review");
+const moveCancel = $("move-cancel");
+const moveContinue = $("move-continue");
 
 function showMsg(text, ok = true) {
   document.querySelector(".toast")?.remove();
@@ -243,6 +261,168 @@ async function openImagePreview(category, name) {
   }
 }
 
+
+function updateMoveCard(card) {
+  const name = card.dataset.name;
+  const selected = moveSelection.has(name);
+  card.classList.toggle("move-selected", moveMode && selected);
+  if (moveMode) card.setAttribute("aria-pressed", String(selected));
+  else card.removeAttribute("aria-pressed");
+  const check = card.querySelector(".move-check");
+  const single = card.querySelector(".move-single");
+  if (check) {
+    check.hidden = !moveMode;
+    check.textContent = selected ? "✓" : "+";
+    check.setAttribute("aria-pressed", String(selected));
+  }
+  if (single) single.hidden = moveMode;
+  const remove = card.querySelector(".del-btn");
+  if (remove) remove.hidden = moveMode;
+}
+
+function updateMoveSelectionUI() {
+  moveModeBtn.textContent = moveMode ? "退出批量移动" : "批量移动";
+  moveModeBtn.setAttribute("aria-pressed", String(moveMode));
+  moveToolbar.hidden = !moveMode;
+  moveCount.textContent = "已选择 " + moveSelection.count + " / 50 张";
+  moveOpen.disabled = moveSelection.count === 0 || moveBusy;
+  moveClear.disabled = moveSelection.count === 0 || moveBusy;
+  moveSelectPage.disabled = moveBusy;
+  grid.classList.toggle("move-selecting", moveMode);
+  for (const card of grid.querySelectorAll(".grid-item")) updateMoveCard(card);
+}
+
+function toggleMoveImage(name) {
+  const result = moveSelection.toggle(name);
+  if (!result.ok) showMsg(result.error, false);
+  updateMoveSelectionUI();
+}
+
+function renderMoveTargets() {
+  moveTargetSelect.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "选择已有分类…";
+  moveTargetSelect.appendChild(placeholder);
+  for (const category of categories) {
+    if (category === moveDialogState?.source) continue;
+    const option = document.createElement("option");
+    option.value = category;
+    option.textContent = category;
+    moveTargetSelect.appendChild(option);
+  }
+}
+
+function setMoveDialogBusy(busy) {
+  moveBusy = busy;
+  moveCancel.disabled = busy;
+  moveContinue.disabled = busy;
+  moveTargetSelect.disabled = busy || !!moveDialogState?.ticket;
+  moveTargetNew.disabled = busy || !!moveDialogState?.ticket;
+  updateMoveSelectionUI();
+}
+
+function openMoveDialog(names) {
+  if (!currentCat || moveBusy || !names.length) return;
+  moveDialogState = { source: currentCat, names: [...names], ticket: "", target: "" };
+  moveDescription.textContent = "从「" + currentCat + "」移动 " + names.length +
+    " 张图片（编号 " + names.map(name => "#" + name.split(".")[0]).join("、") + "）";
+  moveTargetNew.value = "";
+  moveReview.hidden = true;
+  moveReview.textContent = "";
+  moveContinue.textContent = "预览迁移";
+  renderMoveTargets();
+  moveMask.hidden = false;
+  setMoveDialogBusy(false);
+  moveTargetSelect.focus();
+}
+
+function closeMoveDialog() {
+  if (moveBusy) return;
+  const ticket = moveDialogState?.ticket;
+  moveDialogState = null;
+  moveMask.hidden = true;
+  moveReview.hidden = true;
+  if (ticket) void apiPost("move_images", { action: "cancel", ticket }).catch(() => {});
+}
+
+moveModeBtn.addEventListener("click", () => {
+  if (moveBusy) return;
+  moveMode = !moveMode;
+  moveSelection.reset(currentCat);
+  updateMoveSelectionUI();
+});
+moveSelectPage.addEventListener("click", () => {
+  const names = [...grid.querySelectorAll(".grid-item")].map(card => card.dataset.name);
+  const added = moveSelection.addVisible(names);
+  updateMoveSelectionUI();
+  if (moveSelection.count >= 50 && added < names.length) showMsg("每次最多移动 50 张，可分批操作", false);
+});
+moveClear.addEventListener("click", () => {
+  moveSelection.reset(currentCat);
+  updateMoveSelectionUI();
+});
+moveOpen.addEventListener("click", () => openMoveDialog(moveSelection.names()));
+moveCancel.addEventListener("click", closeMoveDialog);
+moveMask.addEventListener("click", event => { if (event.target === moveMask) closeMoveDialog(); });
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !moveMask.hidden) {
+    event.preventDefault();
+    closeMoveDialog();
+  }
+});
+
+moveContinue.addEventListener("click", async () => {
+  const state = moveDialogState;
+  if (!state || moveBusy) return;
+  if (!state.ticket) {
+    const target = moveTargetNew.value.trim() || moveTargetSelect.value;
+    if (!target) { showMsg("请选择或输入目标分类", false); moveTargetSelect.focus(); return; }
+    if (target === state.source) { showMsg("目标分类不能与原分类相同", false); return; }
+    setMoveDialogBusy(true);
+    try {
+      const result = await apiPost("move_images", {
+        action: "preview", source: state.source, target, names: state.names,
+      });
+      if (result?.ok !== true || !result.ticket) throw new Error(result?.error || "迁移预览失败");
+      if (moveDialogState !== state) return;
+      state.ticket = result.ticket;
+      state.target = result.target;
+      moveReview.textContent = "即将从「" + state.source + "」移动到「" + state.target + "」\n" +
+        "共 " + result.count + " 张，原编号保持不变。\n" +
+        (result.remote ? "GitHub 将同步更新图片路径及索引。" : "当前为仅本地迁移。") +
+        "\n确认有效期 5 分钟；请再次核对目标分类。";
+      moveReview.hidden = false;
+      moveContinue.textContent = "确认移动 " + result.count + " 张";
+    } catch (error) { showMsg(error.message || "预览失败", false); }
+    finally { setMoveDialogBusy(false); }
+    return;
+  }
+  const ticket = state.ticket;
+  setMoveDialogBusy(true);
+  try {
+    const result = await apiPost("move_images", { action: "confirm", ticket });
+    if (result?.ok !== true) throw new Error(result?.error || "移动失败，请重新预览");
+    moveDialogState = null;
+    moveMask.hidden = true;
+    moveMode = false;
+    moveSelection.reset(currentCat);
+    clearImageCache(state.source);
+    clearImageCache(state.target);
+    currentPage = 1;
+    await loadCats();
+    await loadImgs();
+    updateMoveSelectionUI();
+    showMsg("已移动 " + result.moved + " 张到「" + state.target + "」");
+  } catch (error) {
+    // Confirm consumes its ticket server-side, even when the transaction failed.
+    state.ticket = "";
+    moveReview.hidden = true;
+    moveContinue.textContent = "重新预览迁移";
+    showMsg(error.message || "移动失败，请检查同步状态", false);
+  } finally { setMoveDialogBusy(false); }
+});
+
 async function loadCats() {
   try {
     const data = await apiGet("categories");
@@ -254,6 +434,7 @@ async function loadCats() {
   renderTabs();
   renderUploadOptions();
   renderAliasCategoryOptions();
+  if (moveDialogState) renderMoveTargets();
 }
 
 function renderTabs() {
@@ -273,6 +454,8 @@ function renderTabs() {
     tab.addEventListener("click", () => {
       currentCat = category;
       currentPage = 1;
+      moveSelection.reset(category);
+      updateMoveSelectionUI();
       renderTabs();
       void loadImgs();
     });
@@ -347,6 +530,7 @@ async function loadImgs() {
 
 function renderGrid(data) {
   const images = data.imgs;
+  grid.classList.toggle("move-selecting", moveMode);
   releaseGridImageResources();
   grid.replaceChildren();
   if (!images.length) {
@@ -362,7 +546,9 @@ function renderGrid(data) {
     const indexMatch = name.match(/^(\d+)/);
     const imageItem = document.createElement("div");
     imageItem.className = "grid-item";
+    imageItem.dataset.name = name;
     imageItem.tabIndex = 0;
+    imageItem.setAttribute("role", "button");
 
     const image = document.createElement("img");
     image.loading = "lazy";
@@ -383,6 +569,7 @@ function renderGrid(data) {
     deleteButton.setAttribute("aria-label", `删除 ${name}`);
     deleteButton.addEventListener("click", async event => {
       event.stopPropagation();
+      if (moveMode) return;
       deleteButton.disabled = true;
       try {
         const category = image.dataset.category;
@@ -397,19 +584,41 @@ function renderGrid(data) {
       }
     });
 
+    const moveButton = document.createElement("button");
+    moveButton.type = "button";
+    moveButton.className = "move-single";
+    moveButton.textContent = "移动";
+    moveButton.setAttribute("aria-label", "移动 " + name + " 到其他分类");
+    moveButton.hidden = moveMode;
+    moveButton.addEventListener("click", event => {
+      event.stopPropagation();
+      openMoveDialog([name]);
+    });
+    const checkButton = document.createElement("button");
+    checkButton.type = "button";
+    checkButton.className = "move-check";
+    checkButton.setAttribute("aria-label", "选择 " + name);
+    checkButton.hidden = !moveMode;
+    checkButton.addEventListener("click", event => {
+      event.stopPropagation();
+      toggleMoveImage(name);
+    });
     const openPreview = () => {
+      if (moveMode) { toggleMoveImage(name); return; }
       void openImagePreview(image.dataset.category, name);
     };
     imageItem.addEventListener("click", openPreview);
     imageItem.addEventListener("keydown", event => {
+      if (event.target !== imageItem) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         openPreview();
       }
     });
 
-    imageItem.append(image, badge, deleteButton);
+    imageItem.append(image, badge, deleteButton, moveButton, checkButton);
     grid.appendChild(imageItem);
+    updateMoveCard(imageItem);
     observeGridImage(image);
   }
 }
