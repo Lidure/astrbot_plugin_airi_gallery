@@ -237,7 +237,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.23"
+CURRENT_PLUGIN_VERSION = "v2.11.24"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -1640,19 +1640,21 @@ class Main(Star):
         return resolve_cloud_gallery_url(self.config)
 
     def _build_cloud_gallery_help_text(self) -> str | None:
+        """构建帮助命令附加文字；可在插件配置中关闭或自定义。"""
+        if not coerce_strict_bool(self.config.get("cloud_gallery_help_text_enabled", True)):
+            return None
         url = self._cloud_gallery_url()
         if not url:
             return None
-        return "\n".join(
-            [
-                "云端图库小入口也准备好啦：",
-                url,
-                "",
-                "点开就能在浏览器里查看图库、翻找表情包，也可以批量上传、整理和删除图片；Bot 不在线时，也能先把新表情包放进云端仓库。",
-                "",
-                "图库会做去重和编号续号，很适合一次收拾一大包图。Airi 很需要大家一起投喂/提供表情包，让图库慢慢变得更好用。上传需要密钥，如果想帮忙补图，可以私聊bot获取。"
-            ]
+        template = str(
+            self.config.get(
+                "cloud_gallery_help_text",
+                "云端图库小入口也准备好啦：\\n{url}\\n\\n点开就能在浏览器里查看图库、翻找表情包，也可以批量上传、整理和删除图片；Bot 不在线时，也能先把新表情包放进云端仓库。\\n\\n图库会做去重和编号续号，很适合一次收拾一大包图。Airi 很需要大家一起投喂/提供表情包，让图库慢慢变得更好用。上传需要密钥，如果想帮忙补图，可以私聊bot获取。",
+            )
         )
+        if not template.strip():
+            return None
+        return template.replace("{url}", url)
 
     # ──────────────────────────────────────────────
     # Git 远程仓库同步
