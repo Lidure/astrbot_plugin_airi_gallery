@@ -43,7 +43,7 @@ def test_cloud_move_is_not_exposed_to_readonly_or_gitee_and_does_not_touch_worke
     assert "indexEntry?.sha !== plan.indexSha" in transaction
     assert "clock() >= plan.expiresAt" in transaction
     assert "const beforeUpdate = await readHead(request, urls)" in transaction
-    assert "request('PATCH', urls.refs" in transaction
+    assert "requireResponse(request, 'PATCH', urls.refs" in transaction
 
 
 def test_cloud_move_node_transaction_suite_and_syntax():
