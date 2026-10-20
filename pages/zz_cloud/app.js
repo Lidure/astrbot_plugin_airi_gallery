@@ -6,6 +6,7 @@ import {
 } from './upload_transaction.mjs';
 import { createBase64UploadStream } from './blob_stream.mjs';
 import { manifestIndexToTree } from './manifest_tree.mjs';
+import { previewCloudMove, confirmCloudMove } from './move_transaction.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
@@ -17,6 +18,12 @@ const CLOUD_PROXY_BLOB_THRESHOLD_BYTES = 4 * 1024 * 1024;
 const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 
 let config = loadConfig();
+let cloudMoveMode = false;
+let cloudMoveBusy = false;
+let cloudMoveDialog = null;
+const cloudMoveSelected = new Set();
+let cloudMovePreviewObserver = null;
+let cloudMoveZoomFocus = null;
 let state = {
   connected: false,
   categories: [],        // [{name, files: [{path, sha, size}]}]
@@ -57,6 +64,14 @@ const dropZone = $('drop'), fileInput = $('file'), previewEl = $('preview');
 const upActions = $('up-actions'), upBtn = $('up-btn'), upCount = $('up-count');
 const progressWrap = $('progress-wrap'), progressBar = $('progress-bar'), progressText = $('progress-text');
 const tabsEl = $('tabs'), gridEl = $('grid');
+const cloudMoveModeBtn = $('cloud-move-mode'), cloudMoveToolbar = $('cloud-move-toolbar');
+const cloudMoveCount = $('cloud-move-count'), cloudMovePage = $('cloud-move-page');
+const cloudMoveClear = $('cloud-move-clear'), cloudMoveOpen = $('cloud-move-open');
+const cloudMoveMask = $('cloud-move-mask'), cloudMoveDescription = $('cloud-move-description');
+const cloudMovePreviewGrid = $('cloud-move-preview-grid');
+const cloudMoveTarget = $('cloud-move-target'), cloudMoveNew = $('cloud-move-new');
+const cloudMoveReview = $('cloud-move-review'), cloudMoveCancel = $('cloud-move-cancel');
+const cloudMoveContinue = $('cloud-move-continue');
 const pagerEl = $('pager'), prevBtn = $('prev-btn'), nextBtn = $('next-btn');
 const firstBtn = $('first-btn'), lastBtn = $('last-btn');
 const pageIndicator = $('page-indicator'), perPageInput = $('per-page-input');
@@ -849,6 +864,290 @@ function getNextIndex() {
   return max + 1;
 }
 
+
+// ──────────────────────────────────────────────
+// Cloud image moves: select, preview thumbnails, then atomic GitHub ref update.
+// ──────────────────────────────────────────────
+function cloudMoveAllowed() {
+  return config.platform === 'github' && canWrite() && state.connected;
+}
+function cloudMoveReset() {
+  cloudMoveSelected.clear();
+  cloudMoveMode = false;
+  cloudMoveRefreshUI();
+}
+function cloudMoveRefreshUI() {
+  const allowed = cloudMoveAllowed();
+  cloudMoveModeBtn.classList.toggle('is-hidden', !allowed);
+  cloudMoveModeBtn.textContent = cloudMoveMode ? '退出批量移动' : '批量移动';
+  cloudMoveModeBtn.setAttribute('aria-pressed', String(cloudMoveMode));
+  cloudMoveToolbar.classList.toggle('is-hidden', !allowed || !cloudMoveMode);
+  cloudMoveCount.textContent = '已选择 ' + cloudMoveSelected.size + ' / 50 张';
+  cloudMoveOpen.disabled = cloudMoveBusy || cloudMoveSelected.size === 0;
+  cloudMovePage.disabled = cloudMoveBusy;
+  cloudMoveClear.disabled = cloudMoveBusy || cloudMoveSelected.size === 0;
+  cloudMoveModeBtn.disabled = cloudMoveBusy;
+  gridEl.classList.toggle('cloud-move-selecting', cloudMoveMode);
+  for (const card of gridEl.querySelectorAll('.grid-item[data-path]')) {
+    const chosen = cloudMoveSelected.has(card.dataset.path);
+    card.classList.toggle('cloud-move-selected', cloudMoveMode && chosen);
+    card.querySelector('.cloud-move-check')?.setAttribute('aria-pressed', String(chosen));
+    const check = card.querySelector('.cloud-move-check');
+    if (check) check.textContent = chosen ? '✓' : '+';
+  }
+}
+function cloudMoveToggle(path) {
+  if (cloudMoveBusy || !cloudMoveAllowed()) return;
+  if (cloudMoveSelected.has(path)) cloudMoveSelected.delete(path);
+  else if (cloudMoveSelected.size < 50) cloudMoveSelected.add(path);
+  else toast('每次最多移动 50 张，请分批操作', false);
+  cloudMoveRefreshUI();
+}
+function addCloudMoveControls(card, file) {
+  if (!cloudMoveAllowed()) return;
+  card.dataset.path = file.path;
+  const single = document.createElement('button');
+  single.type = 'button';
+  single.className = 'cloud-move-single';
+  single.textContent = '移动';
+  single.setAttribute('aria-label', '移动此图片');
+  single.addEventListener('click', event => {
+    event.stopPropagation();
+    openCloudMoveDialog([file.path]);
+  });
+  const select = document.createElement('button');
+  select.type = 'button';
+  select.className = 'cloud-move-check';
+  select.textContent = cloudMoveSelected.has(file.path) ? '✓' : '+';
+  select.setAttribute('aria-label', '选择此图片进行移动');
+  select.setAttribute('aria-pressed', String(cloudMoveSelected.has(file.path)));
+  select.addEventListener('click', event => {
+    event.stopPropagation();
+    cloudMoveToggle(file.path);
+  });
+  card.append(single, select);
+  cloudMoveRefreshUI();
+}
+function cloudMoveTargets() {
+  cloudMoveTarget.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '选择已有分类...';
+  cloudMoveTarget.appendChild(placeholder);
+  for (const category of state.categories) {
+    if (category.name === cloudMoveDialog?.source) continue;
+    const option = document.createElement('option');
+    option.value = category.name;
+    option.textContent = category.name;
+    cloudMoveTarget.appendChild(option);
+  }
+}
+function cloudMoveSetBusy(busy) {
+  cloudMoveBusy = busy;
+  cloudMoveCancel.disabled = busy;
+  cloudMoveContinue.disabled = busy;
+  cloudMoveTarget.disabled = busy || !!cloudMoveDialog?.plan;
+  cloudMoveNew.disabled = busy || !!cloudMoveDialog?.plan;
+  cloudMoveRefreshUI();
+}
+function cloudMovePictures(dialog) {
+  cloudMovePreviewObserver?.disconnect();
+  cloudMovePreviewObserver = null;
+  cloudMovePreviewGrid.replaceChildren();
+  cloudMovePreviewGrid.classList.toggle('single', dialog.paths.length === 1);
+  const files = new Map(state.categories.flatMap(cat => cat.files.map(file => [file.path, file])));
+  for (const path of dialog.paths) {
+    const file = files.get(path);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('aria-label', '放大查看待迁移图片');
+    button.title = '点击放大图片';
+    const img = document.createElement('img');
+    img.alt = '待迁移图片';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    const status = document.createElement('span');
+    status.className = 'thumb-loading';
+    status.textContent = '加载中…';
+    button.append(img, status);
+    button.disabled = true;
+    const load = async () => {
+      if (!file || cloudMoveDialog !== dialog) return;
+      const direct = rawImageUrl(file);
+      const fallback = async () => {
+        try {
+          const blobUrl = await imagePool(() => getImageObjectUrl(file));
+          if (cloudMoveDialog !== dialog || !button.isConnected) return;
+          if (!blobUrl) throw new Error('图片为空');
+          img.src = blobUrl;
+        } catch {
+          if (cloudMoveDialog !== dialog) return;
+          status.textContent = '加载失败，点击重试';
+          button.disabled = false;
+          button.dataset.failed = 'yes';
+        }
+      };
+      img.onload = () => {
+        if (cloudMoveDialog !== dialog) return;
+        status.classList.add('is-hidden');
+        button.disabled = false;
+        delete button.dataset.failed;
+      };
+      img.onerror = () => { img.onerror = null; void fallback(); };
+      if (direct) img.src = direct;
+      else await fallback();
+    };
+    button.addEventListener('click', () => {
+      if (button.dataset.failed) {
+        button.disabled = true;
+        button.dataset.failed = '';
+        status.textContent = '加载中…';
+        void load();
+        return;
+      }
+      if (!img.src) return;
+      cloudMoveZoomFocus = button;
+      mimg.src = img.src;
+      mask.classList.add('cloud-move-zoom', 'show');
+    });
+    button.dataset.loadState = 'waiting';
+    button._startCloudPreview = () => {
+      if (button.dataset.loadState !== 'waiting') return;
+      button.dataset.loadState = 'started';
+      void load();
+    };
+    cloudMovePreviewGrid.appendChild(button);
+  }
+  if (typeof window.IntersectionObserver === 'function') {
+    cloudMovePreviewObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        cloudMovePreviewObserver?.unobserve(entry.target);
+        entry.target._startCloudPreview?.();
+      }
+    }, { root: cloudMovePreviewGrid, rootMargin: '100px' });
+    for (const button of cloudMovePreviewGrid.querySelectorAll('button')) cloudMovePreviewObserver.observe(button);
+  } else {
+    for (const button of cloudMovePreviewGrid.querySelectorAll('button')) button._startCloudPreview();
+  }
+}
+function openCloudMoveDialog(paths) {
+  if (!cloudMoveAllowed() || cloudMoveBusy || !state.currentCat || !paths.length) return;
+  cloudMoveDialog = {
+    source: state.currentCat,
+    paths: [...paths],
+    configKey: [config.platform, config.owner, config.repo, config.branch, config.token].join('\0'),
+    plan: null,
+  };
+  cloudMoveDescription.textContent = '从「' + state.currentCat + '」移动 ' + paths.length + ' 张图片，请核对缩略图。';
+  cloudMoveReview.classList.add('is-hidden');
+  cloudMoveReview.textContent = '';
+  cloudMoveNew.value = '';
+  cloudMoveContinue.textContent = '预览迁移';
+  cloudMoveTargets();
+  cloudMoveMask.classList.remove('is-hidden');
+  cloudMovePictures(cloudMoveDialog);
+  cloudMoveSetBusy(false);
+  cloudMoveTarget.focus();
+}
+function closeCloudMoveDialog() {
+  if (cloudMoveBusy) return;
+  cloudMoveDialog = null;
+  cloudMovePreviewObserver?.disconnect();
+  cloudMovePreviewObserver = null;
+  cloudMovePreviewGrid.replaceChildren();
+  cloudMoveMask.classList.add('is-hidden');
+  cloudMoveReview.classList.add('is-hidden');
+}
+cloudMoveModeBtn.addEventListener('click', () => {
+  if (cloudMoveBusy || !cloudMoveAllowed()) return;
+  cloudMoveMode = !cloudMoveMode;
+  cloudMoveSelected.clear();
+  cloudMoveRefreshUI();
+});
+cloudMovePage.addEventListener('click', () => {
+  if (cloudMoveBusy) return;
+  const cards = gridEl.querySelectorAll('.grid-item[data-path]');
+  let skipped = 0;
+  for (const card of cards) {
+    if (cloudMoveSelected.has(card.dataset.path)) continue;
+    if (cloudMoveSelected.size === 50) { skipped++; continue; }
+    cloudMoveSelected.add(card.dataset.path);
+  }
+  cloudMoveRefreshUI();
+  if (skipped) toast('每次最多移动 50 张，请分批操作', false);
+});
+cloudMoveClear.addEventListener('click', () => { cloudMoveSelected.clear(); cloudMoveRefreshUI(); });
+cloudMoveOpen.addEventListener('click', () => openCloudMoveDialog([...cloudMoveSelected]));
+cloudMoveCancel.addEventListener('click', closeCloudMoveDialog);
+cloudMoveMask.addEventListener('click', event => {
+  if (event.target === cloudMoveMask) closeCloudMoveDialog();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && cloudMoveDialog && !mask.classList.contains('show')) {
+    event.preventDefault();
+    closeCloudMoveDialog();
+  }
+});
+cloudMoveContinue.addEventListener('click', async () => {
+  const dialog = cloudMoveDialog;
+  if (!dialog || cloudMoveBusy || !cloudMoveAllowed()) return;
+  if (dialog.configKey !== [config.platform, config.owner, config.repo, config.branch, config.token].join('\0')) {
+    toast('仓库连接已变化，请重新打开迁移窗口', false);
+    closeCloudMoveDialog();
+    return;
+  }
+  if (!dialog.plan) {
+    const target = cloudMoveNew.value.trim() || cloudMoveTarget.value;
+    if (!target || target === dialog.source) {
+      toast('请选择与原分类不同的目标分类', false);
+      return;
+    }
+    cloudMoveSetBusy(true);
+    try {
+      const plan = await previewCloudMove({
+        owner: config.owner, repo: config.repo, branch: config.branch || 'main',
+        source: dialog.source, target, paths: dialog.paths,
+        request: (method, path, options) => ghRequest(method, path, options),
+      });
+      if (dialog !== cloudMoveDialog) return;
+      dialog.plan = plan;
+      cloudMoveReview.textContent = '即将从「' + dialog.source + '」移动 ' + plan.items.length
+        + ' 张到「' + target + '」。\nGitHub 将一次性更新图片路径与感知索引。\n预览 5 分钟内有效，请确认后提交。';
+      cloudMoveReview.classList.remove('is-hidden');
+      cloudMoveContinue.textContent = '确认移动 ' + plan.items.length + ' 张';
+    } catch (error) {
+      toast('迁移预览失败：' + error.message, false);
+    } finally { cloudMoveSetBusy(false); }
+    return;
+  }
+  cloudMoveSetBusy(true);
+  const plan = dialog.plan;
+  dialog.plan = null; // Consume locally before any GitHub writes; avoid double-submit.
+  try {
+    const result = await confirmCloudMove({
+      plan,
+      request: (method, path, options) => ghRequest(method, path, options),
+    });
+    closeCloudMoveDialogForced();
+    cloudMoveReset();
+    clearImageCache();
+    const synced = await syncFromRemote({ force: true });
+    if (!synced) toast('远端移动已完成，但刷新失败；请手动同步核对', false);
+    else toast('已安全移动 ' + result.moved + ' 张图片');
+  } catch (error) {
+    cloudMoveReview.classList.add('is-hidden');
+    cloudMoveContinue.textContent = '重新预览迁移';
+    toast('迁移未确认：' + error.message, false);
+  } finally {
+    cloudMoveSetBusy(false);
+  }
+});
+function closeCloudMoveDialogForced() {
+  cloudMoveBusy = false;
+  closeCloudMoveDialog();
+}
+
 // ──────────────────────────────────────────────
 // UI: Status & connection
 // ──────────────────────────────────────────────
@@ -864,6 +1163,7 @@ function showMainUI(show) {
   uploadCard.classList.toggle('is-hidden', !(show && canWrite()));
   browseCard.classList.toggle('is-hidden', !show);
   if (!canWrite()) document.querySelectorAll('.del-btn').forEach(button => button.remove());
+  cloudMoveRefreshUI();
 }
 
 // ──────────────────────────────────────────────
@@ -914,6 +1214,7 @@ async function syncFromRemote({ force = false } = {}) {
         renderTabs();
       }
       if (state.currentCat) await loadCategoryImages();
+      cloudMoveRefreshUI();
       return syncGeneration === state.syncGeneration && !controller.signal.aborted;
     } catch (e) {
       if (e?.name === 'AbortError' || syncGeneration !== state.syncGeneration) return false;
@@ -961,6 +1262,8 @@ function renderTabs() {
     count.textContent = `(${cat.files.length})`;
     t.append(catName, count);
     t.onclick = () => {
+      if (cloudMoveBusy) return;
+      cloudMoveReset();
       state.currentCat = cat.name;
       state.currentPage = 1;
       renderTabs();
@@ -1108,6 +1411,7 @@ async function loadCategoryImages() {
           errorBox.append(errorTitle, errorHint);
           div.append(errorBox, badge);
           if (canWrite()) div.appendChild(del);
+          addCloudMoveControls(div, file);
         });
       };
       div.appendChild(img);
@@ -1125,6 +1429,7 @@ async function loadCategoryImages() {
       div.appendChild(img);
       div.appendChild(badge);
       if (canWrite()) div.appendChild(del);
+      addCloudMoveControls(div, file);
       })).catch((err) => {
       if (renderToken !== state.imageRenderToken) return;
       console.warn(`[Gallery] 加载失败: ${fileName}`, err?.message);
@@ -1139,10 +1444,13 @@ async function loadCategoryImages() {
       errorBox.append(errorTitle, errorHint);
       div.append(errorBox, badge);
       if (canWrite()) div.appendChild(del);
+      addCloudMoveControls(div, file);
       });
     }
 
+    addCloudMoveControls(div, file);
     div.onclick = async () => {
+      if (cloudMoveMode) { cloudMoveToggle(file.path); return; }
       try {
         if (config.platform === 'github') {
           const directUrl = rawImageUrl(file);
@@ -1171,6 +1479,7 @@ async function loadCategoryImages() {
   }
 
   renderPagination();
+  cloudMoveRefreshUI();
 }
 
 // ──────────────────────────────────────────────
@@ -1659,6 +1968,8 @@ saveCfgBtn.onclick = () => {
   if (cfg.platform !== 'github' && !cfg.token) {
     toast('请填写完整配置', false); return;
   }
+  if (cloudMoveDialog && !cloudMoveBusy) closeCloudMoveDialog();
+  cloudMoveReset();
   saveConfig(cfg);
   showMainUI(state.connected);
   toast(cfg.token ? '配置已保存' : '配置已保存：只读模式');
@@ -1713,7 +2024,10 @@ syncBtn.onclick = async () => {
 // Modal
 // ──────────────────────────────────────────────
 function closeImageModal() {
-  mask.classList.remove('show');
+  const fromMove = mask.classList.contains('cloud-move-zoom');
+  mask.classList.remove('show', 'cloud-move-zoom');
+  if (fromMove && cloudMoveZoomFocus?.isConnected) cloudMoveZoomFocus.focus();
+  cloudMoveZoomFocus = null;
   mimg.removeAttribute('src');
 }
 closeBtn.onclick = closeImageModal;
