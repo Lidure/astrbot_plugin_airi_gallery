@@ -182,6 +182,7 @@ try:
         RemoteDeleteReport,
         UploadMatch,
         UploadPayloadTooLarge,
+        compress_large_upload_image,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
@@ -206,6 +207,7 @@ except ImportError:
         RemoteDeleteReport,
         UploadMatch,
         UploadPayloadTooLarge,
+        compress_large_upload_image,
         decode_upload_image_batch,
         deduplicate_upload_candidates_by_content,
         extract_onebot_quoted_image_refs,
@@ -237,7 +239,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.25"
+CURRENT_PLUGIN_VERSION = "v2.11.26"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -3412,10 +3414,14 @@ class Main(Star):
         exact_count = 0
         similar_count = 0
         invalid_count = 0
+        compressed_count = 0
         batch_candidates: list[tuple[str, bytes]] = []
         batch_candidate_names: list[str] = []
         for source_path, image_bytes in all_images:
             try:
+                image_bytes, was_compressed = compress_large_upload_image(image_bytes)
+                if was_compressed:
+                    compressed_count += 1
                 validated = validate_image_payload(image_bytes)
             except (UploadPayloadTooLarge, ValueError):
                 invalid_count += 1
@@ -3485,6 +3491,8 @@ class Main(Star):
             parts.append(f"完全重复 {exact_count} 张已拦截")
         if similar_count:
             parts.append("1 张相似图片等待 /强制上传 确认")
+        if compressed_count:
+            parts.append(f"已自动压缩大图 {compressed_count} 张")
         if invalid_count:
             parts.append(f"无效或过大 {invalid_count} 张已跳过")
         await event.send(event.plain_result("；".join(parts) + "。"))
