@@ -370,13 +370,13 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
-## 🚀 更新日志
-### 未单独发布的 main 分支改进
+## ✨ main 分支近期改进（尚未单独发布）
 - **安全迁移**：新增 `/迁移图片`、`/确认迁移图片 N` 与 `/取消迁移图片`，确认前核对路径、图片内容与 GitHub 同步状态（[#88](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/88)）。
 - **WebUI 图库移动**：支持单图和跨分页批量勾选（最多 50 张），已有或新目标分类，预览后二次确认；兼容中文 WebUI 用户名（[#89](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/89)、[#90](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/90)）。
 - **图片式确认**：移动弹窗改为懒加载的 256 像素缩略图网格，可点图放大，不再使用编号列表确认（[#91](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/91)）。
 - **帮助文档同步**：README、聊天中的 `/画廊帮助详细` 文本及图片帮助海报增加 WebUI 迁移步骤；简版帮助提供入口提示。
 
+## 🚀 更新日志
 ### v2.11.26
 - **聊天大图自动压缩**：`/上传分类` 遇到超过 15 MiB 的静态大图时，先尝试压缩到 10 MiB 以内，再进入原有格式/像素校验、查重和远端事务；JPEG 尽量保留 JPEG，其他静态格式转为 WebP，透明通道会保留。
 - 小于等于 15 MiB 的图片不改动；动图不自动压成单帧。若无法达到 10 MiB 目标，会使用更小且仍符合 20 MiB 上限的压缩结果；没有可用压缩结果时回退原图并执行原限制校验。
