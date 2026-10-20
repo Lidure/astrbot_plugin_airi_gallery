@@ -103,3 +103,40 @@ def test_main_routes_chat_and_both_web_uploads_through_content_validation():
     for block in (internal_upload, public_upload):
         assert "decode_upload_image_batch(" in block
         assert "images, max_count=UPLOAD_BATCH_MAX" in " ".join(block.split())
+
+
+def test_large_static_upload_images_are_compressed_to_target():
+    stream = BytesIO()
+    Image.effect_noise((512, 512), 100).convert("RGB").save(stream, format="PNG")
+    original = stream.getvalue()
+    assert len(original) > 1_000
+
+    compressed, changed = gallery_safety.compress_large_upload_image(
+        original, threshold_bytes=1_000, target_bytes=20_000
+    )
+
+    assert changed is True
+    assert len(compressed) <= 20_000
+    validated = gallery_safety.validate_image_payload(compressed)
+    assert validated.format_name == "WEBP"
+
+
+def test_small_upload_images_are_left_unchanged_by_compression():
+    original = encoded_image("PNG")
+    compressed, changed = gallery_safety.compress_large_upload_image(
+        original, threshold_bytes=len(original), target_bytes=1
+    )
+
+    assert compressed == original
+    assert changed is False
+
+
+def test_chat_upload_compresses_before_regular_size_validation():
+    source = open("main.py", encoding="utf-8").read()
+    handle_upload = source.split("    async def _handle_upload", 1)[1].split(
+        "    async def _handle_delete", 1
+    )[0]
+
+    assert "compress_large_upload_image(image_bytes)" in handle_upload
+    assert "compressed_count += 1" in handle_upload
+    assert "已自动压缩大图" in handle_upload

@@ -193,6 +193,85 @@ def validate_image_payload(
     )
 
 
+
+def compress_large_upload_image(
+    content: bytes,
+    *,
+    threshold_bytes: int = 15 * 1024 * 1024,
+    target_bytes: int = 10 * 1024 * 1024,
+    max_pixels: int = 80_000_000,
+) -> tuple[bytes, bool]:
+    """Compress large static chat-upload images toward 10 MiB without touching small files.
+
+    JPEGs stay JPEG. Other supported static formats are encoded as WebP, preserving
+    alpha when present. Animated images and images beyond the pixel safety limit are
+    left untouched so the regular validator can reject them rather than silently
+    flattening animation or bypassing the pixel limit.
+    """
+    data = bytes(content)
+    if len(data) <= max(0, int(threshold_bytes)) or not data:
+        return data, False
+
+    target = max(1, int(target_bytes))
+    try:
+        from PIL import Image as PILImage, ImageOps
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PILImage.DecompressionBombWarning)
+            with PILImage.open(BytesIO(data)) as opened:
+                format_name = str(opened.format or "").upper()
+                width, height = (int(opened.size[0]), int(opened.size[1]))
+                if (
+                    format_name not in _IMAGE_FORMAT_EXTENSIONS
+                    or width <= 0
+                    or height <= 0
+                    or width * height > max_pixels
+                    or int(getattr(opened, "n_frames", 1)) > 1
+                ):
+                    return data, False
+
+                image = ImageOps.exif_transpose(opened)
+                image.load()
+                has_alpha = "A" in image.getbands() or "transparency" in image.info
+                output_format = "JPEG" if format_name == "JPEG" else "WEBP"
+                working = image.convert("RGBA" if has_alpha else "RGB")
+                best = data
+
+                for attempt in range(7):
+                    qualities = (88, 78, 68, 58) if attempt == 0 else (82, 70, 58)
+                    for quality in qualities:
+                        stream = BytesIO()
+                        options = {"quality": quality, "method": 6}
+                        if output_format == "JPEG":
+                            options.update({"optimize": True, "progressive": True})
+                        working.save(stream, format=output_format, **options)
+                        candidate = stream.getvalue()
+                        if len(candidate) < len(best):
+                            best = candidate
+                        if len(candidate) <= target:
+                            return candidate, candidate != data
+
+                    if attempt == 6 or max(working.size) <= 256:
+                        break
+                    best_size = max(1, len(best))
+                    scale = min(0.9, max(0.45, (target / best_size) ** 0.5 * 0.92))
+                    new_size = (
+                        max(1, int(working.width * scale)),
+                        max(1, int(working.height * scale)),
+                    )
+                    if new_size == working.size:
+                        break
+                    working = working.resize(new_size, PILImage.Resampling.LANCZOS)
+
+                if len(best) < len(data) and len(best) <= 20 * 1024 * 1024:
+                    return best, True
+    except Exception:
+        # Preserve the normal validation/error path if Pillow cannot safely decode
+        # or encode this image; never turn a compression error into an upload bypass.
+        return data, False
+
+    return data, False
+
 def decode_upload_image_batch(
     images: object,
     *,

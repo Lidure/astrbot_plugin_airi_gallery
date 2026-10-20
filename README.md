@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.25-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.26-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -162,7 +162,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/导入图库` | 重新扫描图库并整理编号 |
 | `/画廊检查` | 只读检查配置、权限、远程连接和插件更新 |
 
-> QQ/聊天中的 `/上传<分类>` 单图仍限制为 20 MiB，默认像素上限已提高到 8000 万像素；插件不会为了通过限制而自动缩放、重压缩或重编码原图。
+> QQ/聊天中的 `/上传<分类>` 会对超过 15 MiB 的静态图片尝试自动压缩，优先控制在 10 MiB 以内；小图保持原样，动图不会被压成单帧。压缩后仍执行 20 MiB 单图大小与 8000 万像素限制；压缩不可用时回退原图并按原规则校验，超过限制的图片仍会跳过。
 
 > 在共享群组中强烈建议开启 `use_permission`。开启后，上述管理命令只允许 `admins` 或 `whitelist` 里的用户执行；保持关闭时，所有用户都可以运行管理命令。
 
@@ -350,6 +350,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.26
+- **聊天大图自动压缩**：`/上传分类` 遇到超过 15 MiB 的静态大图时，先尝试压缩到 10 MiB 以内，再进入原有格式/像素校验、查重和远端事务；JPEG 尽量保留 JPEG，其他静态格式转为 WebP，透明通道会保留。
+- 小于等于 15 MiB 的图片不改动；动图不自动压成单帧。若无法达到 10 MiB 目标，会使用更小且仍符合 20 MiB 上限的压缩结果；没有可用压缩结果时回退原图并执行原限制校验。
+
 ### v2.11.25
 - **上传命令兼容**：新增无空格写法 `/上传分类` 的明确匹配入口，同时保留 `/上传 分类`；两种写法共用原有上传流程与消息防重复保护。
 
