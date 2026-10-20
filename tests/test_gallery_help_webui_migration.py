@@ -117,6 +117,6 @@ def test_readme_has_step_by_step_visual_workflow_and_chat_commands():
         "批量移动", "选择本页", "预览迁移", "确认移动 N 张",
         "缩略图", "不显示编号列表", "最多 50 张",
         "5 分钟", "Gitee 同步暂不支持",
-        "/确认迁移图片 N", "未单独发布的 main 分支改进",
+        "/确认迁移图片 N", "main 分支近期改进（尚未单独发布）",
     ):
         assert fragment in readme
