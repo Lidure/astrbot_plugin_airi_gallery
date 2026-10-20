@@ -138,3 +138,30 @@ def test_preview_is_limited_and_oldest_token_evicted(tmp_path):
         assert web.preview("alice", "图片", "airi图片", ["12.png"])["ok"]
     assert len(web._pending) == WEB_MOVE_MAX_PREVIEWS
     assert earliest not in web._pending
+
+
+def test_unicode_dashboard_username_can_confirm_move(tmp_path):
+    """Regression: secrets.compare_digest(str, str) raises for Chinese usernames."""
+    web, store, _ = _make(tmp_path)
+    ticket = web.preview("小浅子", "图片", "airi图片", ["12.png"])["ticket"]
+    result = web.confirm("小浅子", ticket)
+    assert result == {"ok": True, "moved": 1, "remote": False}
+    assert (store.gallery_root / "airi图片" / "12.png").read_bytes() == b"image-12"
+
+
+def test_unicode_dashboard_username_can_cancel_move(tmp_path):
+    web, store, _ = _make(tmp_path)
+    ticket = web.preview("小浅子", "图片", "airi图片", ["12.png"])["ticket"]
+    assert web.cancel("小浅子", ticket) == {"ok": True}
+    assert not web.confirm("小浅子", ticket)["ok"]
+    assert (store.gallery_root / "图片" / "12.png").exists()
+
+
+def test_unicode_actor_does_not_allow_other_account_to_cancel_or_confirm(tmp_path):
+    web, store, _ = _make(tmp_path)
+    ticket = web.preview("小浅子", "图片", "airi图片", ["12.png"])["ticket"]
+    assert not web.confirm("小浅子2", ticket)["ok"]
+    assert not web.confirm("alice", ticket)["ok"]
+    assert web.cancel("其他用户", ticket) == {"ok": True}
+    assert web.confirm("小浅子", ticket)["ok"]
+    assert (store.gallery_root / "airi图片" / "12.png").exists()
