@@ -121,7 +121,7 @@ def test_upload_command_accepts_category_without_space():
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
 
-    assert r"^/上传\\S+" in regex_patterns
+    assert r"^/上传\S+" in regex_patterns
     assert {"_parse_action", "_handle_upload", "stop_event"} <= called_methods
 
 
