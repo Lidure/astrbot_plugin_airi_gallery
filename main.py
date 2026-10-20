@@ -237,7 +237,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.22"
+CURRENT_PLUGIN_VERSION = "v2.11.23"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -619,15 +619,8 @@ class Main(Star):
 
         kind, payload = action
         try:
-            if kind == "help":
-                help_path = await self._build_help_image()
-                if help_path:
-                    await event.send(event.image_result(str(help_path)))
-                else:
-                    await event.send(event.plain_result(self._build_help_text()))
-                cloud_text = self._build_cloud_gallery_help_text()
-                if cloud_text:
-                    await event.send(event.plain_result(cloud_text))
+            if kind in {"help", "help_detail"}:
+                await self._send_help_response(event, detailed=kind == "help_detail")
             elif kind == "import":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -730,18 +723,8 @@ class Main(Star):
 
     @filter.command("airi_gallery")
     async def airi_gallery(self, event: AstrMessageEvent):
-        """插件帮助。"""
-        help_path = await self._build_help_image()
-        if help_path:
-            await event.send(event.image_result(str(help_path)))
-            cloud_text = self._build_cloud_gallery_help_text()
-            if cloud_text:
-                await event.send(event.plain_result(cloud_text))
-            return
-        await event.send(event.plain_result(self._build_help_text()))
-        cloud_text = self._build_cloud_gallery_help_text()
-        if cloud_text:
-            await event.send(event.plain_result(cloud_text))
+        """显示画廊简洁帮助。"""
+        await self._send_help_response(event)
 
     @filter.command("画廊检查")
     async def cmd_gallery_diagnostics(self, event: AstrMessageEvent):
@@ -1123,24 +1106,19 @@ class Main(Star):
         """注册 `/查看画廊` 命令，等同于 `/分类列表`。"""
         await self._handle_list_categories(event)
 
+    @filter.command("画廊帮助详细")
+    async def cmd_gallery_help_detailed(self, event: AstrMessageEvent):
+        """注册 `/画廊帮助详细` 命令，展示完整命令说明。"""
+        await self._send_help_response(event, detailed=True)
+
     @filter.command("画廊帮助")
     async def cmd_gallery_help(self, event: AstrMessageEvent):
-        """注册 `/画廊帮助` 命令，等同于 `/airi_gallery`。"""
-        help_path = await self._build_help_image()
-        if help_path:
-            await event.send(event.image_result(str(help_path)))
-            cloud_text = self._build_cloud_gallery_help_text()
-            if cloud_text:
-                await event.send(event.plain_result(cloud_text))
-            return
-        await event.send(event.plain_result(self._build_help_text()))
-        cloud_text = self._build_cloud_gallery_help_text()
-        if cloud_text:
-            await event.send(event.plain_result(cloud_text))
+        """注册 `/画廊帮助` 命令，展示新手速览。"""
+        await self._send_help_response(event)
 
     @filter.command("图库帮助")
     async def cmd_gallery_help_alias(self, event: AstrMessageEvent):
-        """注册 `/图库帮助` 命令，等同于 `/画廊帮助`。"""
+        """注册 `/图库帮助` 命令，兼容旧命令并展示新手速览。"""
         await self.cmd_gallery_help(event)
 
     @filter.command("昵称列表")
@@ -2246,34 +2224,59 @@ class Main(Star):
     def _parse_aliases(entries: list) -> dict[str, str]:
         return _parse_gallery_aliases(entries)
 
-    def _build_help_text(self) -> str:
+    def _build_help_text(self, detailed: bool = False) -> str:
         prefix = self._view_command_prefix()
+        if not detailed:
+            return "\n".join(
+                [
+                    "Airi 画廊速查",
+                    "",
+                    "常用命令：",
+                    "- /查看画廊：查看所有分类，先找到想看的角色或主题",
+                    f"- {prefix}看看<分类>：随机发送该分类的一张图片或表情包",
+                    f"- {prefix}看看<分类> N：随机发送 N 张；分类和数字之间要有空格，最多 {self.view_multiple_max} 张",
+                    f"- {prefix}看全部<分类>：生成该分类总览图，方便按编号挑选",
+                    f"- {prefix}看看123：直接查看编号为 123 的图片",
+                    f"- /抽表情 N：从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张",
+                    "- /看最近上传 N：查看最近上传的图片；不写数字默认 10 张",
+                    f"- /上传<分类>：先回复图片、多图或合并转发，再发送命令上传（快捷：/sz<分类>）",
+                    "- /画廊帮助详细：查看完整命令说明",
+                    "",
+                    f"查看命令模式：{'前缀 /' if self.view_command_mode == MODE_PREFIX else '无前缀'}",
+                ]
+            )
         return "\n".join(
             [
-                "Airi 画廊插件",
+                "Airi 画廊插件完整命令",
                 "",
-                "命令：",
-                "- /airi_gallery、/画廊帮助、/图库帮助：查看插件帮助（图片海报）",
+                "帮助：",
+                "- /airi_gallery、/画廊帮助、/图库帮助：查看简洁版帮助",
+                "- /画廊帮助详细：查看完整帮助",
+                f"- /查看画廊、/分类列表：以图片卡片形式查看当前已创建的分类",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
                 f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
                 f"- /抽表情：从全图库随机抽取 1 张图片或表情包，可追加数字 N，最多 {self.view_multiple_max} 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 f"- {prefix}看100-110：按编号范围查看 100 到 110 的图片或表情包，最多 {VIEW_RANGE_MAX} 张",
-                "- /分类列表：以图片卡片形式查看当前已创建的分类",
+                "- /看最近上传：查看最近上传的 10 张图片，可追加数字 N（快捷：/看最近）",
+                "- /昵称列表：以图片形式查看当前分类昵称映射",
+                "",
+                "内容管理：",
                 "- /创建<分类>：创建一个新的分类文件夹",
                 f"- /上传<分类>：回复图片、多图或合并转发聊天记录后上传到对应分类，单次最多 {UPLOAD_BATCH_MAX} 张（快捷：/sz<分类>）",
                 "- /删除123：删除编号为 123 的图片或表情包",
-                "- /去重图库：扫描并删除本地图库中的重复图片，保留每个分类中首次出现的文件",
-                "- /看最近上传：以合并转发消息查看最近上传的 10 张图片，可追加数字 N 查看最近 N 张（快捷：/看最近）",
-                "- /导入图库：按同一映射把本地与 GitHub 全图库整理为连续的 1..N 编号",
                 "- /强制上传：仅在感知查重提示相似时确认仍然上传；完全重复不可绕过",
+                "- /去重图库：扫描并删除本地图库中的重复图片，可追加分类名只清理单个分类",
+                "",
+                "维护与同步（建议管理员使用）：",
+                "- /导入图库：重新扫描 gallery 并整理数字编号",
                 "- /画廊检查：只读检查配置、权限、远程连接和插件更新",
                 "- /立即同步：立即从远程仓库拉取新增图片到本地（别名：/同步远程）",
-                "- /推送到远程：快速推送本地新增或变更图片到远程仓库，已存在则跳过",
-                "- /推送本地删除：预览曾在本地存在、现在缺失但远程仍存在的图片，不会立即删除",
-                "- /确认推送本地删除 N：在 5 分钟内按预览数量二次确认，安全删除对应远程图片",
-                "- /昵称列表：以图片形式查看当前分类昵称映射",
+                "- /推送到远程：推送本地新增或变更图片，已存在则跳过",
+                "- /推送本地删除：预览本地已删除、云端仍存在的图片，不会立即执行",
+                "- /确认推送本地删除 N：5 分钟内按准确数量二次确认后删除远程图片",
+                "- /取消推送：取消正在进行的批量推送",
                 "",
                 "说明：",
                 f"- 当前浏览命令模式：{'前缀 /' if self.view_command_mode == MODE_PREFIX else '无前缀'}",
@@ -2284,6 +2287,18 @@ class Main(Star):
                 f"- 分类昵称数：{len(self.category_aliases)} 个",
             ]
         )
+
+    async def _send_help_response(
+        self, event: AstrMessageEvent, *, detailed: bool = False
+    ) -> None:
+        help_path = await self._build_help_image(detailed=detailed)
+        if help_path:
+            await event.send(event.image_result(str(help_path)))
+        else:
+            await event.send(event.plain_result(self._build_help_text(detailed=detailed)))
+        cloud_text = self._build_cloud_gallery_help_text()
+        if cloud_text:
+            await event.send(event.plain_result(cloud_text))
 
     def _normalize_command_text(self, event: AstrMessageEvent, command: str) -> str:
         text = (event.message_str or "").strip()
@@ -2382,6 +2397,8 @@ class Main(Star):
         normalized = self._replace_command_aliases(normalized)
         # 仅“看图/浏览”类命令遵循 view_command_mode。
         # 管理类命令固定使用 '/' 前缀，避免和普通聊天文本冲突。
+        if normalized == "/画廊帮助详细":
+            return "help_detail", None
         if normalized in {"/airi_gallery", "/画廊帮助", "/图库帮助"}:
             return "help", None
 
@@ -3678,7 +3695,7 @@ class Main(Star):
             logger.error(f"生成昵称列表图片失败: {exc}")
             return None
 
-    async def _build_help_image(self) -> Path | None:
+    async def _build_help_image(self, detailed: bool = False) -> Path | None:
         try:
             from PIL import Image as PILImage
             from PIL import ImageDraw, ImageFont
@@ -3686,49 +3703,77 @@ class Main(Star):
             logger.error("缺少 Pillow 依赖，无法生成帮助图片")
             return None
 
-        help_sections = [
-            (
-                "日常查看",
-                "浏览、编号检索和最近上传都在这里",
-                [
-                    (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
-                    (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
-                    ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
-                    (f"{self._view_command_prefix()}看全部<分类> / {self._view_command_prefix()}看所有<分类>", "生成该分类总览图，并标注每张图片编号"),
-                    (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
-                    (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),
-                    ("/看最近上传 N", "查看最近上传的图片；可省略 N，快捷 /看最近"),
-                    ("/分类列表", "以图片卡片形式查看所有分类"),
-                    ("/昵称列表", "查看当前分类昵称映射"),
-                ],
-            ),
-            (
-                "内容管理",
-                "会改变本地图库内容，操作前看准分类和编号",
-                [
-                    ("/创建<分类>", "创建新的分类文件夹"),
-                    ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张；快捷 /sz"),
-                    ("/删除123", "删除指定编号的图片或表情包"),
-                ],
-            ),
-            (
-                "维护与同步",
-                "批量整理或访问远程仓库，建议管理员使用",
-                [
-                    ("/去重图库", "扫描并删除重复图片，可追加分类名只清理单个分类"),
-                    ("/导入图库", "重新扫描 gallery 并整理数字编号"),
-                    ("/画廊检查", "只读检查配置、权限、远程连接和插件更新"),
-                    ("/立即同步", "立即从远程仓库拉取新增图片；别名 /同步远程"),
-                    ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
-                    ("/推送本地删除", "预览本地已删除、云端仍存在的图片，不会立即执行"),
-                    ("/确认推送本地删除 N", "5 分钟内按准确数量确认；执行前再次核对本地状态与远程 SHA"),
-                    ("/取消推送", "取消正在进行的批量推送"),
-                ],
-            ),
-        ]
+        if detailed:
+            help_sections = [
+                (
+                    "日常查看",
+                    "浏览、编号检索和最近上传都在这里",
+                    [
+                        ("/查看画廊 / /分类列表", "以图片卡片形式查看所有分类"),
+                        (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
+                        (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
+                        ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
+                        (f"{self._view_command_prefix()}看全部<分类> / {self._view_command_prefix()}看所有<分类>", "生成该分类总览图，并标注每张图片编号"),
+                        (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
+                        (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),
+                        ("/看最近上传 N", "查看最近上传的图片；可省略 N，快捷 /看最近"),
+                        ("/昵称列表", "查看当前分类昵称映射"),
+                        ("/画廊帮助", "查看简洁版帮助；使用 /画廊帮助详细查看本页"),
+                    ],
+                ),
+                (
+                    "内容管理",
+                    "会改变本地图库内容，操作前看准分类和编号",
+                    [
+                        ("/创建<分类>", "创建新的分类文件夹"),
+                        ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张；快捷 /sz"),
+                        ("/删除123", "删除指定编号的图片或表情包"),
+                        ("/强制上传", "仅确认被感知查重拦截的相似图片；完全重复不可绕过"),
+                    ],
+                ),
+                (
+                    "维护与同步",
+                    "批量整理或访问远程仓库，建议管理员使用",
+                    [
+                        ("/去重图库", "扫描并删除重复图片，可追加分类名只清理单个分类"),
+                        ("/导入图库", "重新扫描 gallery 并整理数字编号"),
+                        ("/画廊检查", "只读检查配置、权限、远程连接和插件更新"),
+                        ("/立即同步", "立即从远程仓库拉取新增图片；别名 /同步远程"),
+                        ("/推送到远程", "快速推送本地新增或变更图片，已存在则跳过"),
+                        ("/推送本地删除", "预览本地已删除、云端仍存在的图片，不会立即执行"),
+                        ("/确认推送本地删除 N", "5 分钟内按准确数量确认；执行前再次核对本地状态与远程 SHA"),
+                        ("/取消推送", "取消正在进行的批量推送"),
+                    ],
+                ),
+            ]
+        else:
+            prefix = self._view_command_prefix()
+            help_sections = [
+                (
+                    "最常用的看图命令",
+                    "记住下面几条，就能找到并发送想要的图片",
+                    [
+                        ("/查看画廊", "查看所有分类，先找到想看的角色或主题"),
+                        (f"{prefix}看看<分类>", "随机发送该分类的一张图片或表情包"),
+                        (f"{prefix}看看<分类> N", f"随机发送 N 张；分类和数字之间要有空格，最多 {self.view_multiple_max} 张"),
+                        (f"{prefix}看全部<分类>", "生成该分类总览图，方便按编号挑选"),
+                        (f"{prefix}看看123", "直接发送编号为 123 的图片或表情包"),
+                        ("/抽表情 N", f"从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张"),
+                        ("/看最近上传 N", "查看最近上传的图片；不写数字默认 10 张"),
+                    ],
+                ),
+                (
+                    "上传与更多帮助",
+                    "管理命令按需使用，其他功能可以查看详细版",
+                    [
+                        ("/上传<分类>", "先回复图片、多图或合并转发，再发送命令上传"),
+                        ("/画廊帮助详细", "查看完整的浏览、管理、删除和远程同步命令"),
+                    ],
+                ),
+            ]
 
         output_dir = self._prepare_generated_output_dir()
-        output_path = output_dir / f"help_{int(time.time() * 1000)}.png"
+        output_path = output_dir / f"help_{'detail' if detailed else 'quick'}_{int(time.time() * 1000)}.png"
         decoration = Path(__file__).resolve().parent / "assets" / "p1.png"
         try:
             return _render_help_poster(
@@ -3736,9 +3781,16 @@ class Main(Star):
                 output_path,
                 mode_text=self._get_view_command_mode_text(),
                 llm_enabled=self.llm_tool_enabled,
+                title_text="Airi 画廊完整指南" if detailed else "Airi 画廊速查",
+                subtitle_text=(
+                    "完整命令按场景分组：浏览、内容管理、维护与远程同步"
+                    if detailed
+                    else "新手先看常用命令；管理与维护功能放在详细版"
+                ),
                 font_path=self.collage_font_path,
                 decoration_path=decoration,
             )
         except Exception as exc:
             logger.error(f"生成帮助图片失败: {exc}")
             return None
+
