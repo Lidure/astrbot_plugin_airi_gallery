@@ -496,7 +496,40 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
   box-shadow: 0 14px 40px rgba(20, 10, 20, 0.26);
 }
 .move-dialog h2 { font-size: 18px; margin-bottom: 6px; }
-.move-description { color: var(--text); font-size: 13px; margin-bottom: 14px; overflow-wrap: anywhere; }
+.move-description { color: var(--text); font-size: 13px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.move-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 9px;
+  max-height: min(35vh, 310px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 3px;
+  margin-bottom: 5px;
+  border-radius: 8px;
+}
+.move-preview-grid.single { grid-template-columns: minmax(140px, 230px); }
+.move-preview-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  cursor: zoom-in;
+}
+.move-preview-thumb:hover:not(:disabled) { border-color: var(--accent); }
+.move-preview-thumb:disabled { cursor: progress; opacity: 0.85; }
+.move-preview-thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.move-preview-status { padding: 7px; font-size: 11px; text-align: center; }
+.move-preview-status[hidden] { display: none; }
+.move-preview-hint { margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
+.modal-mask.over-move { z-index: 120; }
 .move-dialog .field { margin-top: 12px; }
 .move-review {
   margin-top: 14px;
@@ -517,4 +550,6 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
   .move-toolbar-buttons #move-open { grid-column: 1 / -1; }
   .grid-item .move-single { display: inline-flex; }
   .move-dialog { padding: 18px; }
+  .move-preview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: min(32vh, 250px); }
+  .move-preview-grid.single { grid-template-columns: minmax(140px, 230px); }
 }
