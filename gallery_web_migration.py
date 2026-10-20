@@ -12,6 +12,15 @@ WEB_MOVE_MAX_PREVIEWS = 128
 WEB_MOVE_MAX_ITEMS = 50
 
 
+def _same_actor(expected: str, actual: str) -> bool:
+    """Compare dashboard identities safely, including Chinese/Unicode usernames.
+
+    compare_digest accepts ASCII strings or bytes; UTF-8 encoding preserves exact
+    identity matching without raising TypeError for non-ASCII login names.
+    """
+    return secrets.compare_digest(expected.encode("utf-8"), actual.encode("utf-8"))
+
+
 class GalleryWebMigration:
     """Keep the dashboard protocol separate from the existing transaction engine."""
 
@@ -79,7 +88,7 @@ class GalleryWebMigration:
         with self._lock:
             self._prune(self.clock())
             entry = self._pending.get(ticket)
-            if entry is None or not secrets.compare_digest(entry["actor"], actor.strip()):
+            if entry is None or not _same_actor(entry["actor"], actor.strip()):
                 return {"ok": False, "error": "预览已过期或不属于当前用户，请重新预览"}
             # Consume before performing filesystem/remote work to prevent double-submit.
             self._pending.pop(ticket, None)
@@ -95,6 +104,6 @@ class GalleryWebMigration:
             return {"ok": False}
         with self._lock:
             entry = self._pending.get(ticket)
-            if entry and secrets.compare_digest(entry["actor"], actor.strip()):
+            if entry and _same_actor(entry["actor"], actor.strip()):
                 self._pending.pop(ticket, None)
         return {"ok": True}
