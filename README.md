@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.22-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.23-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -67,7 +67,7 @@
 
 ### 1. 帮助海报
 
-输入 `/airi_gallery`、`/画廊帮助` 或 `/图库帮助` 获取帮助海报：
+输入 `/airi_gallery`、`/画廊帮助` 或 `/图库帮助` 获取简洁版帮助；输入 `/画廊帮助详细` 查看完整命令说明：
 
 <div align="center">
 
@@ -231,7 +231,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 **功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 Git blob SHA 去重、上传前只在目标分类内做远程精确/感知查重、按全局最大编号续号。GitHub 批量上传会以受限并发准备 blob，再把全部图片和 `gallery/gallery_index.json` 放进同一个原子 commit，只更新一次分支；网络抖动与限流只重试安全的读取/对象创建，ref 响应不确定时会重新核验。超过 GitHub 100 MiB 单文件限制的图片会在读取前明确拒绝；GitHub 单图达到 4 MiB 时优先由浏览器分块生成 Base64 流并经同源 Cloudflare Worker 转发，Worker 只做流式 JSON 包装、不执行大文件 Base64 转码；不支持流式请求的浏览器会自动使用兼容模式。稳定代理通道单图上限为 64 MiB，含大图的批次串行创建 blob，从而降低内存峰值与 Worker CPU 压力并改善跨境上传稳定性。多个浏览器撞到同一编号时保持 create-only 并 fail-closed，不覆盖已有图片，失败项会留在队列供同步后重试。Gitee 仍使用逐文件写入与补偿删除。v2.11.11 起页面脚本与样式完全外置，并启用 CSP；远程分类名等仓库数据使用安全 DOM API 渲染。
 
-如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送 `/airi_gallery`、`/画廊帮助` 或 `/图库帮助` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器查看表情包、批量上传和整理图片。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
+如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送 `/airi_gallery`、`/画廊帮助`、`/图库帮助` 或 `/画廊帮助详细` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器查看表情包、批量上传和整理图片。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
 
 ### 10. 公开上传
 
@@ -315,7 +315,8 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `看100-110` / `/看100-110` | 全员 | 按编号范围连续查看图片，最多 50 张 |
 | `/分类列表` / `/查看画廊` | 全员 | 查看分类卡片列表 |
 | `/昵称列表` | 全员 | 以图片形式查看当前昵称映射 |
-| `/airi_gallery` / `/画廊帮助` / `/图库帮助` | 全员 | 查看帮助海报 |
+| `/airi_gallery` / `/画廊帮助` / `/图库帮助` | 全员 | 查看简洁版帮助速查 |
+| `/画廊帮助详细` | 全员 | 查看完整命令说明，包含内容管理与远程同步 |
 | `/画廊检查` | 按权限配置 | 只读检查配置、权限、远程连接和插件更新 |
 | `/创建<分类>` | 管理员 | 创建新分类 |
 | `/上传<分类>` | 管理员 | 回复图片、多图或合并转发聊天记录后上传；完全重复直接拦截，相似图会给出序号/预览 |
@@ -343,6 +344,9 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.23
+- **新手帮助分层**：`/画廊帮助` 默认显示精简速查，突出分类浏览、随机看图、编号查看和上传；新增 `/画廊帮助详细` 查看完整命令。旧的 `/airi_gallery` 与 `/图库帮助` 继续兼容并显示简洁版。
+
 ### v2.11.22
 - **LLM 动态画廊目录**：新增只读 Function Calling 工具 `gallery_catalog(keyword, page)`，按需查询全部真实分类、最新 WebUI 中文昵称/别名与分类图片数，支持关键词搜索及分页（每页 20 个分类），不再只向模型注入前 30 个分类与前 30 条别名。
 - **自然语言智能选图**：增强 `gallery_send(category, count)`，由插件解析所有分类名和别名；用户要求具体角色但未匹配时明确报告并建议查询目录，不再意外从全图库随机发送。仅明确要求随机或未指定角色的通用发图请求才允许随机。
