@@ -131,6 +131,11 @@ except ImportError:
     from gallery_sync import GallerySync
 
 try:
+    from .gallery_migration import GalleryMigration, parse_migration_request
+except ImportError:
+    from gallery_migration import GalleryMigration, parse_migration_request
+
+try:
     from .generated_cache import cleanup_generated_files
 except ImportError:
     from generated_cache import cleanup_generated_files
@@ -498,6 +503,9 @@ class Main(Star):
             manifest_payload_factory=self._gallery_manifest_payload,
             manifest_publisher=self._publish_gallery_manifest,
         )
+        self.migration = GalleryMigration(self.store, self.sync, self.remote)
+        self._migration_previews: dict[str, dict] = {}
+        self._migration_preview_lock = threading.RLock()
         self.diagnostics = GalleryDiagnostics(
             self.config,
             gallery_root=self.gallery_root,
@@ -665,6 +673,12 @@ class Main(Star):
                     await event.send(
                         event.plain_result("已发送取消信号，推送将在当前文件完成后停止。")
                     )
+            elif kind == "preview_migration":
+                await self._handle_preview_migration(event, str(payload))
+            elif kind == "confirm_migration":
+                await self._handle_confirm_migration(event, payload)
+            elif kind == "cancel_migration":
+                await self._handle_cancel_migration(event)
             elif kind == "preview_local_deletes":
                 await self._handle_preview_local_deletes(event)
             elif kind == "confirm_local_deletes":
@@ -1019,6 +1033,81 @@ class Main(Star):
         finally:
             self._sync_lock.release()
         return result
+
+    async def _handle_preview_migration(self, event: AstrMessageEvent, tail: str) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限迁移图片。"))
+            return
+        key = self._remote_delete_preview_key(event)
+        if key.endswith("|unknown"):
+            await event.send(event.plain_result("无法识别操作用户身份，已拒绝迁移。"))
+            return
+        try:
+            source, target, numbers = parse_migration_request(tail)
+            source, target = self._resolve_alias(source), self._resolve_alias(target)
+            items = await asyncio.to_thread(self.migration.preview, source, target, numbers)
+        except ValueError as exc:
+            await event.send(event.plain_result(f"迁移预览失败：{exc}"))
+            return
+        with self._migration_preview_lock:
+            self._migration_previews[key] = {
+                "items": items,
+                "created_at": time.time(),
+                "remote": bool(self.sync.git_sync_enabled),
+            }
+        selections = "、".join(str(number) for number in numbers[:15])
+        if len(numbers) > 15:
+            selections += f" 等共 {len(numbers)} 张"
+        remote_label = "本地 + GitHub 原子迁移" if self.sync.git_sync_enabled else "仅本地迁移"
+        await event.send(event.plain_result(
+            f"迁移预览（尚未修改图片）：\n{source} → {target}\n"
+            f"编号：{selections}\n数量：{len(items)} 张；方式：{remote_label}\n"
+            f"图片编号及扩展名保持不变。请在 5 分钟内发送 /确认迁移图片 {len(items)}，或发送 /取消迁移图片。"
+        ))
+
+    async def _handle_confirm_migration(self, event: AstrMessageEvent, count: int | None) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限迁移图片。"))
+            return
+        key = self._remote_delete_preview_key(event)
+        with self._migration_preview_lock:
+            preview = self._migration_previews.get(key)
+            if not preview:
+                message = "没有待确认的迁移清单，请先发送 /迁移图片 原分类 目标分类 12,15-17。"
+            elif time.time() - preview["created_at"] > 300:
+                self._migration_previews.pop(key, None)
+                message = "迁移预览已过期，请重新预览。"
+            elif count is None or count != len(preview["items"]):
+                message = f"确认数量不匹配，请发送 /确认迁移图片 {len(preview['items'])}。"
+            elif bool(self.sync.git_sync_enabled) != preview["remote"]:
+                self._migration_previews.pop(key, None)
+                message = "Git 同步配置已变化，请重新预览后再确认。"
+            else:
+                message = ""
+                # Consume before await: duplicate event routes cannot execute the move twice.
+                self._migration_previews.pop(key, None)
+        if message:
+            await event.send(event.plain_result(message))
+            return
+        result = await asyncio.to_thread(self.migration.execute, preview["items"])
+        if result.get("busy"):
+            await event.send(event.plain_result("同步任务正在运行；本次未迁移，请重新预览。"))
+        elif result.get("ok"):
+            await event.send(event.plain_result(
+                f"迁移成功：{result['moved']} 张图片已转入目标分类，编号保持不变；"
+                + ("GitHub 已原子提交。" if result.get("remote") else "仅修改本地文件。")
+            ))
+        else:
+            await event.send(event.plain_result(f"迁移失败：{result.get('error', '未知错误')}；如需重试，请重新预览。"))
+
+    async def _handle_cancel_migration(self, event: AstrMessageEvent) -> None:
+        if not self._is_allowed(event):
+            await event.send(event.plain_result("没有权限迁移图片。"))
+            return
+        key = self._remote_delete_preview_key(event)
+        with self._migration_preview_lock:
+            removed = self._migration_previews.pop(key, None)
+        await event.send(event.plain_result("已取消迁移预览。" if removed else "没有待取消的迁移预览。"))
 
     async def _handle_preview_local_deletes(self, event: AstrMessageEvent) -> None:
         if not self._is_allowed(event):
@@ -2280,6 +2369,8 @@ class Main(Star):
                 "- /创建<分类>：创建一个新的分类文件夹",
                 f"- /上传<分类>：回复图片、多图或合并转发聊天记录后上传到对应分类，单次最多 {UPLOAD_BATCH_MAX} 张（快捷：/sz<分类>）",
                 "- /删除123：删除编号为 123 的图片或表情包",
+                "- /迁移图片 图片 airi图片 12,15-17：预览跨分类迁移（不改变编号，最多 50 张）",
+                "- /确认迁移图片 N：5 分钟内按预览数量确认；/取消迁移图片：取消",
                 "- /强制上传：仅在感知查重提示相似时确认仍然上传；完全重复不可绕过",
                 "- /去重图库：扫描并删除本地图库中的重复图片，可追加分类名只清理单个分类",
                 "",
@@ -2434,6 +2525,16 @@ class Main(Star):
             if target:
                 return "dedupe_gallery", _sanitize_component(self._resolve_alias(target))
             return "dedupe_gallery", None
+
+        migration_preview = re.fullmatch(r"/迁移图片(?:\s+(.*))?", normalized)
+        if migration_preview:
+            return "preview_migration", (migration_preview.group(1) or "").strip()
+        migration_confirm = re.fullmatch(r"/确认迁移图片(?:\s+(\d+))?", normalized)
+        if migration_confirm:
+            count = migration_confirm.group(1)
+            return "confirm_migration", int(count) if count else None
+        if normalized == "/取消迁移图片":
+            return "cancel_migration", None
 
         if normalized == "/推送到远程":
             return "push_to_remote", None
