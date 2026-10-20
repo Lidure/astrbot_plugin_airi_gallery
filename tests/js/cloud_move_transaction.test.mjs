@@ -146,6 +146,13 @@ test('target collision, bad categories, path traversal, duplicate global IDs and
     { path:'gallery/gallery_index.json',sha:S.index,type:'blob' },
   ] });
   await assert.rejects(previewCloudMove(setup(collision,{paths:['gallery/图片/12.jpg']})),/同名/);
+  const indexNameCollision = fakeGitHub();
+  await assert.rejects(
+    previewCloudMove(setup(indexNameCollision, {
+      target: 'gallery_index.json', paths: ['gallery/图片/12.jpg'],
+    })),
+    /分类名称与已有的仓库文件冲突/,
+  );
   const duplicate = fakeGitHub({tree:[
     {path:'gallery/图片/12.jpg',sha:S.image12,type:'blob'},
     {path:'gallery/szk图片/12.png',sha:S.image13,type:'blob'},
