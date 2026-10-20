@@ -30,6 +30,10 @@ def _load_main(monkeypatch, tmp_path):
         def command(*_args, **_kwargs):
             return lambda fn: fn
 
+        @staticmethod
+        def regex(*_args, **_kwargs):
+            return lambda fn: fn
+
     astrbot = types.ModuleType("astrbot")
     astrbot_api = types.ModuleType("astrbot.api")
     astrbot_api.logger = types.SimpleNamespace(

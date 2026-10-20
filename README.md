@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.24-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.25-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -155,7 +155,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | 命令 | 说明 |
 | :--- | :--- |
 | `/创建<分类>` | 创建一个新的分类文件夹 |
-| `/上传<分类>` | 回复图片、多图或合并转发聊天记录后上传到指定分类，单次最多 100 张 |
+| `/上传<分类>` / `/上传 <分类>` | 回复图片、多图或合并转发聊天记录后上传到指定分类；分类前有无空格均可，单次最多 100 张 |
 | `/删除123` | 删除编号为 `123` 的图片或表情包 |
 | `/去重图库` | 扫描并删除图库中重复图片，保留每个分类内首次出现的文件 |
 | `/去重图库 <分类>` / `/去重 <分类>` | 只清理指定分类中的重复图片 |
@@ -325,7 +325,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/画廊帮助详细` | 全员 | 查看完整命令说明，包含内容管理与远程同步 |
 | `/画廊检查` | 按权限配置 | 只读检查配置、权限、远程连接和插件更新 |
 | `/创建<分类>` | 管理员 | 创建新分类 |
-| `/上传<分类>` | 管理员 | 回复图片、多图或合并转发聊天记录后上传；完全重复直接拦截，相似图会给出序号/预览 |
+| `/上传<分类>` 或 `/上传 <分类>` | 管理员 | 回复图片、多图或合并转发聊天记录后上传；分类前有无空格均可，完全重复直接拦截，相似图会给出序号/预览 |
 | `/强制上传` | 管理员 | 5 分钟内确认最近一张仅因感知相似被拦下的图片；不能绕过完全重复 |
 | `/删除123` | 管理员 | 删除指定编号图片 |
 | `/去重图库` | 管理员 | 清理全部分类中的重复图片 |
@@ -350,6 +350,9 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
+### v2.11.25
+- **上传命令兼容**：新增无空格写法 `/上传分类` 的明确匹配入口，同时保留 `/上传 分类`；两种写法共用原有上传流程与消息防重复保护。
+
 ### v2.11.24
 - **新手帮助分层**：`/画廊帮助` 默认显示精简速查，突出分类浏览、随机看图、编号查看和上传；新增 `/画廊帮助详细` 查看完整命令。旧的 `/airi_gallery` 与 `/图库帮助` 继续兼容并显示简洁版。
 

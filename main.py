@@ -237,7 +237,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.24"
+CURRENT_PLUGIN_VERSION = "v2.11.25"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -770,6 +770,16 @@ class Main(Star):
     async def cmd_force_upload(self, event: AstrMessageEvent):
         """仅绕过最近一次感知相似提示；完全重复仍然禁止上传。"""
         await self._handle_force_similar_upload(event)
+
+    @filter.regex(r"^/上传\S+")
+    async def cmd_upload_without_space(self, event: AstrMessageEvent):
+        """兼容 `/上传分类` 这种命令与分类之间没有空格的写法。"""
+        text = (event.message_str or "").strip()
+        text = self._strip_at_prefix(text) if text else ""
+        action = self._parse_action(text)
+        if action and action[0] == "upload":
+            await self._handle_upload(event, str(action[1]))
+            event.stop_event()
 
     @filter.command("上传")
     async def cmd_upload(self, event: AstrMessageEvent):
