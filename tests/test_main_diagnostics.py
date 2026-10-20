@@ -234,6 +234,7 @@ def main_module(monkeypatch):
     class FilterStub:
         EventMessageType = types.SimpleNamespace(ALL="all")
         command = staticmethod(_identity_decorator)
+        regex = staticmethod(_identity_decorator)
         event_message_type = staticmethod(_identity_decorator)
 
     class StarStub:
