@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=11" />
+  <link rel="stylesheet" href="./style.css?v=12" />
 </head>
 <body>
   <div class="container">
@@ -68,13 +68,24 @@
             <h2 id="gallery-title">图库分类</h2>
             <p>选择分类查看和管理图片</p>
           </div>
-          <div class="page-size">
-            <label for="per-page-input">每页</label>
+          <div class="gallery-tools">
+            <button class="btn btn-quiet btn-small" id="move-mode-btn" type="button" aria-pressed="false">批量移动</button>
+            <div class="page-size">
+              <label for="per-page-input">每页</label>
             <input type="number" id="per-page-input" value="21" min="1" max="200" />
-            <span>张</span>
+              <span>张</span>
+            </div>
           </div>
         </div>
         <div class="category-tabs" id="tabs"></div>
+        <div id="move-toolbar" class="move-toolbar" hidden>
+          <span id="move-selected-count" aria-live="polite">已选择 0 / 50 张</span>
+          <div class="move-toolbar-buttons">
+            <button class="btn btn-quiet btn-small" type="button" id="move-select-page">选择本页</button>
+            <button class="btn btn-quiet btn-small" type="button" id="move-clear">清空选择</button>
+            <button class="btn btn-primary btn-small" type="button" id="move-open" disabled>移动所选图片</button>
+          </div>
+        </div>
         <div id="grid" class="image-grid"></div>
         <nav class="pager" id="pager" aria-label="图库分页" hidden>
           <button class="btn btn-quiet btn-small" id="first-btn" type="button" hidden>首页</button>
@@ -158,6 +169,27 @@
     </section>
   </div>
 
+  <div class="move-mask" id="move-mask" role="dialog" aria-modal="true" aria-labelledby="move-dialog-title" hidden>
+    <section class="move-dialog">
+      <h2 id="move-dialog-title">移动图片到其他分类</h2>
+      <p id="move-description" class="move-description"></p>
+      <div class="field">
+        <label for="move-target-select">目标分类</label>
+        <select id="move-target-select"><option value="">选择已有分类…</option></select>
+      </div>
+      <div class="field">
+        <label for="move-target-new">或新建分类（输入后优先使用新分类名）</label>
+        <input id="move-target-new" type="text" maxlength="80" autocomplete="off" placeholder="例如 airi图片" />
+      </div>
+      <div id="move-review" class="move-review" hidden aria-live="polite"></div>
+      <p class="move-hint">移动不会修改图片编号或内容。确认前将再次校验，远程同步启用时需要 GitHub 状态正常。</p>
+      <div class="move-dialog-actions">
+        <button id="move-cancel" class="btn btn-quiet" type="button">取消</button>
+        <button id="move-continue" class="btn btn-primary" type="button">预览迁移</button>
+      </div>
+    </section>
+  </div>
+
   <div class="modal-mask" id="mask" role="dialog" aria-modal="true" aria-label="图片预览">
     <div class="modal">
       <button class="close-btn" id="close" type="button" aria-label="关闭预览">×</button>
@@ -165,6 +197,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=11"></script>
+  <script type="module" src="./app.js?v=12"></script>
 </body>
 </html>
