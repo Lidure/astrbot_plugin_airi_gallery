@@ -74,6 +74,9 @@ function validateSelection(tree, source, target, paths) {
   if (!Array.isArray(paths) || paths.length < 1 || paths.length > CLOUD_MOVE_MAX
     || new Set(paths).size !== paths.length) reject('每次请选择 1～50 张不重复的图片');
   const map = new Map(tree.map(item => [item.path, item]));
+  if (map.has('gallery/' + target) || map.has('gallery/' + source)) {
+    reject('分类名称与已有的仓库文件冲突，无法安全移动');
+  }
   if (tree.some(item => imagePath(item.path) && item.path.split('/')[1].toLowerCase() === target.toLowerCase()
     && item.path.split('/')[1] !== target)) reject('目标分类与已有分类只有大小写不同');
   const globalNumbers = new Map();
