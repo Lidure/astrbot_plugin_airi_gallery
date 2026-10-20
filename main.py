@@ -121,6 +121,11 @@ except ImportError:
     from gallery_store import GalleryStore
 
 try:
+    from .gallery_thumbnail import make_gallery_thumbnail
+except ImportError:
+    from gallery_thumbnail import make_gallery_thumbnail
+
+try:
     from .gallery_remote import GalleryRemote
 except ImportError:
     from gallery_remote import GalleryRemote
@@ -579,6 +584,12 @@ class Main(Star):
             self._api_category_image,
             ["GET"],
             "Serve single image",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/category_thumbnail",
+            self._api_category_thumbnail,
+            ["GET"],
+            "Serve small image thumbnails for the authenticated move preview",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/delete_image",
@@ -1610,6 +1621,29 @@ class Main(Star):
         ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}.get(suffix, "image/png")
         data = b64mod.b64encode(img_path.read_bytes()).decode()
         return jsonify({"image": data, "content_type": ct})
+
+    async def _api_category_thumbnail(self):
+        from quart import request, jsonify
+        if not _is_authenticated_web_request():
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        category = request.args.get("category", "").strip()
+        name = request.args.get("name", "").strip()
+        if not category or not name:
+            return jsonify({"ok": False, "error": "缺少分类或图片名称"}), 400
+        image_path = resolve_gallery_image_path(self.gallery_root, category, name)
+        if image_path is None:
+            return jsonify({"ok": False, "error": "invalid path"}), 400
+        if not image_path.exists() or not _is_image_file(image_path):
+            return jsonify({"ok": False, "error": "图片不存在"}), 404
+        try:
+            thumbnail = await asyncio.to_thread(make_gallery_thumbnail, image_path)
+        except (OSError, ValueError) as exc:
+            logger.warning(f"[Gallery] 缩略图生成失败: {type(exc).__name__}")
+            return jsonify({"ok": False, "error": "该图片无法生成缩略图"}), 422
+        return jsonify({
+            "image": b64mod.b64encode(thumbnail).decode("ascii"),
+            "content_type": "image/jpeg",
+        })
 
     async def _api_delete_image(self):
         from quart import request, jsonify
