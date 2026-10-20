@@ -521,6 +521,8 @@ def render_help_poster(
     *,
     mode_text: str,
     llm_enabled: bool,
+    title_text: str = "Airi 画廊指南",
+    subtitle_text: str = "常用操作按场景分组：先看图库，再上传整理，需要时再做维护",
     font_path: str | None = None,
     decoration_path: Path | None = None,
 ) -> Path:
@@ -582,10 +584,10 @@ def render_help_poster(
     subtitle_font = load_collage_font(19, font_path) or ImageFont.load_default()
     meta_font = load_collage_font(16, font_path) or ImageFont.load_default()
 
-    drawer.text((outer, 38), "Airi 画廊指南", fill=_INK, font=title_font)
+    drawer.text((outer, 38), title_text, fill=_INK, font=title_font)
     drawer.text(
         (outer, 100),
-        "常用操作按场景分组：先看图库，再上传整理，需要时再做维护",
+        subtitle_text,
         fill=_MUTED,
         font=subtitle_font,
     )

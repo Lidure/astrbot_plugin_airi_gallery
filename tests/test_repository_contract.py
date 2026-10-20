@@ -54,7 +54,16 @@ def function_names(tree: ast.AST) -> set[str]:
 def test_all_help_aliases_are_registered():
     tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
     commands = registered_filter_commands(tree)
-    assert {"airi_gallery", "画廊帮助", "图库帮助"} <= commands
+    assert {"airi_gallery", "画廊帮助", "图库帮助", "画廊帮助详细"} <= commands
+
+
+def test_gallery_help_has_quick_and_detailed_modes():
+    source = Path("main.py").read_text(encoding="utf-8")
+
+    assert 'if normalized == "/画廊帮助详细":' in source
+    assert 'return "help_detail", None' in source
+    assert 'title_text="Airi 画廊完整指南" if detailed else "Airi 画廊速查"' in source
+    assert '("/查看画廊", "查看所有分类，先找到想看的角色或主题")' in source
 
 
 def test_config_schema_is_valid_json():
@@ -69,10 +78,10 @@ def test_release_version_is_current_everywhere():
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.22"
-    assert badge == "v2.11.22"
-    assert changelog == "v2.11.22"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.22"' in main_source
+    assert metadata["version"] == "v2.11.23"
+    assert badge == "v2.11.23"
+    assert changelog == "v2.11.23"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.23"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
