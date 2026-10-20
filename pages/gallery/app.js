@@ -1,4 +1,5 @@
 import { uploadFastBatches } from "./fast_upload_batches.mjs";
+import { MoveSelection } from "./move_selection.mjs";
 
 let bridge;
 try { bridge = window.AstrBotPluginPage; } catch (error) { bridge = null; }
@@ -37,6 +38,10 @@ let totalPages = 1;
 let perPage = 21;
 let pendingFiles = [];
 let fastUploadRunning = false;
+let moveMode = false;
+let moveDialogState = null;
+let moveBusy = false;
+const moveSelection = new MoveSelection(50);
 let activeView = "gallery";
 let aliases = [];
 let aliasesLoaded = false;
@@ -88,6 +93,19 @@ const aliasSaveBtn = $("alias-save-btn");
 const aliasReloadBtn = $("alias-reload-btn");
 const aliasSummary = $("alias-summary");
 const aliasDirtyState = $("alias-dirty-state");
+const moveModeBtn = $("move-mode-btn");
+const moveToolbar = $("move-toolbar");
+const moveCount = $("move-selected-count");
+const moveSelectPage = $("move-select-page");
+const moveClear = $("move-clear");
+const moveOpen = $("move-open");
+const moveMask = $("move-mask");
+const moveDescription = $("move-description");
+const moveTargetSelect = $("move-target-select");
+const moveTargetNew = $("move-target-new");
+const moveReview = $("move-review");
+const moveCancel = $("move-cancel");
+const moveContinue = $("move-continue");
 
 function showMsg(text, ok = true) {
   document.querySelector(".toast")?.remove();
@@ -254,6 +272,7 @@ async function loadCats() {
   renderTabs();
   renderUploadOptions();
   renderAliasCategoryOptions();
+  if (moveDialogState) renderMoveTargets();
 }
 
 function renderTabs() {
@@ -273,6 +292,8 @@ function renderTabs() {
     tab.addEventListener("click", () => {
       currentCat = category;
       currentPage = 1;
+      moveSelection.reset(category);
+      updateMoveSelectionUI();
       renderTabs();
       void loadImgs();
     });
@@ -347,6 +368,7 @@ async function loadImgs() {
 
 function renderGrid(data) {
   const images = data.imgs;
+  grid.classList.toggle("move-selecting", moveMode);
   releaseGridImageResources();
   grid.replaceChildren();
   if (!images.length) {
@@ -362,7 +384,9 @@ function renderGrid(data) {
     const indexMatch = name.match(/^(\d+)/);
     const imageItem = document.createElement("div");
     imageItem.className = "grid-item";
+    imageItem.dataset.name = name;
     imageItem.tabIndex = 0;
+    imageItem.setAttribute("role", "button");
 
     const image = document.createElement("img");
     image.loading = "lazy";
@@ -383,6 +407,7 @@ function renderGrid(data) {
     deleteButton.setAttribute("aria-label", `删除 ${name}`);
     deleteButton.addEventListener("click", async event => {
       event.stopPropagation();
+      if (moveMode) return;
       deleteButton.disabled = true;
       try {
         const category = image.dataset.category;
@@ -397,19 +422,41 @@ function renderGrid(data) {
       }
     });
 
+    const moveButton = document.createElement("button");
+    moveButton.type = "button";
+    moveButton.className = "move-single";
+    moveButton.textContent = "移动";
+    moveButton.setAttribute("aria-label", "移动 " + name + " 到其他分类");
+    moveButton.hidden = moveMode;
+    moveButton.addEventListener("click", event => {
+      event.stopPropagation();
+      openMoveDialog([name]);
+    });
+    const checkButton = document.createElement("button");
+    checkButton.type = "button";
+    checkButton.className = "move-check";
+    checkButton.setAttribute("aria-label", "选择 " + name);
+    checkButton.hidden = !moveMode;
+    checkButton.addEventListener("click", event => {
+      event.stopPropagation();
+      toggleMoveImage(name);
+    });
     const openPreview = () => {
+      if (moveMode) { toggleMoveImage(name); return; }
       void openImagePreview(image.dataset.category, name);
     };
     imageItem.addEventListener("click", openPreview);
     imageItem.addEventListener("keydown", event => {
+      if (event.target !== imageItem) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         openPreview();
       }
     });
 
-    imageItem.append(image, badge, deleteButton);
+    imageItem.append(image, badge, deleteButton, moveButton, checkButton);
     grid.appendChild(imageItem);
+    updateMoveCard(imageItem);
     observeGridImage(image);
   }
 }
