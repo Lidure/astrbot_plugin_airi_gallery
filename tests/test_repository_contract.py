@@ -66,6 +66,17 @@ def test_gallery_help_has_quick_and_detailed_modes():
     assert '("/查看画廊", "查看所有分类，先找到想看的角色或主题")' in source
 
 
+def test_cloud_gallery_help_text_can_be_disabled_and_customized():
+    source = Path("main.py").read_text(encoding="utf-8")
+    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
+
+    assert 'self.config.get("cloud_gallery_help_text_enabled", True)' in source
+    assert '"cloud_gallery_help_text",' in source
+    assert 'template.replace("{url}", url)' in source
+    assert schema["cloud_gallery_help_text_enabled"]["default"] is True
+    assert "{url}" in schema["cloud_gallery_help_text"]["default"]
+
+
 def test_config_schema_is_valid_json():
     schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
     assert isinstance(schema, dict)
@@ -78,10 +89,10 @@ def test_release_version_is_current_everywhere():
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.23"
-    assert badge == "v2.11.23"
-    assert changelog == "v2.11.23"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.23"' in main_source
+    assert metadata["version"] == "v2.11.24"
+    assert badge == "v2.11.24"
+    assert changelog == "v2.11.24"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.24"' in main_source
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
