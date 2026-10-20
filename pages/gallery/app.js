@@ -40,6 +40,8 @@ let pendingFiles = [];
 let fastUploadRunning = false;
 let moveMode = false;
 let moveDialogState = null;
+let movePreviewGallery = null;
+let moveThumbReturnFocus = null;
 let moveBusy = false;
 const moveSelection = new MoveSelection(50);
 let activeView = "gallery";
@@ -101,6 +103,7 @@ const moveClear = $("move-clear");
 const moveOpen = $("move-open");
 const moveMask = $("move-mask");
 const moveDescription = $("move-description");
+const movePreviewGrid = $("move-preview-grid");
 const moveTargetSelect = $("move-target-select");
 const moveTargetNew = $("move-target-new");
 const moveReview = $("move-review");
@@ -262,6 +265,125 @@ async function openImagePreview(category, name) {
 }
 
 
+
+function disposeMovePreviews() {
+  const gallery = movePreviewGallery;
+  movePreviewGallery = null;
+  if (gallery) {
+    gallery.active = false;
+    gallery.observer?.disconnect();
+    gallery.queue.length = 0;
+    releasePreviewObjectUrls(gallery.urls);
+  }
+  movePreviewGrid.replaceChildren();
+}
+
+function pumpMovePreviews(gallery) {
+  // Limit concurrent thumbnail requests even for selections spanning many pages.
+  while (gallery.active && gallery.inFlight < 3 && gallery.queue.length) {
+    const button = gallery.queue.shift();
+    const image = button.querySelector("img");
+    const status = button.querySelector(".move-preview-status");
+    button.dataset.state = "loading";
+    gallery.inFlight += 1;
+    void (async () => {
+      try {
+        const data = await apiGet("category_thumbnail", {
+          category: gallery.source, name: button.dataset.name,
+        });
+        const payload = normalizeImagePayload(data);
+        const url = makeBlobUrl(payload.image, payload.contentType);
+        if (!url) throw new Error("empty thumbnail");
+        if (!gallery.active || movePreviewGallery !== gallery || !button.isConnected) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        gallery.urls.add(url);
+        image.src = url;
+        image.hidden = false;
+        status.hidden = true;
+        button.disabled = false;
+        button.dataset.state = "loaded";
+      } catch (error) {
+        if (!gallery.active || movePreviewGallery !== gallery) return;
+        status.textContent = "加载失败，点击重试";
+        status.hidden = false;
+        button.disabled = false;
+        button.dataset.state = "failed";
+        console.warn("[gallery] move thumbnail load failed", error);
+      } finally {
+        gallery.inFlight -= 1;
+        pumpMovePreviews(gallery);
+      }
+    })();
+  }
+}
+
+function queueMovePreview(gallery, button) {
+  if (!gallery.active || !["waiting", "failed"].includes(button.dataset.state)) return;
+  button.dataset.state = "queued";
+  button.disabled = true;
+  button.querySelector(".move-preview-status").textContent = "加载中…";
+  gallery.queue.push(button);
+  pumpMovePreviews(gallery);
+}
+
+function renderMovePreviews(names, category) {
+  disposeMovePreviews();
+  const gallery = {
+    source: category, active: true, urls: new Set(),
+    queue: [], inFlight: 0, observer: null,
+  };
+  movePreviewGallery = gallery;
+  movePreviewGrid.classList.toggle("single", names.length === 1);
+  for (const name of names) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "move-preview-thumb";
+    button.dataset.name = name;
+    button.dataset.state = "waiting";
+    button.disabled = true;
+    button.title = "点击放大图片";
+    button.setAttribute("aria-label", "放大查看待迁移图片");
+    const image = document.createElement("img");
+    image.alt = "待迁移图片";
+    image.decoding = "async";
+    image.hidden = true;
+    const status = document.createElement("span");
+    status.className = "move-preview-status";
+    status.textContent = "等待加载…";
+    button.append(image, status);
+    button.addEventListener("click", () => {
+      if (button.dataset.state === "failed") {
+        queueMovePreview(gallery, button);
+        return;
+      }
+      if (button.dataset.state !== "loaded") return;
+      moveThumbReturnFocus = button;
+      mask.classList.add("over-move");
+      void openImagePreview(category, name).then(() => {
+        if (!mask.classList.contains("show")) mask.classList.remove("over-move");
+      });
+    });
+    movePreviewGrid.appendChild(button);
+    if (typeof window.IntersectionObserver !== "function") {
+      queueMovePreview(gallery, button);
+    }
+  }
+  if (typeof window.IntersectionObserver === "function") {
+    gallery.observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        gallery.observer?.unobserve(entry.target);
+        queueMovePreview(gallery, entry.target);
+      }
+    }, { root: movePreviewGrid, rootMargin: "120px" });
+    for (const button of movePreviewGrid.querySelectorAll(".move-preview-thumb")) {
+      gallery.observer.observe(button);
+    }
+  }
+}
+
 function updateMoveCard(card) {
   const name = card.dataset.name;
   const selected = moveSelection.has(name);
@@ -325,14 +447,14 @@ function setMoveDialogBusy(busy) {
 function openMoveDialog(names) {
   if (!currentCat || moveBusy || !names.length) return;
   moveDialogState = { source: currentCat, names: [...names], ticket: "", target: "" };
-  moveDescription.textContent = "从「" + currentCat + "」移动 " + names.length +
-    " 张图片（编号 " + names.map(name => "#" + name.split(".")[0]).join("、") + "）";
+  moveDescription.textContent = "从「" + currentCat + "」移动 " + names.length + " 张图片，请核对下方缩略图。";
   moveTargetNew.value = "";
   moveReview.hidden = true;
   moveReview.textContent = "";
   moveContinue.textContent = "预览迁移";
   renderMoveTargets();
   moveMask.hidden = false;
+  renderMovePreviews(names, currentCat);
   setMoveDialogBusy(false);
   moveTargetSelect.focus();
 }
@@ -343,6 +465,7 @@ function closeMoveDialog() {
   moveDialogState = null;
   moveMask.hidden = true;
   moveReview.hidden = true;
+  disposeMovePreviews();
   if (ticket) void apiPost("move_images", { action: "cancel", ticket }).catch(() => {});
 }
 
@@ -366,7 +489,7 @@ moveOpen.addEventListener("click", () => openMoveDialog(moveSelection.names()));
 moveCancel.addEventListener("click", closeMoveDialog);
 moveMask.addEventListener("click", event => { if (event.target === moveMask) closeMoveDialog(); });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && !moveMask.hidden) {
+  if (event.key === "Escape" && !moveMask.hidden && !mask.classList.contains("show")) {
     event.preventDefault();
     closeMoveDialog();
   }
@@ -389,7 +512,7 @@ moveContinue.addEventListener("click", async () => {
       state.ticket = result.ticket;
       state.target = result.target;
       moveReview.textContent = "即将从「" + state.source + "」移动到「" + state.target + "」\n" +
-        "共 " + result.count + " 张，原编号保持不变。\n" +
+        "共 " + result.count + " 张，图片内容保持不变。\n" +
         (result.remote ? "GitHub 将同步更新图片路径及索引。" : "当前为仅本地迁移。") +
         "\n确认有效期 5 分钟；请再次核对目标分类。";
       moveReview.hidden = false;
@@ -405,6 +528,7 @@ moveContinue.addEventListener("click", async () => {
     if (result?.ok !== true) throw new Error(result?.error || "移动失败，请重新预览");
     moveDialogState = null;
     moveMask.hidden = true;
+    disposeMovePreviews();
     moveMode = false;
     moveSelection.reset(currentCat);
     clearImageCache(state.source);
@@ -1215,15 +1339,19 @@ window.addEventListener("beforeunload", event => {
   releaseGridImageResources();
   releasePreviewObjectUrls(uploadPreviewObjectUrls);
   releaseModalObjectUrl();
+  disposeMovePreviews();
   if (!aliasesDirty) return;
   event.preventDefault();
   event.returnValue = "";
 });
 
 function closePreview() {
-  mask.classList.remove("show");
+  const overMove = mask.classList.contains("over-move");
+  mask.classList.remove("show", "over-move");
   modalImage.removeAttribute("src");
   releaseModalObjectUrl();
+  if (overMove && moveThumbReturnFocus?.isConnected) moveThumbReturnFocus.focus();
+  moveThumbReturnFocus = null;
 }
 
 closeBtn.addEventListener("click", closePreview);

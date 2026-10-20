@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=12" />
+  <link rel="stylesheet" href="./style.css?v=13" />
 </head>
 <body>
   <div class="container">
@@ -173,6 +173,8 @@
     <section class="move-dialog">
       <h2 id="move-dialog-title">移动图片到其他分类</h2>
       <p id="move-description" class="move-description"></p>
+      <div id="move-preview-grid" class="move-preview-grid" role="group" aria-label="待迁移图片缩略图"></div>
+      <p class="move-preview-hint">点击缩略图可放大查看，确认前请核对图片。</p>
       <div class="field">
         <label for="move-target-select">目标分类</label>
         <select id="move-target-select"><option value="">选择已有分类…</option></select>
@@ -197,6 +199,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=12"></script>
+  <script type="module" src="./app.js?v=13"></script>
 </body>
 </html>
