@@ -57,6 +57,15 @@ def test_all_help_aliases_are_registered():
     assert {"airi_gallery", "画廊帮助", "图库帮助", "画廊帮助详细"} <= commands
 
 
+def test_gallery_help_has_quick_and_detailed_modes():
+    source = Path("main.py").read_text(encoding="utf-8")
+
+    assert 'if normalized == "/画廊帮助详细":' in source
+    assert 'return "help_detail", None' in source
+    assert 'title_text="Airi 画廊完整指南" if detailed else "Airi 画廊速查"' in source
+    assert '("/查看画廊", "查看所有分类，先找到想看的角色或主题")' in source
+
+
 def test_config_schema_is_valid_json():
     schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
     assert isinstance(schema, dict)
