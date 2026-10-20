@@ -227,7 +227,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 ![alt text](assets/image2.png)
 **部署方式：**
 
-1. 将 `pages/zz_cloud/` 整个目录部署到 Cloudflare Workers / Pages 项目；不要只上传 `index.html`，页面还依赖 `style.css`、`app.js`、`upload_transaction.mjs`、`_headers` 与 Worker 配置
+1. 将 `pages/zz_cloud/` 整个目录部署到 Cloudflare Workers / Pages 项目；不要只上传 `index.html`，页面还依赖 `style.css`、`app.js`、`upload_transaction.mjs`、`move_transaction.mjs`、`_headers` 与 Worker 配置
 2. 打开页面后填写配置信息：
 
 | 配置项 | 默认值 | 说明 |
@@ -237,6 +237,16 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | 仓库名称 | `airi-gallery-images` | 图片存储仓库名 |
 | 分支 | `main` | 同步使用的分支 |
 | 访问令牌 | （空） | GitHub / Gitee 令牌；需要写操作时填写。Access Token 只保留在当前页面内存，刷新页面后需要重新输入，不会写入 `localStorage` |
+
+**云端图片迁移（GitHub）**：云端 Page 与 AstrBot WebUI 一样支持按图移动分类，但无需树莓派在线。
+
+1. 在云端 Page 的设置中选择 **GitHub 仓库**，填写有写入权限的 Access Token 并连接；匿名只读连接、Gitee 仓库不会显示迁移入口。
+2. 在图片来源分类中，点击图片上的「移动」可移动单张；也可点击「批量移动」逐张勾选或「选择本页」。同一来源分类内支持跨页选择，每次最多 50 张。
+3. 在弹窗中直接核对图片缩略图（点击可放大），选择已有分类或输入新分类名，点击「预览迁移」。此时**不会修改远端仓库**。
+4. 核对原分类、目标分类和图片数量，5 分钟内点击「确认移动 N 张」。Page 将使用当前 Token 和 GitHub Git Data API，**仅生成一个 Commit** 同时移动图片路径及 `gallery/gallery_index.json` 中的感知哈希条目，保留原图片 Blob、文件扩展名及全局编号。完成后刷新图库。
+5. 如果远端 HEAD 变化、目标同名、全局编号重复、远端索引缺失/损坏或权限失效，迁移会中止；如果提示**提交状态可能未确认**，请先手动同步仓库核对，避免重复点击。
+
+> 云端页面不会将 Token 存进 localStorage；只读模式仍可正常浏览。Gitee 暂不支持原子迁移。云端操作完成后，树莓派上的本地图库**不会自动随之变更**，请通过已有的 `/立即同步` 流程按同步规则拉取远端更改；不要在本地与云端状态不一致时直接重试迁移。
 
 **功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 Git blob SHA 去重、上传前只在目标分类内做远程精确/感知查重、按全局最大编号续号。GitHub 批量上传会以受限并发准备 blob，再把全部图片和 `gallery/gallery_index.json` 放进同一个原子 commit，只更新一次分支；网络抖动与限流只重试安全的读取/对象创建，ref 响应不确定时会重新核验。超过 GitHub 100 MiB 单文件限制的图片会在读取前明确拒绝；GitHub 单图达到 4 MiB 时优先由浏览器分块生成 Base64 流并经同源 Cloudflare Worker 转发，Worker 只做流式 JSON 包装、不执行大文件 Base64 转码；不支持流式请求的浏览器会自动使用兼容模式。稳定代理通道单图上限为 64 MiB，含大图的批次串行创建 blob，从而降低内存峰值与 Worker CPU 压力并改善跨境上传稳定性。多个浏览器撞到同一编号时保持 create-only 并 fail-closed，不覆盖已有图片，失败项会留在队列供同步后重试。Gitee 仍使用逐文件写入与补偿删除。v2.11.11 起页面脚本与样式完全外置，并启用 CSP；远程分类名等仓库数据使用安全 DOM API 渲染。
 
@@ -371,6 +381,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## ✨ main 分支近期改进（尚未单独发布）
+- **Cloud Page 可视化迁移**：GitHub Token 登录后可单图/跨页批量移动分类，缩略图核对、5 分钟二次确认，复用 Blob 并以单次原子 Commit 更新图片与感知索引；只读/Gitee 模式不开放迁移。
 - **安全迁移**：新增 `/迁移图片`、`/确认迁移图片 N` 与 `/取消迁移图片`，确认前核对路径、图片内容与 GitHub 同步状态（[#88](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/88)）。
 - **WebUI 图库移动**：支持单图和跨分页批量勾选（最多 50 张），已有或新目标分类，预览后二次确认；兼容中文 WebUI 用户名（[#89](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/89)、[#90](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/90)）。
 - **图片式确认**：移动弹窗改为懒加载的 256 像素缩略图网格，可点图放大，不再使用编号列表确认（[#91](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/91)）。
