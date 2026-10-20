@@ -89,10 +89,40 @@ def test_release_version_is_current_everywhere():
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.11.24"
-    assert badge == "v2.11.24"
-    assert changelog == "v2.11.24"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.24"' in main_source
+    assert metadata["version"] == "v2.11.25"
+    assert badge == "v2.11.25"
+    assert changelog == "v2.11.25"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.25"' in main_source
+
+
+def test_upload_command_accepts_category_without_space():
+    tree = parsed_main()
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "cmd_upload_without_space"
+    )
+    regex_patterns = [
+        decorator.args[0].value
+        for decorator in handler.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and isinstance(decorator.func.value, ast.Name)
+        and decorator.func.value.id == "filter"
+        and decorator.func.attr == "regex"
+        and decorator.args
+        and isinstance(decorator.args[0], ast.Constant)
+        and isinstance(decorator.args[0].value, str)
+    ]
+    called_methods = {
+        node.func.attr
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert r"^/上传\\S+" in regex_patterns
+    assert {"_parse_action", "_handle_upload", "stop_event"} <= called_methods
 
 
 def test_plugin_pages_remove_legacy_aliases_entry():
