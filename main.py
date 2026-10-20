@@ -771,7 +771,7 @@ class Main(Star):
         """仅绕过最近一次感知相似提示；完全重复仍然禁止上传。"""
         await self._handle_force_similar_upload(event)
 
-    @filter.regex(r"^/上传\\S+")
+    @filter.regex(r"^/上传\S+")
     async def cmd_upload_without_space(self, event: AstrMessageEvent):
         """兼容 `/上传分类` 这种命令与分类之间没有空格的写法。"""
         text = (event.message_str or "").strip()
