@@ -952,6 +952,7 @@ function cloudMoveSetBusy(busy) {
 }
 function cloudMovePictures(dialog) {
   cloudMovePreviewObserver?.disconnect();
+  dialog.urls = new Set();
   cloudMovePreviewObserver = null;
   cloudMovePreviewGrid.replaceChildren();
   cloudMovePreviewGrid.classList.toggle('single', dialog.paths.length === 1);
@@ -976,9 +977,13 @@ function cloudMovePictures(dialog) {
       const direct = rawImageUrl(file);
       const fallback = async () => {
         try {
-          const blobUrl = await imagePool(() => getImageObjectUrl(file));
-          if (cloudMoveDialog !== dialog || !button.isConnected) return;
-          if (!blobUrl) throw new Error('图片为空');
+          const bytes = await imagePool(() => getFileContent(file.path));
+          const blobUrl = URL.createObjectURL(new Blob([bytes], { type: imageMime(file.path) }));
+          if (cloudMoveDialog !== dialog || !button.isConnected) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+          }
+          dialog.urls.add(blobUrl);
           img.src = blobUrl;
         } catch {
           if (cloudMoveDialog !== dialog) return;
@@ -1052,7 +1057,9 @@ function openCloudMoveDialog(paths) {
 }
 function closeCloudMoveDialog() {
   if (cloudMoveBusy) return;
+  const old = cloudMoveDialog;
   cloudMoveDialog = null;
+  for (const url of old?.urls || []) URL.revokeObjectURL(url);
   cloudMovePreviewObserver?.disconnect();
   cloudMovePreviewObserver = null;
   cloudMovePreviewGrid.replaceChildren();
