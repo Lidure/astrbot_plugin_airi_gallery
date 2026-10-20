@@ -43,6 +43,18 @@
     "hint": "填写已部署的 Cloudflare Pages 云端图库页面 URL，可省略 https://。填写后，发送 /airi_gallery 或 /画廊帮助 时会顺便发出这个入口，方便大家从浏览器查看表情包、批量上传和管理图片。/画廊检查会验证 URL 格式，但不会请求该页面。",
     "default": ""
   },
+  "cloud_gallery_help_text_enabled": {
+    "type": "bool",
+    "description": "帮助命令是否附加发送云端图库介绍文字",
+    "hint": "开启后，填写了 cloud_gallery_url 时会在帮助海报后额外发送一段文字；关闭后不再发送这段附加介绍。",
+    "default": true
+  },
+  "cloud_gallery_help_text": {
+    "type": "string",
+    "description": "帮助命令附加文字模板",
+    "hint": "自定义帮助海报后额外发送的文字。使用 {url} 作为云端图库链接占位符；支持换行。留空则不发送附加文字。仅在开关开启且 cloud_gallery_url 已填写时生效。",
+    "default": "云端图库小入口也准备好啦：\\n{url}\\n\\n点开就能在浏览器里查看图库、翻找表情包，也可以批量上传、整理和删除图片；Bot 不在线时，也能先把新表情包放进云端仓库。\\n\\n图库会做去重和编号续号，很适合一次收拾一大包图。Airi 很需要大家一起投喂/提供表情包，让图库慢慢变得更好用。上传需要密钥，如果想帮忙补图，可以私聊bot获取。"
+  },
   "category_aliases": {
     "type": "list",
     "description": "分类昵称映射",
