@@ -5,6 +5,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 import types
+from urllib.parse import urlencode
 
 from PIL import Image
 from quart import Quart
@@ -52,16 +53,16 @@ def test_thumbnail_api_respects_dashboard_auth_and_preserves_source(tmp_path):
                 response, status = result, 200
             return await response.get_json(), status
 
-    denied, status = asyncio.run(invoke("/thumb?category=图片&name=12.png"))
+    denied, status = asyncio.run(invoke("/thumb?" + urlencode({"category": "图片", "name": "12.png"})))
     assert status == 403 and denied["ok"] is False
     authenticated[0] = True
-    allowed, status = asyncio.run(invoke("/thumb?category=图片&name=12.png"))
+    allowed, status = asyncio.run(invoke("/thumb?" + urlencode({"category": "图片", "name": "12.png"})))
     assert status == 200
     assert allowed["content_type"] == "image/jpeg"
     with Image.open(BytesIO(base64.b64decode(allowed["image"]))) as result:
         assert result.size == (256, 192)
     assert original.read_bytes() == data
-    invalid, status = asyncio.run(invoke("/thumb?category=图片&name=missing.png"))
+    invalid, status = asyncio.run(invoke("/thumb?" + urlencode({"category": "图片", "name": "missing.png"})))
     assert status == 400
     assert invalid["ok"] is False
 
