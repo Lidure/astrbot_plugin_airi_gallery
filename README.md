@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.23-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.24-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -235,7 +235,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 **功能：** 暗色/亮色模式切换（自动跟随系统）、紧凑图标分页、并发加载 + 指数退避重试、图片上传与删除、上传队列内按 Git blob SHA 去重、上传前只在目标分类内做远程精确/感知查重、按全局最大编号续号。GitHub 批量上传会以受限并发准备 blob，再把全部图片和 `gallery/gallery_index.json` 放进同一个原子 commit，只更新一次分支；网络抖动与限流只重试安全的读取/对象创建，ref 响应不确定时会重新核验。超过 GitHub 100 MiB 单文件限制的图片会在读取前明确拒绝；GitHub 单图达到 4 MiB 时优先由浏览器分块生成 Base64 流并经同源 Cloudflare Worker 转发，Worker 只做流式 JSON 包装、不执行大文件 Base64 转码；不支持流式请求的浏览器会自动使用兼容模式。稳定代理通道单图上限为 64 MiB，含大图的批次串行创建 blob，从而降低内存峰值与 Worker CPU 压力并改善跨境上传稳定性。多个浏览器撞到同一编号时保持 create-only 并 fail-closed，不覆盖已有图片，失败项会留在队列供同步后重试。Gitee 仍使用逐文件写入与补偿删除。v2.11.11 起页面脚本与样式完全外置，并启用 CSP；远程分类名等仓库数据使用安全 DOM API 渲染。
 
-如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送 `/airi_gallery`、`/画廊帮助`、`/图库帮助` 或 `/画廊帮助详细` 时，Bot 会在帮助海报后顺便发出云端图库入口，方便从浏览器查看表情包、批量上传和整理图片。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
+如果已部署云端管理页面，可以把页面地址填入 `cloud_gallery_url`（可省略 `https://`）。之后发送帮助命令时，如果已填写 `cloud_gallery_url` 且开启 `cloud_gallery_help_text_enabled`，Bot 会在帮助海报后发送 `cloud_gallery_help_text`。文字支持自定义，使用 `{url}` 自动插入链接；关闭开关或将文字留空即可不发送这段附加文字。上传需要密钥时，可以让想帮忙补图的用户私聊管理员获取。
 
 ### 10. 公开上传
 
@@ -272,7 +272,9 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `view_all_collage_compress` | bool | `false` | 是否压缩看全部拼图 |
 | `view_all_collage_scale` | float | `0.85` | 看全部拼图压缩比例（`0.5`~`1.0`） |
 | `upload_token` | string | `""` | 公开上传密钥；留空时公开上传默认关闭，配置非空密钥后才允许外部写入 |
-| `cloud_gallery_url` | string | `""` | 云端图库页面链接，填写后帮助命令会顺便发送这个浏览器入口，可省略 `https://` |
+| `cloud_gallery_url` | string | `""` | 云端图库页面链接，可省略 `https://` |
+| `cloud_gallery_help_text_enabled` | bool | `true` | 是否在帮助后额外发送一段云端图库介绍文字 |
+| `cloud_gallery_help_text` | string | 内置默认文案 | 自定义帮助附加文字，`{url}` 会替换成链接；支持换行，留空不发送 |
 
 ### LLM 工具配置
 
@@ -348,7 +350,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 文件名统一使用数字序号，插件会按编号支持查看、删除与重新整理。
 
 ## 🚀 更新日志
-### v2.11.23
+### v2.11.24
 - **新手帮助分层**：`/画廊帮助` 默认显示精简速查，突出分类浏览、随机看图、编号查看和上传；新增 `/画廊帮助详细` 查看完整命令。旧的 `/airi_gallery` 与 `/图库帮助` 继续兼容并显示简洁版。
 
 ### v2.11.22
