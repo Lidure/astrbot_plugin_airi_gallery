@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Airi Gallery Cloud</title>
 <link rel="icon" type="image/x-icon" href="./favicon.ico">
-<link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="./style.css?v=2">
 </head>
 <body>
 <div class="container">
@@ -102,9 +102,16 @@
     <div class="card-title">🗂️ 图库分类</div>
     <div class="tabs" id="tabs"></div>
     <div class="grid-toolbar">
+      <button class="btn btn-sm btn-ghost is-hidden" id="cloud-move-mode" type="button" aria-pressed="false">批量移动</button>
       <label>每页</label>
       <input type="number" id="per-page-input" value="21" min="1" max="100" class="input-sm" />
       <label>张</label>
+    </div>
+    <div id="cloud-move-toolbar" class="cloud-move-toolbar is-hidden">
+      <span id="cloud-move-count" aria-live="polite">已选择 0 / 50 张</span>
+      <button id="cloud-move-page" class="btn btn-sm btn-ghost" type="button">选择本页</button>
+      <button id="cloud-move-clear" class="btn btn-sm btn-ghost" type="button">清空选择</button>
+      <button id="cloud-move-open" class="btn btn-sm btn-pink" type="button" disabled>移动所选图片</button>
     </div>
     <div id="grid" class="grid"></div>
     <div class="pager is-hidden" id="pager">
@@ -124,6 +131,26 @@
       <p class="welcome-copy">点击右上角 ⚙️ 配置你的 GitHub/Gitee 仓库信息，<br>即可随时随地通过网页管理图库。</p>
     </div>
   </div>
+</div>
+
+<!-- Cloud gallery move dialog: read-only preview, then one atomic GitHub commit -->
+<div id="cloud-move-mask" class="cloud-move-mask is-hidden" role="dialog" aria-modal="true" aria-labelledby="cloud-move-title">
+  <section class="cloud-move-dialog">
+    <h2 id="cloud-move-title">移动图片到其他分类</h2>
+    <p id="cloud-move-description"></p>
+    <div id="cloud-move-preview-grid" class="cloud-move-preview-grid" role="group" aria-label="待迁移图片缩略图"></div>
+    <p class="hint">点击缩略图可放大核对；不修改原图或原编号。</p>
+    <div class="field"><label class="field-label" for="cloud-move-target">目标分类</label>
+      <select id="cloud-move-target"><option value="">选择已有分类...</option></select></div>
+    <div class="field"><label class="field-label" for="cloud-move-new">或输入新分类（优先使用）</label>
+      <input type="text" id="cloud-move-new" maxlength="80" autocomplete="off" placeholder="例如 airi图片"></div>
+    <p id="cloud-move-review" class="cloud-move-review is-hidden" aria-live="polite"></p>
+    <p class="hint">仅支持有写入权限的 GitHub 仓库；预览 5 分钟内有效。提交前验证远端未变化，并在同一个 Commit 中更新感知索引。</p>
+    <div class="cloud-move-actions">
+      <button id="cloud-move-cancel" class="btn btn-ghost" type="button">取消</button>
+      <button id="cloud-move-continue" class="btn btn-pink" type="button">预览迁移</button>
+    </div>
+  </section>
 </div>
 
 <!-- Image modal -->
@@ -147,6 +174,6 @@
   </div>
 </div>
 
-<script type="module" src="./app.js"></script>
+<script type="module" src="./app.js?v=2"></script>
 </body>
 </html>
