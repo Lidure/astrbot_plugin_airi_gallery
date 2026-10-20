@@ -63,6 +63,7 @@ def test_preview_does_not_change_data_and_local_move_preserves_ids_and_index(tmp
 def test_preview_refuses_wrong_source_and_existing_target(tmp_path):
     migration, store, _, _ = _env(tmp_path)
     _image(store, "图片", 12)
+    _image(store, "其他", 99)
     with pytest.raises(ValueError, match="不在"):
         migration.preview("其他", "airi图片", (12,))
     _image(store, "airi图片", 12)
