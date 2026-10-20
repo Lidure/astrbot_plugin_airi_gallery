@@ -251,7 +251,7 @@ def compress_large_upload_image(
                         if len(candidate) <= target:
                             return candidate, candidate != data
 
-                    if attempt == 6 or max(working.size) <= 1024:
+                    if attempt == 6 or max(working.size) <= 256:
                         break
                     best_size = max(1, len(best))
                     scale = min(0.9, max(0.45, (target / best_size) ** 0.5 * 0.92))
