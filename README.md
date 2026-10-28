@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.26-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.27-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -165,7 +165,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | `/导入图库` | 重新扫描图库并整理编号 |
 | `/画廊检查` | 只读检查配置、权限、远程连接和插件更新 |
 
-> QQ/聊天中的 `/上传<分类>` 会对超过 15 MiB 的静态图片尝试自动压缩，优先控制在 10 MiB 以内；小图保持原样，动图不会被压成单帧。压缩后仍执行 20 MiB 单图大小与 8000 万像素限制；压缩不可用时回退原图并按原规则校验，超过限制的图片仍会跳过。
+> QQ/聊天中的 `/上传<分类>` 会对超过 20 MiB 的静态图片尝试自动压缩，优先控制在 10 MiB 以内；小图保持原样，动图不会被压成单帧。压缩后仍执行 50 MiB 单图大小与 8000 万像素限制；压缩不可用时回退原图并按原规则校验，超过限制的图片仍会跳过。
 
 > 在共享群组中强烈建议开启 `use_permission`。开启后，上述管理命令只允许 `admins` 或 `whitelist` 里的用户执行；保持关闭时，所有用户都可以运行管理命令。
 
@@ -256,7 +256,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 
 配置 `upload_token` 后，外部用户可通过 Web 页面上传图片到图库。令牌作为简单的访问密钥，防止未授权上传；比较时使用常量时间校验。
 
-> 🔐 **安全提示：** `upload_token` 留空时公开上传默认关闭；只有显式配置非空密钥后，公开上传接口才接受写入。Web 上传还会严格校验 Base64 和真实图片格式，单次最多 100 张、单图最多 20 MiB、整批解码后最多 100 MiB，并限制单图最多 8000 万像素。
+> 🔐 **安全提示：** `upload_token` 留空时公开上传默认关闭；只有显式配置非空密钥后，公开上传接口才接受写入。Web 上传还会严格校验 Base64 和真实图片格式，单次最多 100 张、单图最多 50 MiB、整批解码后最多 100 MiB，并限制单图最多 8000 万像素。
 
 ### 11. Web UI 管理页面
 
@@ -297,7 +297,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 | :--- | :--- | :--- | :--- |
 | `view_command_mode` | string | `no_prefix` | 浏览命令触发模式：`no_prefix`（看看xxx）或 `prefix`（/看看xxx） |
 | `view_multiple_mode` | string | `single` | 多图发送模式：`single`（单条消息）或 `forward`（合并转发） |
-| `view_multiple_max` | int | `10` | 看看多张的最大数量（范围 5~10），LLM 工具也受此限制 |
+| `view_multiple_max` | int | `10` | 看看多张的最大数量（范围 1~50），LLM 工具也受此限制 |
 | `view_all_collage_compress` | bool | `false` | 是否压缩看全部拼图 |
 | `view_all_collage_scale` | float | `0.85` | 看全部拼图压缩比例（`0.5`~`1.0`） |
 | `upload_token` | string | `""` | 公开上传密钥；留空时公开上传默认关闭，配置非空密钥后才允许外部写入 |
@@ -388,6 +388,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - **帮助文档同步**：README、聊天中的 `/画廊帮助详细` 文本及图片帮助海报增加 WebUI 迁移步骤；简版帮助提供入口提示。
 
 ## 🚀 更新日志
+### v2.11.27
+- **上传上限调整**：聊天、AstrBot WebUI 与公开 Web API 的单图上限从 20 MiB 提升至 50 MiB，单次 Web 请求总量仍限制 100 MiB；聊天图片超过 20 MiB 才尝试压缩至 10 MiB 以内，动图继续保持原样。快速上传前端适配 50 MiB 单图限制与更大的 64 MiB 分批阈值。
+- **多图浏览上限调整**：`view_multiple_max` 可配置范围从 5～10 扩展为 1～50，默认仍为 10；`看看<分类> N`、`/抽表情 N` 和 LLM 工具共享这个上限。
+
 ### v2.11.26
 - **聊天大图自动压缩**：`/上传分类` 遇到超过 15 MiB 的静态大图时，先尝试压缩到 10 MiB 以内，再进入原有格式/像素校验、查重和远端事务；JPEG 尽量保留 JPEG，其他静态格式转为 WebP，透明通道会保留。
 - 小于等于 15 MiB 的图片不改动；动图不自动压成单帧。若无法达到 10 MiB 目标，会使用更小且仍符合 20 MiB 上限的压缩结果；没有可用压缩结果时回退原图并执行原限制校验。
@@ -409,7 +413,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - AstrBot 画廊 WebUI 的「快速上传（不查重）」新增自动分批上传：每批最多 30 张、48 MiB 原始图片，依次上传，单次选择可以超过后端单请求 100 MiB 和 100 张的限制。
 - 上传时展示批次、已成功数量和进度条；只在发送当前批次时编码图片，避免把整组选中的大量图片同时转换为 Base64。
 - 批次失败后立即停止后续请求，仅从列表移除已确认成功的图片；保留失败批次和未开始上传的图片。若网络中断导致远端提交结果不明，明确提示先核对图库再手动重试，以免重复上传。
-- 在正式提交第一批前检查所有文件的单张大小（20 MiB 上限）。原普通上传、图片查重、安全校验和 GitHub 事务保持不变。
+- 在正式提交第一批前检查所有文件的单张大小（当时为 20 MiB 上限）。原普通上传、图片查重、安全校验和 GitHub 事务保持不变。
 
 ### v2.11.20
 - AstrBot 内置画廊 WebUI 新增「快速上传（不查重）」按钮，使用独立已认证接口 `/fast_upload`。批量上传时跳过精确重复判断与感知相似比较，也无需强制上传确认；允许同内容图片重复入库。
@@ -630,7 +634,7 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - **新增** Cloudflare Pages 云端管理页面（暗色模式、紧凑分页、并发加载）
 - **新增** 公开上传密钥（`upload_token`），控制外部上传权限
 - **新增** 自动同步定时器，可配置拉取间隔（默认 5 分钟）
-- **新增** `view_multiple_max` 配置项，自定义多图发送上限（5~10）
+- **新增** `view_multiple_max` 配置项，自定义多图发送上限（当时为 5~10）
 - **优化** 启动时自动推送本地未同步图片到远程仓库
 - **优化** 云端页面使用并发池（4）+ 指数退避重试，提升加载稳定性
 - **移除** 隧道代理相关代码（`upload_server.py`、内嵌 HTTP 代理）
