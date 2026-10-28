@@ -26,7 +26,7 @@ test("large selection is split by byte and count limits, not rejected at 100 MiB
 test("a single file over 50 MiB rejects the whole selection before sending", async () => {
   const small = file("small.png", 1);
   const tooLarge = file("huge.jpg", 51);
-  assert.throws(() => planFastUploadBatches([small, tooLarge]), /huge.jpg.*20 MiB/);
+  assert.throws(() => planFastUploadBatches([small, tooLarge]), /huge.jpg.*50 MiB/);
   let sends = 0;
   await assert.rejects(
     uploadFastBatches([small, tooLarge], {
