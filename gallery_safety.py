@@ -147,7 +147,7 @@ _IMAGE_FORMAT_EXTENSIONS = {
 def validate_image_payload(
     content: bytes,
     *,
-    max_bytes: int = 20 * 1024 * 1024,
+    max_bytes: int = 50 * 1024 * 1024,
     max_pixels: int = 80_000_000,
 ) -> ValidatedImagePayload:
     """Validate image bytes and derive the canonical extension from content."""
@@ -197,11 +197,11 @@ def validate_image_payload(
 def compress_large_upload_image(
     content: bytes,
     *,
-    threshold_bytes: int = 15 * 1024 * 1024,
+    threshold_bytes: int = 20 * 1024 * 1024,
     target_bytes: int = 10 * 1024 * 1024,
     max_pixels: int = 80_000_000,
 ) -> tuple[bytes, bool]:
-    """Compress large static chat-upload images toward 10 MiB without touching small files.
+    """Compress large static chat-upload images toward 10 MiB without touching files at or below 20 MiB.
 
     JPEGs stay JPEG. Other supported static formats are encoded as WebP, preserving
     alpha when present. Animated images and images beyond the pixel safety limit are
@@ -263,7 +263,7 @@ def compress_large_upload_image(
                         break
                     working = working.resize(new_size, PILImage.Resampling.LANCZOS)
 
-                if len(best) < len(data) and len(best) <= 20 * 1024 * 1024:
+                if len(best) < len(data) and len(best) <= 50 * 1024 * 1024:
                     return best, True
     except Exception:
         # Preserve the normal validation/error path if Pillow cannot safely decode
@@ -276,7 +276,7 @@ def decode_upload_image_batch(
     images: object,
     *,
     max_count: int = 100,
-    max_image_bytes: int = 20 * 1024 * 1024,
+    max_image_bytes: int = 50 * 1024 * 1024,
     max_request_bytes: int = 100 * 1024 * 1024,
     max_pixels: int = 80_000_000,
 ) -> list[tuple[str, ValidatedImagePayload]]:
