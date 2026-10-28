@@ -159,6 +159,6 @@ def test_view_multiple_config_accepts_range_one_to_fifty():
     schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
     assert "1~50" in schema["view_multiple_max"]["hint"]
     source = Path("main.py").read_text(encoding="utf-8")
-    block = source.split("self.view_multiple_max = coerce_bounded_int(", 1)[1].split(")", 1)[0]
+    block = source.split("self.view_multiple_max = coerce_bounded_int(", 1)[1].split("maximum=50,", 1)[0] + "maximum=50,"
     assert "minimum=1" in block
     assert "maximum=50" in block
