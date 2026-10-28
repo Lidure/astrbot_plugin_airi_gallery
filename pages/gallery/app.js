@@ -1152,7 +1152,7 @@ fastUpBtn.addEventListener("click", async () => {
       }
     }
   } catch (error) {
-    // Planning failures (e.g. a >20 MiB file) occur before any submission.
+    // Planning failures (e.g. a >50 MiB file) occur before any submission.
     fastUploadProgressText.textContent = error.message || "分批准备失败";
     showMsg(error.message || "分批准备失败", false);
   } finally {
