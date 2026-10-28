@@ -140,3 +140,25 @@ def test_chat_upload_compresses_before_regular_size_validation():
     assert "compress_large_upload_image(image_bytes)" in handle_upload
     assert "compressed_count += 1" in handle_upload
     assert "已自动压缩大图" in handle_upload
+
+
+def test_new_default_upload_limit_is_50_mib_and_compression_threshold_is_20_mib():
+    import inspect
+
+    max_size = 50 * 1024 * 1024
+    threshold = 20 * 1024 * 1024
+    assert inspect.signature(gallery_safety.validate_image_payload).parameters["max_bytes"].default == max_size
+    assert inspect.signature(gallery_safety.decode_upload_image_batch).parameters["max_image_bytes"].default == max_size
+    assert inspect.signature(gallery_safety.compress_large_upload_image).parameters["threshold_bytes"].default == threshold
+
+
+def test_view_multiple_config_accepts_range_one_to_fifty():
+    import json
+    from pathlib import Path
+
+    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
+    assert "1~50" in schema["view_multiple_max"]["hint"]
+    source = Path("main.py").read_text(encoding="utf-8")
+    block = source.split("self.view_multiple_max = coerce_bounded_int(", 1)[1].split("maximum=50,", 1)[0] + "maximum=50,"
+    assert "minimum=1" in block
+    assert "maximum=50" in block

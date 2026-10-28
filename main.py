@@ -254,7 +254,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.26"
+CURRENT_PLUGIN_VERSION = "v2.11.27"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -463,8 +463,8 @@ class Main(Star):
         self.view_multiple_max = coerce_bounded_int(
             self.config.get("view_multiple_max", 10),
             default=10,
-            minimum=5,
-            maximum=10,
+            minimum=1,
+            maximum=50,
         )
         self.view_all_collage_compress = self._resolve_view_all_collage_compress()
         self.view_all_collage_scale = self._resolve_view_all_collage_scale()

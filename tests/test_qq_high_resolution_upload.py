@@ -12,8 +12,8 @@ def test_default_upload_pixel_limit_accepts_common_high_resolution_images():
 
     assert validate_params["max_pixels"].default == 80_000_000
     assert batch_params["max_pixels"].default == 80_000_000
-    assert validate_params["max_bytes"].default == 20 * 1024 * 1024
-    assert batch_params["max_image_bytes"].default == 20 * 1024 * 1024
+    assert validate_params["max_bytes"].default == 50 * 1024 * 1024
+    assert batch_params["max_image_bytes"].default == 50 * 1024 * 1024
 
 
 def test_temporary_snowluma_upload_debug_is_removed_after_root_cause_fix():

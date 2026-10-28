@@ -23,10 +23,10 @@ test("large selection is split by byte and count limits, not rejected at 100 MiB
   assert.deepEqual(batches.flat(), files);
 });
 
-test("a single file over 20 MiB rejects the whole selection before sending", async () => {
+test("a single file over 50 MiB rejects the whole selection before sending", async () => {
   const small = file("small.png", 1);
-  const tooLarge = file("huge.jpg", 21);
-  assert.throws(() => planFastUploadBatches([small, tooLarge]), /huge.jpg.*20 MiB/);
+  const tooLarge = file("huge.jpg", 51);
+  assert.throws(() => planFastUploadBatches([small, tooLarge]), /huge.jpg.*50 MiB/);
   let sends = 0;
   await assert.rejects(
     uploadFastBatches([small, tooLarge], {
@@ -34,15 +34,15 @@ test("a single file over 20 MiB rejects the whole selection before sending", asy
       encodeFile: async () => ({}),
       sendBatch: async () => { sends++; },
     }),
-    /20 MiB/
+    /50 MiB/
   );
   assert.equal(sends, 0);
 });
 
-test("files within one 48 MiB batch stay in the original order", () => {
-  const files = [file("18.png", 18), file("18b.png", 18), file("18c.png", 18), file("1.png", 1)];
+test("files within one 64 MiB batch stay in the original order", () => {
+  const files = [file("28.png", 28), file("28b.png", 28), file("28c.png", 28), file("1.png", 1)];
   assert.deepEqual(planFastUploadBatches(files).map(batch => batch.map(f => f.name)),
-    [["18.png", "18b.png"], ["18c.png", "1.png"]]);
+    [["28.png", "28b.png"], ["28c.png", "1.png"]]);
 });
 
 test("successful multi-batch upload sends one request at a time and progress is monotonic", async () => {
@@ -173,5 +173,5 @@ test("batch limits cannot be disabled via invalid configuration", () => {
   const f = file("one.png", 1);
   assert.throws(() => planFastUploadBatches([f], { maxBatchBytes: 0 }), /配置无效/);
   assert.throws(() => planFastUploadBatches([f], { maxFileBytes: 10, maxBatchBytes: 9 }), /配置无效/);
-  assert.equal(FAST_UPLOAD_MAX_FILE_BYTES, 20 * MiB);
+  assert.equal(FAST_UPLOAD_MAX_FILE_BYTES, 50 * MiB);
 });
