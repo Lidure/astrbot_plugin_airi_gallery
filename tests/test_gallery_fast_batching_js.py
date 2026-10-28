@@ -31,7 +31,7 @@ def test_fast_upload_webui_progress_and_retry_contract():
     assert "failedBatch" in js and "uncertain" in js
     assert "pendingFiles.filter(file => !completedSet.has(file))" in js
     assert 'fastUpBtn.textContent = "快速上传（不查重）"' in js
-    assert "FAST_UPLOAD_MAX_BATCH_BYTES = 48 * 1024 * 1024" in helper
+    assert "FAST_UPLOAD_MAX_BATCH_BYTES = 64 * 1024 * 1024" in helper
     assert "FAST_UPLOAD_MAX_BATCH_FILES = 30" in helper
     # Normal-mode upload is deliberately unchanged; fast mode has its own API.
     assert 'apiPost("upload", { category, images })' in js
