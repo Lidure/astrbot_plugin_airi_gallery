@@ -1,8 +1,8 @@
 // Pure helpers for the authenticated AstrBot WebUI's opt-in quick uploader.
-// The backend still enforces 20 MiB/file, 100 MiB/request and 100 files/request.
-export const FAST_UPLOAD_MAX_BATCH_BYTES = 48 * 1024 * 1024;
+// The backend still enforces 50 MiB/file, 100 MiB/request and 100 files/request.
+export const FAST_UPLOAD_MAX_BATCH_BYTES = 64 * 1024 * 1024;
 export const FAST_UPLOAD_MAX_BATCH_FILES = 30;
-export const FAST_UPLOAD_MAX_FILE_BYTES = 20 * 1024 * 1024;
+export const FAST_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 export function planFastUploadBatches(
   files,
@@ -26,7 +26,7 @@ export function planFastUploadBatches(
       throw new Error(`图片“${file?.name || "未知文件"}”的大小无效`);
     }
     if (size > maxFileBytes) {
-      throw new Error(`图片“${file.name}”超过单张 20 MiB 限制，请先压缩`);
+      throw new Error(`图片“${file.name}”超过单张 50 MiB 限制，请先压缩`);
     }
     if (size > maxBatchBytes) {
       throw new Error(`图片“${file.name}”超过当前批次大小上限`);
@@ -62,7 +62,7 @@ export async function uploadFastBatches(
     onProgress({ ...progress, stage: "sending" });
     let requestStarted = false;
     try {
-      // Encode only the current <=48 MiB batch; do not retain base64 strings
+      // Encode only the current <=64 MiB batch; do not retain base64 strings
       // for all selected images, even if the user selects hundreds.
       const images = [];
       for (const file of batch) images.push(await encodeFile(file));
