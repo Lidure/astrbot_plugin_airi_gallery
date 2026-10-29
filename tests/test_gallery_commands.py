@@ -93,7 +93,8 @@ def test_extract_view_target_preserves_prefix_mode_boundary():
 
     assert extract_view_target("看看 airi", use_prefix=False) == "airi"
     assert extract_view_target("看602", use_prefix=False) == "602"
-    assert extract_view_target("/看看 airi", use_prefix=False) is None
+    assert extract_view_target("/看看 airi", use_prefix=False) == "airi"
+    assert extract_view_target("/看knd图片", use_prefix=False) == "knd图片"
 
 
 def test_extract_view_all_target_preserves_aliases_and_prefix_mode_boundary():
@@ -103,7 +104,8 @@ def test_extract_view_all_target_preserves_aliases_and_prefix_mode_boundary():
 
     assert extract_view_all_target("看全部 airi", use_prefix=False) == "airi"
     assert extract_view_all_target("看所有airi", use_prefix=False) == "airi"
-    assert extract_view_all_target("/看全部 airi", use_prefix=False) is None
+    assert extract_view_all_target("/看全部 airi", use_prefix=False) == "airi"
+    assert extract_view_all_target("/看全部knd图片", use_prefix=False) == "knd图片"
 
 
 @pytest.mark.parametrize(

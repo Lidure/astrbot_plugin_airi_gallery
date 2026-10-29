@@ -2,7 +2,7 @@
   "view_command_mode": {
     "type": "string",
     "description": "看图命令触发模式",
-    "hint": "no_prefix: 看看xxx；prefix: /看看xxx。仅影响看看、看全部、看看123 这类浏览命令，其余管理命令固定使用 / 前缀。",
+    "hint": "no_prefix: 支持 看看xxx 和 /看看xxx；prefix: 仅支持 /看看xxx。仅影响看看、看全部、看看123 等浏览命令，其余管理命令固定使用 / 前缀。",
     "default": "no_prefix",
     "options": [
       "no_prefix",
