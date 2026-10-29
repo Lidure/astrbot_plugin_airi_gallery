@@ -116,6 +116,42 @@ def resolve_gallery_category_query(
     return ""
 
 
+def should_handle_gallery_category_view(
+    command_text: str,
+    category: str,
+    categories: Sequence[str],
+    category_aliases: Mapping[str, str],
+) -> bool:
+    """Filter ambiguous no-prefix '看...' messages before reporting missing categories.
+
+    Explicit slash commands are deliberate. Without a slash, only exact existing
+    category/alias names or short image/category-shaped targets are accepted.
+    Natural language starting with '看' must not produce a missing-category reply.
+    """
+    command_text = str(command_text or "").strip()
+    category = str(category or "").strip()
+    if not category:
+        return False
+    if command_text.startswith("/"):
+        return True
+
+    known = {str(name).casefold() for name in categories}
+    if category.casefold() in known:
+        return True
+    for alias, resolved in category_aliases.items():
+        if str(alias).casefold() == category.casefold() and str(resolved).casefold() in known:
+            return True
+
+    # Bare unknown categories need a recognizable picture/category suffix.
+    # Reject sentence punctuation, whitespace, long phrases and common pronoun
+    # constructions such as '看看这张图片' that are not catalog requests.
+    if len(category) > 24 or re.search(r"[\\s，,。！？!?；;：:、…“”\"'（）()\\[\\]{}]", category):
+        return False
+    if re.match(r"^(?:这|那|我|你|他|她|它|谁|什么|怎么|如何|一下|刚才|上面|下面|这里|那里|大家|人家)", category):
+        return False
+    return bool(re.fullmatch(r".+?(?:图片|表情包|表情|分类)", category))
+
+
 def match_view_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
     if use_prefix:
         return re.match(r"^/看(?:看)?\s*(.+)$", normalized)
