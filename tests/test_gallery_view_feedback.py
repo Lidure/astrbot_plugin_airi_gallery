@@ -66,7 +66,7 @@ def test_missing_category_replies_with_gallery_listing_help(command, handler):
     assert len(event.sent) == 1
     assert event.sent[0][0] == "text"
     assert "不存在分类" in event.sent[0][1]
-    assert "/查看画廊" in event.sent[0][1]
+    assert "/查看画廊" in event.sent[0][1]\n    assert "/创建 不存在分类" in event.sent[0][1]\n    assert "创建权限" in event.sent[0][1]
 
 
 def test_existing_empty_category_gets_distinct_message():
