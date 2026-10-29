@@ -254,7 +254,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.11.27"
+CURRENT_PLUGIN_VERSION = "v2.11.28"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -852,7 +852,7 @@ class Main(Star):
 
     @filter.command("看最近上传")
     async def cmd_view_recent(self, event: AstrMessageEvent):
-        """注册 `/看最近上传` 命令，以合并转发消息发送最近上传的图片。"""
+        """注册 `/看最近上传` 命令，少于 5 张时直接发送图片。"""
         text = self._normalize_command_text(event, "看最近上传")
         action = self._parse_action(text)
         if action and action[0] == "view_recent":
@@ -3220,15 +3220,25 @@ class Main(Star):
             suffix = f" 等 {len(missing)} 个" if len(missing) > 20 else ""
             await event.send(event.plain_result(f"已发送 {len(paths)} 张；未找到编号：{preview}{suffix}。"))
 
+    async def _notify_unavailable_view_category(self, event: AstrMessageEvent, category: str):
+        """Explain missing or empty categories without silently dropping view commands."""
+        if self._resolve_existing_category_dir(category) is None:
+            message = f"画廊中不存在分类「{category}」，请发送 /查看画廊 查看当前所有分类。"
+        else:
+            message = f"分类「{category}」目前没有图片，可以发送 /查看画廊 查看其他分类。"
+        await event.send(event.plain_result(message))
+
     async def _handle_view_category(self, event: AstrMessageEvent, category: str):
         images = self._iter_category_images(category)
         if not images:
+            await self._notify_unavailable_view_category(event, category)
             return
         await event.send(event.image_result(str(random.choice(images))))
 
     async def _handle_view_all_category(self, event: AstrMessageEvent, category: str):
         images = self._iter_category_images(category)
         if not images:
+            await self._notify_unavailable_view_category(event, category)
             return
 
         collage_path = await self._build_category_collage(category, images)
@@ -3240,6 +3250,7 @@ class Main(Star):
     async def _handle_view_multiple(self, event: AstrMessageEvent, category: str, count: int):
         images = self._iter_category_images(category)
         if not images:
+            await self._notify_unavailable_view_category(event, category)
             return
 
         if count > self.view_multiple_max:
@@ -3281,7 +3292,7 @@ class Main(Star):
             await event.send(event.plain_result("图库中还没有任何图片。"))
             return
 
-        if self.view_multiple_mode == "forward":
+        if len(images) >= 5 and self.view_multiple_mode == "forward":
             await self._send_as_forward(event, images)
         else:
             for path in images:
