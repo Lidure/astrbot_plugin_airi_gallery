@@ -2581,7 +2581,7 @@ class Main(Star):
         normalized = text.strip()
         # 快捷命令替换：/sz → /上传，/看最近 → /看最近上传 等
         normalized = self._replace_command_aliases(normalized)
-        # 仅“看图/浏览”类命令遵循 view_command_mode。
+        # 浏览命令在 no_prefix 模式兼容有/无斜杠；prefix 模式只接受斜杠。
         # 管理类命令固定使用 '/' 前缀，避免和普通聊天文本冲突。
         if normalized == "/画廊帮助详细":
             return "help_detail", None
