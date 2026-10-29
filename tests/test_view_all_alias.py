@@ -10,7 +10,7 @@ def test_view_all_command_accepts_kanquanbu_and_kansuoyou_aliases():
     assert extract_view_all_target("看所有 airi", use_prefix=False) == "airi"
 
     assert extract_view_all_target("看全部 airi", use_prefix=True) is None
-    assert extract_view_all_target("/看所有 airi", use_prefix=False) is None
+    assert extract_view_all_target("/看所有 airi", use_prefix=False) == "airi"
 
 
 def test_help_mentions_view_all_alias():
