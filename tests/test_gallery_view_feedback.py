@@ -1,5 +1,6 @@
 """Regression coverage for missing-category replies and recent-upload forwarding threshold."""
 import ast
+import __future__
 import asyncio
 import logging
 import random
@@ -38,7 +39,7 @@ def compile_main_methods(*names):
     module = ast.Module(body=found, type_ignores=[])
     ast.fix_missing_locations(module)
     scope = {"random": random, "logger": logging.getLogger(__name__)}
-    exec(compile(module, "main.py", "exec"), scope)
+    exec(compile(module, "main.py", "exec", flags=__future__.annotations.compiler_flag), scope)
     return scope
 
 
