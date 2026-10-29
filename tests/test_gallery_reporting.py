@@ -17,6 +17,55 @@ def test_path_difference_formatting_is_deterministic_and_bounded():
     ) == "两端图片路径一致"
 
 
+
+def test_detailed_sync_warning_for_local_only_is_actionable_and_clear():
+    diff = gallery_safety.GalleryPathDifference(
+        local_only=("gallery/szk图片/6765.png",),
+        remote_only=(),
+    )
+    message = gallery_reporting.format_sync_discrepancy_log(diff)
+    assert "仅本地 1 张" in message
+    assert "仅远端 0 张" in message
+    assert "同路径内容冲突 0 张" in message
+    assert "gallery/szk图片/6765.png" in message
+    assert "可能是本地新增尚未推送" in message
+    assert "文件已留在本地" in message
+    assert "/推送到远程" in message
+    assert "/立即同步" in message
+    assert "确认当前 Git 仓库及分支" in message
+
+
+def test_detailed_sync_warning_covers_remote_only_and_content_conflict():
+    diff = gallery_safety.GalleryPathDifference(
+        local_only=(),
+        remote_only=("gallery/airi/2.png",),
+    )
+    message = gallery_reporting.format_sync_discrepancy_log(
+        diff, content_conflicts=("gallery/miku/3.jpg",)
+    )
+    assert "仅远端 1 张" in message
+    assert "gallery/airi/2.png" in message
+    assert "可能是下载中断" in message
+    assert "gallery/miku/3.jpg" in message
+    assert "未强制覆盖" in message
+    assert "先备份并核对" in message
+    assert "/推送到远程" not in message
+
+
+def test_detailed_sync_warning_limits_examples_but_preserves_full_counts():
+    diff = gallery_safety.GalleryPathDifference(
+        local_only=tuple(f"gallery/a/{i}.jpg" for i in range(11)),
+        remote_only=tuple(f"gallery/b/{i}.jpg" for i in range(7)),
+    )
+    message = gallery_reporting.format_sync_discrepancy_log(diff, limit=2)
+    assert "仅本地 11 张" in message and "仅远端 7 张" in message
+    assert "gallery/a/0.jpg" in message and "gallery/a/1.jpg" in message
+    assert "gallery/a/2.jpg" not in message
+    assert "另有 9 张未列出" in message
+    assert "另有 5 张未列出" in message
+
+
+
 def test_sync_report_handles_busy_failure_clean_and_conflict_states():
     assert gallery_reporting.format_sync_report({"busy": True}) == (
         "已有同步任务正在进行，本次已跳过。"
