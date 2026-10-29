@@ -393,7 +393,7 @@ def _check_numeric_settings(config: Mapping[str, object], report: DiagnosticRepo
         valid_max = False
         if not isinstance(raw_max, bool) and isinstance(raw_max, (int, str)):
             try:
-                valid_max = 5 <= int(raw_max) <= 10
+                valid_max = 1 <= int(raw_max) <= 50
             except (TypeError, ValueError, OverflowError):
                 valid_max = False
         if not valid_max:
@@ -402,8 +402,8 @@ def _check_numeric_settings(config: Mapping[str, object], report: DiagnosticRepo
                     "config.view_multiple_max",
                     "warning",
                     "多图数量",
-                    "view_multiple_max 必须是 5 到 10 的整数。",
-                    "将 view_multiple_max 设置为 5 到 10，非法值会回退为 10。",
+                    "view_multiple_max 必须是 1 到 50 的整数。",
+                    "将 view_multiple_max 设置为 1 到 50，非法值会回退为 10。",
                 )
             )
 
