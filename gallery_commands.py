@@ -119,17 +119,14 @@ def resolve_gallery_category_query(
 def match_view_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
     if use_prefix:
         return re.match(r"^/看(?:看)?\s*(.+)$", normalized)
-    if normalized.startswith("/"):
-        return None
-    return re.match(r"^看(?:看)?\s*(.+)$", normalized)
+    # Default no-prefix mode accepts explicit '/' too; prefix mode remains strict.
+    return re.match(r"^/?看(?:看)?\s*(.+)$", normalized)
 
 
 def match_view_all_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
     if use_prefix:
         return re.match(r"^/(?:看全部|看所有)\s*(.+)$", normalized)
-    if normalized.startswith("/"):
-        return None
-    return re.match(r"^(?:看全部|看所有)\s*(.+)$", normalized)
+    return re.match(r"^/?(?:看全部|看所有)\s*(.+)$", normalized)
 
 
 def extract_view_target(normalized: str, *, use_prefix: bool) -> str | None:
