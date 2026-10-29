@@ -3226,7 +3226,7 @@ class Main(Star):
             message = (
                 f"画廊中不存在分类「{category}」。"
                 "请发送 /查看画廊 查看当前所有分类；"
-                f"或者使用命令 /创建 {category} 创建该分类（需要创建权限）。"
+                f"或者使用命令 /创建 {category} 创建该分类。"
             )
         else:
             message = f"分类「{category}」目前没有图片，可以发送 /查看画廊 查看其他分类。"
