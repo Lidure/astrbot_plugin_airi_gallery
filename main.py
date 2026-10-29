@@ -75,6 +75,7 @@ try:
         replace_command_aliases as _replace_gallery_command_aliases,
         resolve_gallery_category_query as _resolve_gallery_category_query_impl,
         sanitize_component as _sanitize_gallery_component,
+        should_handle_gallery_category_view as _should_handle_gallery_category_view,
         strip_at_prefix as _strip_gallery_at_prefix,
     )
 except ImportError:
@@ -88,6 +89,7 @@ except ImportError:
         replace_command_aliases as _replace_gallery_command_aliases,
         resolve_gallery_category_query as _resolve_gallery_category_query_impl,
         sanitize_component as _sanitize_gallery_component,
+        should_handle_gallery_category_view as _should_handle_gallery_category_view,
         strip_at_prefix as _strip_gallery_at_prefix,
     )
 
@@ -786,8 +788,8 @@ class Main(Star):
     @filter.command("看")
     async def cmd_look(self, event: AstrMessageEvent):
         """兼容性的展示命令占位，用于在 AstrBot 命令列表中显示 `/看看` 前缀形式。"""
-        # 兼容两种情况：命令框架可能传入完整文本，也可能只传入参数部分。
-        text = self._normalize_command_text(event, "看看")
+        # 使用原始消息解析，避免将普通聊天自动补成 '/看看' 命令。
+        text = self._strip_at_prefix((event.message_str or "").strip())
         action = self._parse_action(text)
         if action and action[0] == "view_category":
             await self._handle_view_category(event, str(action[1]))
@@ -1223,7 +1225,7 @@ class Main(Star):
     @filter.command("看全部")
     async def cmd_view_all(self, event: AstrMessageEvent):
         """注册 `/看全部` 命令并展示分类总览（需要带参数）。"""
-        text = self._normalize_command_text(event, "看全部")
+        text = self._strip_at_prefix((event.message_str or "").strip())
         action = self._parse_action(text)
         if action and action[0] == "view_all_category":
             await self._handle_view_all_category(event, str(action[1]))
@@ -2687,7 +2689,9 @@ class Main(Star):
         view_all_match = self._match_view_all_command(normalized)
         if view_all_match:
             target = view_all_match.group(1).strip()
-            if not target:
+            if not target or not _should_handle_gallery_category_view(
+                normalized, target, self._list_category_names(), self.category_aliases
+            ):
                 return None
             return "view_all_category", _sanitize_component(self._resolve_alias(target))
 
@@ -2701,9 +2705,17 @@ class Main(Star):
                 return "view_range", target_value
             if target_kind == "multiple":
                 cat, num = target_value
+                if not _should_handle_gallery_category_view(
+                    normalized, cat, self._list_category_names(), self.category_aliases
+                ):
+                    return None
                 return "view_multiple", (_sanitize_component(self._resolve_alias(cat)), num)
             if target_kind == "number":
                 return "view_number", target_value
+            if not _should_handle_gallery_category_view(
+                normalized, str(target_value), self._list_category_names(), self.category_aliases
+            ):
+                return None
             return "view_category", _sanitize_component(self._resolve_alias(target_value))
 
         return None
