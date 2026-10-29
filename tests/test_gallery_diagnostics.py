@@ -198,6 +198,21 @@ def test_local_diagnostics_count_images_and_accept_missing_cache(tmp_path):
     assert any(item.code == "hash_index.missing" and item.level == "ok" for item in report.items)
 
 
+@pytest.mark.parametrize("value", [1, 4, 10, 11, 30, 50, "50"])
+def test_multi_image_limit_diagnostics_accepts_one_to_fifty(tmp_path, value):
+    report = run_local_diagnostics(local_context(tmp_path, {"view_multiple_max": value}))
+    assert not any(item.code == "config.view_multiple_max" for item in report.items)
+
+
+@pytest.mark.parametrize("value", [0, 51, -1, "none", True])
+def test_multi_image_limit_diagnostics_rejects_outside_range(tmp_path, value):
+    report = run_local_diagnostics(local_context(tmp_path, {"view_multiple_max": value}))
+    matches = [item for item in report.items if item.code == "config.view_multiple_max"]
+    assert len(matches) == 1 and matches[0].level == "warning"
+    assert "1 到 50" in matches[0].message
+    assert "1 到 50" in matches[0].suggestion
+
+
 def test_invalid_cache_and_configuration_create_actionable_warnings(tmp_path):
     context = local_context(tmp_path, {
         "view_command_mode": "wrong",
