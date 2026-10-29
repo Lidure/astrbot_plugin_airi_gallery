@@ -8,10 +8,10 @@ def test_release_version_is_consistent_everywhere():
     main_source = Path("main.py").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
 
-    assert metadata["version"] == "v2.11.27"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.11.27"' in main_source
-    assert "Version-v2.11.27-pink" in readme
-    assert "## 🚀 更新日志\n### v2.11.27" in readme
+    assert metadata["version"] == "v2.11.28"
+    assert 'CURRENT_PLUGIN_VERSION = "v2.11.28"' in main_source
+    assert "Version-v2.11.28-pink" in readme
+    assert "## 🚀 更新日志\n### v2.11.28" in readme
 
 
 def test_v21115_readme_documents_post_21114_improvements():
