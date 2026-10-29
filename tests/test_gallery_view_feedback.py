@@ -68,7 +68,7 @@ def test_missing_category_replies_with_gallery_listing_help(command, handler):
     assert "不存在分类" in event.sent[0][1]
     assert "/查看画廊" in event.sent[0][1]
     assert "/创建 不存在分类" in event.sent[0][1]
-    assert "创建权限" in event.sent[0][1]
+    assert "需要创建权限" not in event.sent[0][1]
 
 
 def test_existing_empty_category_gets_distinct_message():
