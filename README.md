@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.27-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.28-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -84,7 +84,7 @@
 
 | 命令 | 说明 |
 | :--- | :--- |
-| `看看<分类>` | 从对应分类里随机返回一张图片或表情包 |
+| `看看<分类>` / `看<分类>` | 从对应分类里随机返回一张图片或表情包；分类不存在时提示通过 `/查看画廊` 查看所有分类 |
 | `看看<分类> N` | 随机返回 `N` 张，`N` 最大为 `10` |
 | `/抽表情` / `/抽表情 N` | 从全图库随机抽取图片或表情包，默认 1 张，`N` 最大为 `10` |
 | `看全部<分类>` / `看所有<分类>` | 输出该分类下全部图片的总览图，并标注序号；两种写法完全等价 |
@@ -92,6 +92,8 @@
 | `看100-110` | 按编号范围连续返回 `100` 到 `110` 的图片或表情包，最多 50 张 |
 
 > `看看` / `看全部` / `看所有` / 编号查看可在配置中切换是否使用 `/` 前缀；`/抽表情` 固定使用 `/` 前缀，避免普通聊天误触发。
+
+> `看最近` / `/看最近上传 N`：实际找到 1–4 张图片时会直接逐张发送；达到 5 张后才按多图发送模式决定是否使用合并转发。若配置为 `single`，仍然逐张发送。
 
 ### 3. 多图发送模式
 
@@ -388,6 +390,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - **帮助文档同步**：README、聊天中的 `/画廊帮助详细` 文本及图片帮助海报增加 WebUI 迁移步骤；简版帮助提供入口提示。
 
 ## 🚀 更新日志
+### v2.11.28
+- **不存在的分类主动提示**：`看<分类>`、`看看<分类>`、多张浏览和分类总览遇到不存在的分类时，回复“画廊中不存在分类”并引导使用 `/查看画廊`；已创建但暂无图片的分类单独提示。
+- **最近上传发送方式优化**：`看最近`、`/看最近`、`/看最近上传 N` 按实际返回数量判断。1–4 张直接逐张发送，达到 5 张才允许按 `forward` 模式合并转发；`single` 模式保持直接发送。
+
 ### v2.11.27
 - **上传上限调整**：聊天、AstrBot WebUI 与公开 Web API 的单图上限从 20 MiB 提升至 50 MiB，单次 Web 请求总量仍限制 100 MiB；聊天图片超过 20 MiB 才尝试压缩至 10 MiB 以内，动图继续保持原样。快速上传前端适配 50 MiB 单图限制与更大的 64 MiB 分批阈值。
 - **多图浏览上限调整**：`view_multiple_max` 可配置范围从 5～10 扩展为 1～50，默认仍为 10；`看看<分类> N`、`/抽表情 N` 和 LLM 工具共享这个上限。
