@@ -11,7 +11,7 @@ from pathlib import Path
 
 try:
     from .gallery_diagnostics import coerce_strict_bool, coerce_strict_int
-    from .gallery_reporting import format_gallery_path_difference
+    from .gallery_reporting import format_gallery_path_difference, format_sync_discrepancy_log
     from .gallery_safety import (
         IndexedImage,
         RenameStep,
@@ -31,7 +31,7 @@ try:
     )
 except ImportError:
     from gallery_diagnostics import coerce_strict_bool, coerce_strict_int
-    from gallery_reporting import format_gallery_path_difference
+    from gallery_reporting import format_gallery_path_difference, format_sync_discrepancy_log
     from gallery_safety import (
         IndexedImage,
         RenameStep,
@@ -599,15 +599,12 @@ class GallerySync:
 
             if synced:
                 self._info(f"[Git Sync] 从远程同步了 {synced} 个文件。")
-            if content_conflicts:
+            if not remaining.is_clean or content_conflicts:
                 self._warning(
-                    "[Git Sync] 同路径内容冲突已保留本地文件："
-                    + "、".join(sorted(content_conflicts)[:5])
-                )
-            if not remaining.is_clean:
-                self._warning(
-                    "[Git Sync] 同步后路径集合仍有差异："
-                    + format_gallery_path_difference(remaining)
+                    format_sync_discrepancy_log(
+                        remaining,
+                        content_conflicts=tuple(sorted(content_conflicts)),
+                    )
                 )
         except Exception as exc:
             self._error(f"[Git Sync] 同步异常: {exc}")

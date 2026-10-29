@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.11.28-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.11.29-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -390,6 +390,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 - **帮助文档同步**：README、聊天中的 `/画廊帮助详细` 文本及图片帮助海报增加 WebUI 迁移步骤；简版帮助提供入口提示。
 
 ## 🚀 更新日志
+### v2.11.29
+- **不存在分类仅在显式命令时提示**：无 `/` 前缀的 `看xxx`、`看看xxx`、`看全部xxx` 仅匹配现有分类或别名，查无结果时静默忽略，不打断普通聊天；使用 `/看xxx`、`/看看xxx`、`/看全部xxx` 则允许查询不存在的分类，并回复 `/查看画廊` 与 `/创建 xxx` 的引导。注册的 `看/看看/看全部` 兼容入口不再擅自给普通聊天补上 `/`。
+- **Git 同步日志更易读**：当本地与远端图片不一致时，分别显示仅本地、仅远端和同路径内容冲突的数量，最多列出每类 5 个文件，并说明可能原因和下一步操作（`/推送到远程`、`/立即同步`）；仍坚持保留未经确认的本地文件，不自动覆盖或删除。
+
 ### v2.11.28
 - **不存在的分类主动提示**：`看<分类>`、`看看<分类>`、多张浏览和分类总览遇到不存在的分类时，回复“画廊中不存在分类”并引导使用 `/查看画廊`，或使用 `/创建 <分类>` 创建对应分类；已创建但暂无图片的分类单独提示。
 - **最近上传发送方式优化**：`看最近`、`/看最近`、`/看最近上传 N` 按实际返回数量判断。1–4 张直接逐张发送，达到 5 张才允许按 `forward` 模式合并转发；`single` 模式保持直接发送。

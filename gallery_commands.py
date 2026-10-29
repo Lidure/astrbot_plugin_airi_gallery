@@ -116,6 +116,34 @@ def resolve_gallery_category_query(
     return ""
 
 
+def should_handle_gallery_category_view(
+    command_text: str,
+    category: str,
+    categories: Sequence[str],
+    category_aliases: Mapping[str, str],
+) -> bool:
+    """Require slash for missing-category feedback; bare views need an existing category.
+
+    Slash-prefixed views are explicit commands, including requests for missing
+    categories. Bare 看/看看 commands are accepted only for existing exact
+    category names or configured aliases, avoiding false positives in chat.
+    """
+    command_text = str(command_text or "").strip()
+    category = str(category or "").strip()
+    if not category:
+        return False
+    if command_text.startswith("/"):
+        return True
+
+    known = {str(name).casefold() for name in categories}
+    if category.casefold() in known:
+        return True
+    for alias, resolved in category_aliases.items():
+        if str(alias).casefold() == category.casefold() and str(resolved).casefold() in known:
+            return True
+    return False
+
+
 def match_view_command(normalized: str, *, use_prefix: bool) -> re.Match[str] | None:
     if use_prefix:
         return re.match(r"^/看(?:看)?\s*(.+)$", normalized)

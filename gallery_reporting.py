@@ -29,6 +29,65 @@ def format_gallery_path_difference(
     return "；".join(parts) if parts else "两端图片路径一致"
 
 
+
+def format_sync_discrepancy_log(
+    diff: GalleryPathDifference,
+    *,
+    content_conflicts: tuple[str, ...] = (),
+    limit: int = 5,
+) -> str:
+    """Actionable, bounded diagnostic message for periodic Git sync logs."""
+    local_only = tuple(diff.local_only)
+    remote_only = tuple(diff.remote_only)
+    conflicts = tuple(content_conflicts)
+    sample_limit = max(1, limit)
+    lines = [
+        "[Git Sync] 同步完成，但本地与远端尚未完全一致："
+        f"仅本地 {len(local_only)} 张、仅远端 {len(remote_only)} 张、"
+        f"同路径内容冲突 {len(conflicts)} 张。"
+    ]
+
+    def append_examples(title: str, paths: tuple[str, ...]) -> None:
+        examples = "、".join(paths[:sample_limit])
+        remainder = len(paths) - sample_limit
+        suffix = f"（另有 {remainder} 张未列出）" if remainder > 0 else ""
+        lines.append(f"[Git Sync] {title}：{examples}{suffix}")
+
+    if local_only:
+        append_examples("仅本地文件", local_only)
+        lines.append(
+            "[Git Sync] 说明：远端文件列表没有上述路径；"
+            "可能是本地新增尚未推送，也可能是远端已删除。为避免误删，文件已留在本地。"
+        )
+        lines.append(
+            "[Git Sync] 建议：确认当前 Git 仓库及分支配置正确；"
+            "需要保留并上传时执行 /推送到远程，再执行 /立即同步。"
+            "若不再需要，请先核实文件用途并自行备份、删除。"
+        )
+
+    if remote_only:
+        append_examples("仅远端文件", remote_only)
+        lines.append(
+            "[Git Sync] 说明：远端有这些图片，本地仍缺失；"
+            "可能是下载中断、网络异常或本地写入失败。"
+        )
+        lines.append(
+            "[Git Sync] 建议：检查此前下载错误和网络连通性，再执行 /立即同步。"
+        )
+
+    if conflicts:
+        append_examples("同路径内容冲突", conflicts)
+        lines.append(
+            "[Git Sync] 说明：本地与远端存在相同路径，但内容不同或本地读取失败；"
+            "插件已保留本地内容，未强制覆盖。"
+        )
+        lines.append(
+            "[Git Sync] 建议：先备份并核对冲突图片的实际内容，"
+            "确定保留哪个版本后再手动处理，不要直接批量覆盖。"
+        )
+    return "\n".join(lines)
+
+
 def format_sync_report(result: dict) -> str:
     if result.get("busy"):
         return "已有同步任务正在进行，本次已跳过。"
