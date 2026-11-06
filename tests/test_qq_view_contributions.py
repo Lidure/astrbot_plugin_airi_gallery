@@ -101,6 +101,36 @@ def test_only_exact_slash_command_is_processed(tmp_path, message):
     assert not plugin.qq_contributions.path.exists()
 
 
+def test_astrbot_waking_stage_strips_slash_but_original_message_keeps_it(tmp_path):
+    plugin = make_plugin(tmp_path)
+    plugin.qq_contributions.add("10001", 6)
+    # AstrBot WakingStage strips "/" from event.message_str before CommandFilter.
+    # message_obj.message_str retains the original QQ message.
+    event = FakeEvent(command="查看贡献")
+    event.message_obj.message_str = "/查看贡献"
+    assert "贡献了 6 张" in query(plugin, event)[0][1]
+    assert plugin.qq_contributions.get("10001") == 6
+
+
+def test_plain_text_is_ignored_even_after_private_wake_normalization(tmp_path):
+    plugin = make_plugin(tmp_path)
+    event = FakeEvent(command="查看贡献", group=None)
+    event.message_obj.message_str = "查看贡献"
+    assert query(plugin, event) == []
+    # Prefix on normalized message alone cannot bypass original command check.
+    other = FakeEvent(command="/查看贡献")
+    other.message_obj.message_str = "查看贡献"
+    assert query(plugin, other) == []
+
+
+def test_missing_raw_message_only_uses_verifiable_prefixed_text(tmp_path):
+    plugin = make_plugin(tmp_path)
+    normalized = FakeEvent(command="查看贡献")
+    assert query(plugin, normalized) == []
+    prefixed = FakeEvent(command="/查看贡献")
+    assert "0 张" in query(plugin, prefixed)[0][1]
+
+
 def test_non_qq_platform_is_rejected_without_reading_data(tmp_path):
     plugin = make_plugin(tmp_path)
     plugin.qq_contributions.add("10001", 5)
@@ -139,6 +169,8 @@ def test_read_only_store_query_rejects_invalid_id(tmp_path):
 def test_registered_command_has_explicit_slash_trigger():
     source = Path("main.py").read_text(encoding="utf-8")
     assert '@filter.command("查看贡献")' in source
-    assert 'raw == "/查看贡献"' in source
+    assert 'normalized not in {"/查看贡献", "查看贡献"}' in source
+    assert 'getattr(getattr(event, "message_obj", None), "message_str", None)' in source
+    assert 'self._strip_at_prefix(original.strip()) != "/查看贡献"' in source
     assert "await self._handle_view_my_contribution(event)" in source
     assert "QQ 群或私聊" in source
