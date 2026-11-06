@@ -837,6 +837,38 @@ class Main(Star):
             else:
                 await self._handle_create_category(event, str(action[1]))
 
+    @filter.command("查看贡献")
+    async def cmd_view_my_contribution(self, event: AstrMessageEvent):
+        """QQ 群聊/私聊查询自己累计成功上传的图片数量。"""
+        raw = self._strip_at_prefix((event.message_str or "").strip())
+        # 只接受显式 /查看贡献，避免聊天中的“查看贡献”被认作命令。
+        if raw == "/查看贡献":
+            await self._handle_view_my_contribution(event)
+
+    async def _handle_view_my_contribution(self, event: AstrMessageEvent):
+        identity = qq_upload_sender(event)
+        if identity is None:
+            await event.send(event.plain_result(
+                "仅支持在 QQ 中查询自己的画廊贡献，请发送 /查看贡献。"
+            ))
+            return
+
+        sender_id, _ = identity
+        try:
+            total = self.qq_contributions.get(sender_id)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.error("[Gallery] QQ 贡献查询失败：%s", type(exc).__name__)
+            await event.send(event.plain_result(
+                "贡献统计暂时无法读取，请稍后再试或联系管理员检查统计文件。"
+            ))
+            return
+
+        if total == 0:
+            message = "你目前累计为画廊贡献了 0 张图片。欢迎回复图片并使用 /上传<分类> 投稿！"
+        else:
+            message = f"你目前累计为画廊贡献了 {total} 张图片，感谢你的分享！"
+        await event.send(event.plain_result(message))
+
     @filter.command("强制上传")
     async def cmd_force_upload(self, event: AstrMessageEvent):
         """仅绕过最近一次感知相似提示；完全重复仍然禁止上传。"""
@@ -2445,6 +2477,7 @@ class Main(Star):
                     f"- {prefix}看随机图片 N：仅从名字含「图片」的分类随机抽取，默认 1 张，最多 {self.view_multiple_max} 张",
                      f"- /抽表情 N：从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张",
                     "- /看最近上传 N：查看最近上传的图片；不写数字默认 10 张",
+                    "- /查看贡献：QQ 群或私聊查询自己累计贡献的图片数量",
                     f"- /上传<分类>：先回复图片、多图或合并转发，再发送命令上传（快捷：/sz<分类>）",
                     "- 网页管理：AstrBot WebUI → 插件管理 → Airi Gallery → 图库管理，可选图并预览后移动分类",
                     "- /画廊帮助详细：查看完整命令说明",
@@ -2473,6 +2506,7 @@ class Main(Star):
                 "内容管理：",
                 "- /创建<分类>：创建一个新的分类文件夹",
                 f"- /上传<分类>：回复图片、多图或合并转发聊天记录后上传到对应分类，单次最多 {UPLOAD_BATCH_MAX} 张（快捷：/sz<分类>）",
+                "- /查看贡献：仅 QQ 群或私聊，查询自己的累计贡献图片数量",
                 "- /删除123：删除编号为 123 的图片或表情包",
                 "- /迁移图片 图片 airi图片 12,15-17：预览跨分类迁移（不改变编号，最多 50 张）",
                 "- /确认迁移图片 N：5 分钟内按预览数量确认；/取消迁移图片：取消",
@@ -4074,6 +4108,7 @@ class Main(Star):
                     [
                         ("/创建<分类>", "创建新的分类文件夹"),
                         ("/上传<分类>", f"回复图片、多图或合并转发后上传，最多 {UPLOAD_BATCH_MAX} 张；快捷 /sz"),
+                        ("/查看贡献", "QQ 群和私聊查看自己累计贡献了多少张图片"),
                         ("/删除123", "删除指定编号的图片或表情包"),
                         ("/迁移图片 原分类 目标分类 12,15-17", "预览迁移；/确认迁移图片 N 二次确认，保留原编号"),
                         ("/强制上传", "仅确认被感知查重拦截的相似图片；完全重复不可绕过"),
@@ -4125,7 +4160,7 @@ class Main(Star):
                     "上传与更多帮助",
                     "管理命令按需使用，其他功能可以查看详细版",
                     [
-                        ("/上传<分类>", "先回复图片、多图或合并转发，再发送命令上传"),
+                        ("/上传<分类>", "回复图片再上传；/查看贡献 可查询累计贡献"),
                         ("WebUI 图库管理", "在 AstrBot 插件管理打开 Airi Gallery，可看缩略图后移动图片"),
                         ("/画廊帮助详细", "查看完整的浏览、管理、删除和远程同步命令"),
                     ],
