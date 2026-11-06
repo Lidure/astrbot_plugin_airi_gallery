@@ -725,6 +725,11 @@ class Main(Star):
             elif kind == "view_multiple":
                 cat, cnt = payload
                 await self._handle_view_multiple(event, str(cat), int(cnt))
+            elif kind == "random_category_images":
+                await self._handle_random_category_images(event, int(payload))
+            elif kind == "random_category_images_invalid":
+                prefix = self._view_command_prefix()
+                await event.send(event.plain_result(f"格式：{prefix}看随机图片 或 {prefix}看随机图片 5，最多 {self.view_multiple_max} 张。"))
             elif kind == "random_draw":
                 await self._handle_random_draw(event, int(payload))
             elif kind == "random_draw_invalid":
@@ -793,6 +798,19 @@ class Main(Star):
         action = self._parse_action(text)
         if action and action[0] == "view_category":
             await self._handle_view_category(event, str(action[1]))
+
+    @filter.command("看随机图片")
+    async def cmd_random_category_images(self, event: AstrMessageEvent):
+        """只从分类名含「图片」的分类中随机看图，沿用看图前缀模式。"""
+        text = self._strip_at_prefix((event.message_str or "").strip())
+        action = self._parse_action(text)
+        if action and action[0] == "random_category_images":
+            await self._handle_random_category_images(event, int(action[1]))
+        elif action and action[0] == "random_category_images_invalid":
+            prefix = self._view_command_prefix()
+            await event.send(event.plain_result(
+                f"格式：{prefix}看随机图片 或 {prefix}看随机图片 5，最多 {self.view_multiple_max} 张。"
+            ))
 
     @filter.command("分类列表")
     async def cmd_list_categories(self, event: AstrMessageEvent):
@@ -2415,7 +2433,8 @@ class Main(Star):
                     f"- {prefix}看看<分类> N：随机发送 N 张；分类和数字之间要有空格，最多 {self.view_multiple_max} 张",
                     f"- {prefix}看全部<分类>：生成该分类总览图，方便按编号挑选",
                     f"- {prefix}看看123：直接查看编号为 123 的图片",
-                    f"- /抽表情 N：从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张",
+                    f"- {prefix}看随机图片 N：仅从名字含「图片」的分类随机抽取，默认 1 张，最多 {self.view_multiple_max} 张",
+                     f"- /抽表情 N：从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张",
                     "- /看最近上传 N：查看最近上传的图片；不写数字默认 10 张",
                     f"- /上传<分类>：先回复图片、多图或合并转发，再发送命令上传（快捷：/sz<分类>）",
                     "- 网页管理：AstrBot WebUI → 插件管理 → Airi Gallery → 图库管理，可选图并预览后移动分类",
@@ -2434,7 +2453,8 @@ class Main(Star):
                 f"- /查看画廊、/分类列表：以图片卡片形式查看当前已创建的分类",
                 f"- {prefix}看看<分类>：从 gallery/<分类>/ 中随机发送一张图片或表情包",
                 f"- {prefix}看看<分类> N：从 gallery/<分类>/ 中随机发送 N 张图片或表情包，最多 {self.view_multiple_max} 张",
-                f"- /抽表情：从全图库随机抽取 1 张图片或表情包，可追加数字 N，最多 {self.view_multiple_max} 张",
+                f"- {prefix}看随机图片 N：仅从名字含「图片」的分类随机抽取，默认 1 张，最多 {self.view_multiple_max} 张",
+                 f"- /抽表情：从全图库随机抽取 1 张图片或表情包，可追加数字 N，最多 {self.view_multiple_max} 张",
                 f"- {prefix}看全部<分类>：生成分类总览图，并为每张图标注序号",
                 f"- {prefix}看看123：发送编号为 123 的图片或表情包",
                 f"- {prefix}看100-110：按编号范围查看 100 到 110 的图片或表情包，最多 {VIEW_RANGE_MAX} 张",
@@ -2682,6 +2702,21 @@ class Main(Star):
             count = int(recent_short_match.group(1)) if recent_short_match.group(1) else 10
             count = max(1, min(count, 50))
             return "view_recent", count
+
+        # 固定短语优先于通用「看<分类>」；prefix 模式要求 /。
+        random_image_match = re.fullmatch(
+            r"/看随机图片(?:\s+(.*))?"
+            if getattr(self, "view_command_mode", "no_prefix") == "prefix"
+            else r"/?看随机图片(?:\s+(.*))?",
+            normalized,
+        )
+        if random_image_match:
+            tail = (random_image_match.group(1) or "").strip()
+            if not tail:
+                return "random_category_images", 1
+            if tail.isdecimal():
+                return "random_category_images", int(tail)
+            return "random_category_images_invalid", None
 
         if normalized == "/分类列表":
             return "list_categories", None
@@ -3280,6 +3315,35 @@ class Main(Star):
             await self._send_as_forward(event, sats)
         else:
             await self._send_as_single(event, sats)
+
+    async def _handle_random_category_images(self, event: AstrMessageEvent, count: int):
+        """从分类名含「图片」的所有图片中均匀随机抽取，不重复。"""
+        if count > self.view_multiple_max:
+            await event.send(event.plain_result(f"最多一次查看 {self.view_multiple_max} 张图片哦。"))
+            return
+
+        categories = [name for name in self._list_category_names() if "图片" in name]
+        if not categories:
+            await event.send(event.plain_result("画廊中没有名称包含「图片」的分类。"))
+            return
+
+        images = [
+            path
+            for category in categories
+            for path in self._iter_category_images(category)
+        ]
+        if not images:
+            await event.send(event.plain_result("名称包含「图片」的分类目前没有图片。"))
+            return
+
+        count = max(1, min(self.view_multiple_max, int(count)))
+        picks = random.sample(images, min(count, len(images)))
+        if len(picks) == 1:
+            await event.send(event.image_result(str(picks[0])))
+        elif self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, picks)
+        else:
+            await self._send_as_single(event, picks)
 
     async def _handle_random_draw(self, event: AstrMessageEvent, count: int):
         """从全图库随机抽取 N 张图片或表情包。"""
@@ -3941,7 +4005,8 @@ class Main(Star):
                         ("/查看画廊 / /分类列表", "以图片卡片形式查看所有分类"),
                         (f"{self._view_command_prefix()}看看<分类>", "随机返回该分类的一张图片或表情包"),
                         (f"{self._view_command_prefix()}看看<分类> N", f"随机返回 N 张，最多 {self.view_multiple_max} 张；分类和数字之间要有空格"),
-                        ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
+                        (f"{self._view_command_prefix()}看随机图片 N", f"只从名字含「图片」的分类随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
+                         ("/抽表情 N", f"从全图库随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
                         (f"{self._view_command_prefix()}看全部<分类> / {self._view_command_prefix()}看所有<分类>", "生成该分类总览图，并标注每张图片编号"),
                         (f"{self._view_command_prefix()}看看123", "按编号直接查看指定图片或表情包"),
                         (f"{self._view_command_prefix()}看100-110", f"按编号范围连续查看，最多 {VIEW_RANGE_MAX} 张"),
@@ -3998,7 +4063,8 @@ class Main(Star):
                         (f"{prefix}看看<分类> N", f"随机发送 N 张；分类和数字之间要有空格，最多 {self.view_multiple_max} 张"),
                         (f"{prefix}看全部<分类>", "生成该分类总览图，方便按编号挑选"),
                         (f"{prefix}看看123", "直接发送编号为 123 的图片或表情包"),
-                        ("/抽表情 N", f"从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张"),
+                        (f"{prefix}看随机图片 N", f"名字含「图片」的分类随机抽取，默认 1 张，最多 {self.view_multiple_max} 张"),
+                         ("/抽表情 N", f"从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张"),
                         ("/看最近上传 N", "查看最近上传的图片；不写数字默认 10 张"),
                     ],
                 ),
