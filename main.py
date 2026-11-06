@@ -725,6 +725,11 @@ class Main(Star):
             elif kind == "view_multiple":
                 cat, cnt = payload
                 await self._handle_view_multiple(event, str(cat), int(cnt))
+            elif kind == "random_category_images":
+                await self._handle_random_category_images(event, int(payload))
+            elif kind == "random_category_images_invalid":
+                prefix = self._view_command_prefix()
+                await event.send(event.plain_result(f"格式：{prefix}看随机图片 或 {prefix}看随机图片 5，最多 {self.view_multiple_max} 张。"))
             elif kind == "random_draw":
                 await self._handle_random_draw(event, int(payload))
             elif kind == "random_draw_invalid":
@@ -793,6 +798,19 @@ class Main(Star):
         action = self._parse_action(text)
         if action and action[0] == "view_category":
             await self._handle_view_category(event, str(action[1]))
+
+    @filter.command("看随机图片")
+    async def cmd_random_category_images(self, event: AstrMessageEvent):
+        """只从分类名含「图片」的分类中随机看图，沿用看图前缀模式。"""
+        text = self._strip_at_prefix((event.message_str or "").strip())
+        action = self._parse_action(text)
+        if action and action[0] == "random_category_images":
+            await self._handle_random_category_images(event, int(action[1]))
+        elif action and action[0] == "random_category_images_invalid":
+            prefix = self._view_command_prefix()
+            await event.send(event.plain_result(
+                f"格式：{prefix}看随机图片 或 {prefix}看随机图片 5，最多 {self.view_multiple_max} 张。"
+            ))
 
     @filter.command("分类列表")
     async def cmd_list_categories(self, event: AstrMessageEvent):
@@ -2683,6 +2701,21 @@ class Main(Star):
             count = max(1, min(count, 50))
             return "view_recent", count
 
+        # 固定短语优先于通用「看<分类>」；prefix 模式要求 /。
+        random_image_match = re.fullmatch(
+            r"/看随机图片(?:\s+(.*))?"
+            if self.view_command_mode == MODE_PREFIX
+            else r"/?看随机图片(?:\s+(.*))?",
+            normalized,
+        )
+        if random_image_match:
+            tail = (random_image_match.group(1) or "").strip()
+            if not tail:
+                return "random_category_images", 1
+            if tail.isdecimal():
+                return "random_category_images", int(tail)
+            return "random_category_images_invalid", None
+
         if normalized == "/分类列表":
             return "list_categories", None
 
@@ -3280,6 +3313,35 @@ class Main(Star):
             await self._send_as_forward(event, sats)
         else:
             await self._send_as_single(event, sats)
+
+    async def _handle_random_category_images(self, event: AstrMessageEvent, count: int):
+        """从分类名含「图片」的所有图片中均匀随机抽取，不重复。"""
+        if count > self.view_multiple_max:
+            await event.send(event.plain_result(f"最多一次查看 {self.view_multiple_max} 张图片哦。"))
+            return
+
+        categories = [name for name in self._list_category_names() if "图片" in name]
+        if not categories:
+            await event.send(event.plain_result("画廊中没有名称包含「图片」的分类。"))
+            return
+
+        images = [
+            path
+            for category in categories
+            for path in self._iter_category_images(category)
+        ]
+        if not images:
+            await event.send(event.plain_result("名称包含「图片」的分类目前没有图片。"))
+            return
+
+        count = max(1, min(self.view_multiple_max, int(count)))
+        picks = random.sample(images, min(count, len(images)))
+        if len(picks) == 1:
+            await event.send(event.image_result(str(picks[0])))
+        elif self.view_multiple_mode == "forward":
+            await self._send_as_forward(event, picks)
+        else:
+            await self._send_as_single(event, picks)
 
     async def _handle_random_draw(self, event: AstrMessageEvent, count: int):
         """从全图库随机抽取 N 张图片或表情包。"""
