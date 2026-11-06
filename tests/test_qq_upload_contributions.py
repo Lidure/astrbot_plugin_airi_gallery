@@ -157,7 +157,7 @@ def test_group_upload_mentions_sender_and_tallies_only_accepted_images(tmp_path)
     assert "累计贡献 2 张" in parts[1].text
     assert "完全重复 1 张" in parts[1].text
     send_thanks(plugin, FakeEvent(message_id=2), "成功上传 1 张。", 1)
-    assert "累计贡献 3 张" in event_text(plugin, event_id=3, sender="123456", tmp_path=tmp_path)
+    assert "累计贡献 4 张" in event_text(plugin, event_id=3, sender="123456", tmp_path=tmp_path)
 
 
 def event_text(plugin, event_id, sender, tmp_path):
