@@ -14,7 +14,7 @@ from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, Image, Plain, Reply
+from astrbot.api.message_components import Image, Reply
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
@@ -3691,6 +3691,7 @@ class Main(Star):
         )
         if is_group:
             try:
+                from astrbot.api.message_components import At, Plain
                 await event.send(event.chain_result([At(qq=sender_id), Plain(" " + thanks)]))
                 return
             except Exception as exc:
