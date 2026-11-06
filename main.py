@@ -2706,7 +2706,7 @@ class Main(Star):
         # 固定短语优先于通用「看<分类>」；prefix 模式要求 /。
         random_image_match = re.fullmatch(
             r"/看随机图片(?:\s+(.*))?"
-            if self.view_command_mode == MODE_PREFIX
+            if getattr(self, "view_command_mode", "no_prefix") == "prefix"
             else r"/?看随机图片(?:\s+(.*))?",
             normalized,
         )
