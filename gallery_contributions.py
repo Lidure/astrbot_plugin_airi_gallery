@@ -74,6 +74,13 @@ class QQContributionStore:
                 raise ValueError("invalid QQ contribution count")
         return users
 
+    def get(self, sender_id: str) -> int:
+        """Read one QQ account's total without creating or changing files."""
+        if not sender_id or len(sender_id) > 128:
+            raise ValueError("sender ID is required")
+        with self._lock:
+            return self._read().get(sender_id, 0)
+
     def add(self, sender_id: str, accepted_count: int) -> int:
         """Increment only confirmed new images; never silently reset bad data."""
         if not sender_id or len(sender_id) > 128:
