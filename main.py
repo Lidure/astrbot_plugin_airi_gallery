@@ -261,7 +261,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.12.0"
+CURRENT_PLUGIN_VERSION = "v2.12.1"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -840,10 +840,21 @@ class Main(Star):
     @filter.command("查看贡献")
     async def cmd_view_my_contribution(self, event: AstrMessageEvent):
         """QQ 群聊/私聊查询自己累计成功上传的图片数量。"""
-        raw = self._strip_at_prefix((event.message_str or "").strip())
-        # 只接受显式 /查看贡献，避免聊天中的“查看贡献”被认作命令。
-        if raw == "/查看贡献":
-            await self._handle_view_my_contribution(event)
+        # AstrBot 的 WakingStage 会从 event.message_str 剥离唤醒前缀（如 /），
+        # 但 event.message_obj.message_str 仍保留原始纯文本。
+        normalized = self._strip_at_prefix((event.message_str or "").strip())
+        if normalized not in {"/查看贡献", "查看贡献"}:
+            return
+
+        original = getattr(getattr(event, "message_obj", None), "message_str", None)
+        if isinstance(original, str):
+            # 原文必须是带 / 的完整命令，避免 QQ 私聊的自然语言误触发。
+            if self._strip_at_prefix(original.strip()) != "/查看贡献":
+                return
+        elif normalized != "/查看贡献":
+            # 测试/特殊适配器缺少原文时仅接受能确认带前缀的消息。
+            return
+        await self._handle_view_my_contribution(event)
 
     async def _handle_view_my_contribution(self, event: AstrMessageEvent):
         identity = qq_upload_sender(event)
