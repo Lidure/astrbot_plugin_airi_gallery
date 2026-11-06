@@ -415,7 +415,6 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
-
 ### v2.12.0
 
 - **新增「看随机图片」**：`看随机图片` / `看随机图片 N` 仅从真实分类名包含「图片」的图库随机选择图片，继承看图命令前缀模式、`view_multiple_max`（默认 10、最高 50）和多图发送设置；空图库及非法数量提供明确提示（[#97](https://github.com/Lidure/astrbot_plugin_airi_gallery/pull/97)）。
