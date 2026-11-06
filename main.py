@@ -20,6 +20,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 from astrbot.core.agent.tool import FunctionTool
 
 try:
+    from .gallery_contributions import QQContributionStore, qq_upload_sender
+except ImportError:
+    from gallery_contributions import QQContributionStore, qq_upload_sender
+
+try:
     from .gallery_llm import GalleryLLMService, event_session_key, request_allows_random
 except ImportError:
     from gallery_llm import GalleryLLMService, event_session_key, request_allows_random
@@ -459,6 +464,10 @@ class Main(Star):
             perceptual_max_distance=PERCEPTUAL_MAX_DISTANCE,
         )
         self.store.load_hash_index()
+        # 从零开始记录 QQ 聊天上传贡献；与图库和远程索引分离保存。
+        self.qq_contributions = QQContributionStore(
+            self.plugin_data_dir / "qq_upload_contributions.json"
+        )
         self.view_command_mode = self._resolve_view_command_mode()
         self.collage_font_path = str(self.config.get("collage_font_path", "")).strip() or None
         self.view_multiple_mode = self._resolve_view_multiple_mode()
@@ -3645,7 +3654,49 @@ class Main(Star):
             return
         with self._pending_similar_upload_lock:
             self._pending_similar_uploads.pop(key, None)
-        await event.send(event.plain_result(f"已确认相似图片并强制上传为 #{target.stem}。"))
+        await self._send_chat_upload_success(
+            event, f"已确认相似图片并强制上传为 #{target.stem}。", 1
+        )
+
+    async def _send_chat_upload_success(
+        self, event: AstrMessageEvent, summary: str, accepted_count: int
+    ) -> None:
+        """Thank only QQ command uploaders, after a successful upload commit.
+
+        The existing success/failure details remain visible. Web/API uploads
+        never call this method. An unreadable counter must not overwrite data.
+        """
+        identity = qq_upload_sender(event) if accepted_count > 0 else None
+        if identity is None:
+            await event.send(event.plain_result(summary))
+            return
+
+        sender_id, is_group = identity
+        try:
+            total = self.qq_contributions.add(sender_id, accepted_count)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.error(
+                "[Gallery] QQ 贡献统计写入失败（保留已有数据）：%s",
+                type(exc).__name__,
+            )
+            await event.send(event.plain_result(
+                summary + "\n感谢你为画廊添图！贡献统计暂不可用，请管理员检查统计文件。"
+            ))
+            return
+
+        thanks = (
+            f"{summary}\n"
+            f"谢谢你为画廊贡献了 {accepted_count} 张图片！"
+            f"目前累计贡献 {total} 张，感谢分享～"
+        )
+        if is_group:
+            try:
+                from astrbot.api.message_components import At, Plain
+                await event.send(event.chain_result([At(qq=sender_id), Plain(" " + thanks)]))
+                return
+            except Exception as exc:
+                logger.warning("[Gallery] 发送 QQ @感谢消息失败：%s", type(exc).__name__)
+        await event.send(event.plain_result(thanks))
 
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
         if not self._is_allowed(event):
@@ -3768,7 +3819,9 @@ class Main(Star):
             parts.append(f"已自动压缩大图 {compressed_count} 张")
         if invalid_count:
             parts.append(f"无效或过大 {invalid_count} 张已跳过")
-        await event.send(event.plain_result("；".join(parts) + "。"))
+        await self._send_chat_upload_success(
+            event, "；".join(parts) + "。", len(uploaded)
+        )
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
