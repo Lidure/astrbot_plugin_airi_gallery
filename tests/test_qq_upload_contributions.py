@@ -7,7 +7,10 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import threading
+import types
+from unittest.mock import patch
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -87,9 +90,17 @@ def thanking_plugin(tmp_path):
     return SimpleNamespace(qq_contributions=QQContributionStore(tmp_path / "stats.json"))
 
 
+def _run_with_fake_components(coro):
+    fake = types.ModuleType("astrbot.api.message_components")
+    fake.At = FakeAt
+    fake.Plain = FakePlain
+    with patch.dict(sys.modules, {"astrbot.api.message_components": fake}):
+        return asyncio.run(coro)
+
+
 def send_thanks(plugin, event, message, count):
     handler = main_method("_send_chat_upload_success")
-    asyncio.run(handler(plugin, event, message, count))
+    _run_with_fake_components(handler(plugin, event, message, count))
 
 
 def test_all_users_start_at_zero_and_persist_separately(tmp_path):
@@ -253,20 +264,20 @@ def test_batch_counts_only_after_commit_and_duplicate_invocation_is_ignored(tmp_
     plugin = upload_plugin(tmp_path)
     method = upload_method()
     event = FakeEvent(message_id=101)
-    asyncio.run(method(plugin, event, "airi"))
+    _run_with_fake_components(method(plugin, event, "airi"))
     assert "累计贡献 2 张" in event.sent[-1][1][1].text
     second_wrapper = FakeEvent(message_id=101)
-    asyncio.run(method(plugin, second_wrapper, "airi"))
+    _run_with_fake_components(method(plugin, second_wrapper, "airi"))
     assert second_wrapper.sent == []
     next_message = FakeEvent(message_id=102)
-    asyncio.run(method(plugin, next_message, "airi"))
+    _run_with_fake_components(method(plugin, next_message, "airi"))
     assert "累计贡献 4 张" in next_message.sent[-1][1][1].text
 
 
 def test_batch_failed_commit_never_counts_and_never_thanks(tmp_path):
     plugin = upload_plugin(tmp_path, committed=False)
     event = FakeEvent(message_id=201)
-    asyncio.run(upload_method()(plugin, event, "airi"))
+    _run_with_fake_components(upload_method()(plugin, event, "airi"))
     assert event.sent[0][0] == "plain"
     assert "远程上传事务失败" in event.sent[0][1]
     assert not plugin.qq_contributions.path.exists()
@@ -279,7 +290,7 @@ def test_duplicates_only_never_count_as_contribution(tmp_path):
     ]
     plugin = upload_plugin(tmp_path, outcomes=decisions)
     event = FakeEvent(message_id=301)
-    asyncio.run(upload_method()(plugin, event, "airi"))
+    _run_with_fake_components(upload_method()(plugin, event, "airi"))
     assert "成功上传 0 张" in event.sent[-1][1]
     assert len(event.sent) == 1
     assert not plugin.qq_contributions.path.exists()
@@ -314,7 +325,7 @@ def test_force_similar_success_counts_one_and_failure_does_not(tmp_path):
         "_send_chat_upload_success"
     )(plugin, event, summary, count)
     event = FakeEvent(message_id=401)
-    asyncio.run(method(plugin, event))
+    _run_with_fake_components(method(plugin, event))
     assert "累计贡献 1 张" in event.sent[-1][1][1].text
     assert "已确认相似图片并强制上传" in event.sent[-1][1][1].text
     assert "key" not in plugin._pending_similar_uploads
@@ -326,6 +337,6 @@ def test_force_similar_success_counts_one_and_failure_does_not(tmp_path):
     }
     plugin._push_staged_upload_transaction = lambda paths, category: False
     failed = FakeEvent(message_id=402)
-    asyncio.run(method(plugin, failed))
+    _run_with_fake_components(method(plugin, failed))
     assert "远程上传或感知索引更新失败" in failed.sent[0][1]
     assert QQContributionStore(plugin.qq_contributions.path).add("123456", 1) == 2
