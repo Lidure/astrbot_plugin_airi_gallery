@@ -2,7 +2,7 @@ name: astrbot_plugin_airi_gallery
 display_name: Airi画廊🌸
 short_desc: 数字画廊插件，支持按分类随机看图、QQ 投稿贡献统计、精确/相似查重及 GitHub 安全同步。
 desc: 数字排序画廊插件，支持按分类随机看图、从分类名含「图片」的图库随机抽图、全图库抽表情、编号与范围查看；QQ 回复图片、多图及合并转发上传，成功后 @感谢和累计贡献统计，可使用 /查看贡献 查询本人投稿数量；同时支持精确/相似查重、分类安全迁移、WebUI/Cloudflare Pages 管理、GitHub/Gitee 自动同步及远端事务一致性。
-version: v2.12.0
+version: v2.12.1
 author: Lidure
 repo: https://github.com/Lidure/astrbot_plugin_airi_gallery
 pages:
