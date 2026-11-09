@@ -60,3 +60,102 @@ class UploadOnceGuard:
                 return False
             self._seen[key] = now
             return True
+
+
+class QuotedUploadGuard:
+    """Throttle repeat uploads of the same QQ quote, not unrelated messages.
+
+    Unlike UploadOnceGuard, this guard spans distinct command message IDs.
+    Failed attempts are released immediately so users can retry. Completed
+    uploads, including all-duplicate batches, have a brief cooldown.
+    """
+
+    def __init__(
+        self,
+        *,
+        cooldown_seconds: float = 120,
+        processing_ttl_seconds: float = 900,
+        capacity: int = 2048,
+        clock=None,
+    ):
+        self.cooldown_seconds = cooldown_seconds
+        self.processing_ttl_seconds = processing_ttl_seconds
+        self.capacity = capacity
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, ...], tuple[str, float, int]] = {}
+        self._next_ticket = 0
+
+    @staticmethod
+    def _key(event, category: str, reply_id: str) -> tuple[str, ...] | None:
+        reference = str(reply_id or "").strip()
+        if not reference or reference in {"0", "None"}:
+            return None
+        msg = getattr(event, "message_obj", None)
+        sender = str(getattr(msg, "sender_id", "") or "")
+        if not sender:
+            getter = getattr(event, "get_sender_id", None)
+            if callable(getter):
+                try:
+                    sender = str(getter() or "")
+                except Exception:
+                    return None
+        if not sender:
+            return None
+        session = str(getattr(event, "unified_msg_origin", "") or "")
+        if not session:
+            getter = getattr(event, "get_session_id", None)
+            if callable(getter):
+                try:
+                    session = str(getter() or "")
+                except Exception:
+                    pass
+        group = str(getattr(msg, "group_id", "") or "")
+        self_id = str(getattr(msg, "self_id", "") or "")
+        return (self_id, session, group, sender, str(category), reference)
+
+    def claim(self, event, category: str, reply_id: str) -> tuple[str, int | None]:
+        key = self._key(event, category, reply_id)
+        if key is None:
+            return "untracked", None
+        now = self._clock()
+        with self._lock:
+            self._entries = {
+                name: entry for name, entry in self._entries.items()
+                if now - entry[1] < (
+                    self.processing_ttl_seconds if entry[0] == "processing"
+                    else self.cooldown_seconds
+                )
+            }
+            existing = self._entries.get(key)
+            if existing is not None:
+                return ("running" if existing[0] == "processing" else "recent"), None
+            while len(self._entries) >= self.capacity:
+                del self._entries[next(iter(self._entries))]
+            self._next_ticket += 1
+            ticket = self._next_ticket
+            self._entries[key] = ("processing", now, ticket)
+            return "new", ticket
+
+    def finish(
+        self,
+        event,
+        category: str,
+        reply_id: str,
+        ticket: int | None,
+        *,
+        completed: bool,
+    ) -> None:
+        if ticket is None:
+            return
+        key = self._key(event, category, reply_id)
+        if key is None:
+            return
+        with self._lock:
+            current = self._entries.get(key)
+            if current is None or current[2] != ticket:
+                return
+            if completed:
+                self._entries[key] = ("done", self._clock(), ticket)
+            else:
+                self._entries.pop(key, None)

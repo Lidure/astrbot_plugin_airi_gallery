@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 from gallery_contributions import QQContributionStore, qq_upload_sender
-from gallery_upload_once import UploadOnceGuard
+from gallery_upload_once import UploadOnceGuard, QuotedUploadGuard
 
 
 class FakeAt:
@@ -225,6 +225,9 @@ def upload_plugin(tmp_path, *, committed=True, outcomes=None):
     contributor = thanking_plugin(tmp_path)
     contributor._is_allowed = lambda event: True
     contributor._upload_once = UploadOnceGuard()
+    contributor._quoted_upload_guard = QuotedUploadGuard()
+    # These existing tests simulate independent commands without a Reply component.
+    contributor._quoted_upload_message_id = lambda event: None
     contributor._resolve_existing_category_dir = lambda category: tmp_path / category
 
     async def images(event):
@@ -248,16 +251,24 @@ def upload_plugin(tmp_path, *, committed=True, outcomes=None):
 
 
 def upload_method():
-    return main_method(
-        "_handle_upload",
+    batch = main_method(
+        "_handle_upload_batch",
         {
             "UPLOAD_BATCH_MAX": 100,
+            "UPLOAD_DUPLICATE_PREVIEW_LIMIT": 2,
             "compress_large_upload_image": lambda image: (image, False),
             "validate_image_payload": lambda image: SimpleNamespace(extension=".png", content=image),
             "UploadPayloadTooLarge": ValueError,
             "Path": Path,
         },
     )
+    wrapper = main_method("_handle_upload")
+
+    async def handle(plugin, event, category):
+        plugin._handle_upload_batch = lambda ev, cat: batch(plugin, ev, cat)
+        return await wrapper(plugin, event, category)
+
+    return handle
 
 
 def test_batch_counts_only_after_commit_and_duplicate_invocation_is_ignored(tmp_path):

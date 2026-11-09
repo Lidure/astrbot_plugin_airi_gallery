@@ -209,7 +209,7 @@ def test_all_upload_surfaces_use_one_staged_transaction_without_per_file_remote_
         "_api_upload_images",
         "_api_pub_upload",
         "_handle_force_similar_upload",
-        "_handle_upload",
+        "_handle_upload_batch",
     ):
         block = _method_block(source, name)
         assert "_push_staged_upload_transaction" in block, name
@@ -217,10 +217,18 @@ def test_all_upload_surfaces_use_one_staged_transaction_without_per_file_remote_
         assert "_publish_gallery_manifest" not in block, name
         assert "_git_delete_remote_file" not in block, name
 
-    for name in ("_api_upload_images", "_api_pub_upload", "_handle_upload"):
+    for name in ("_api_upload_images", "_api_pub_upload", "_handle_upload_batch"):
         block = _method_block(source, name)
         assert block.count("_push_staged_upload_transaction") == 1, name
         assert "staged_paths" in block
+
+
+def test_qq_upload_wrapper_delegates_to_one_batch_and_has_quote_guard():
+    source = Path("main.py").read_text(encoding="utf-8")
+    wrapper = _method_block(source, "_handle_upload")
+    assert "self._quoted_upload_guard.claim(" in wrapper
+    assert "self._handle_upload_batch(event, category)" in wrapper
+    assert "self._quoted_upload_guard.finish(" in wrapper
 
 
 def test_staged_rollback_reverts_every_local_candidate():
