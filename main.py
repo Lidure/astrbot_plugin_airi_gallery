@@ -117,9 +117,9 @@ except ImportError:
     )
 
 try:
-    from .gallery_upload_once import UploadOnceGuard
+    from .gallery_upload_once import UploadOnceGuard, QuotedUploadGuard
 except ImportError:
-    from gallery_upload_once import UploadOnceGuard
+    from gallery_upload_once import UploadOnceGuard, QuotedUploadGuard
 
 
 try:
@@ -250,6 +250,7 @@ PLUGIN_NAME = "astrbot_plugin_airi_gallery"
 DEFAULT_CATEGORY = "default"
 VIEW_RANGE_MAX = 50
 UPLOAD_BATCH_MAX = 100
+UPLOAD_DUPLICATE_PREVIEW_LIMIT = 2
 REMOTE_DELETE_CONFIRM_TTL = 300
 REMOTE_DELETE_PREVIEW_LIMIT = 20
 SIMILAR_UPLOAD_CONFIRM_TTL = 300
@@ -547,6 +548,7 @@ class Main(Star):
         self._pending_similar_uploads: dict[str, dict] = {}
         self._pending_similar_upload_lock = threading.RLock()
         self._upload_once = UploadOnceGuard()
+        self._quoted_upload_guard = QuotedUploadGuard()
         self._pending_api_similar_uploads: dict[str, dict] = {}
         self._pending_api_similar_upload_lock = threading.RLock()
 
@@ -3743,6 +3745,20 @@ class Main(Star):
                 logger.warning("[Gallery] 发送 QQ @感谢消息失败：%s", type(exc).__name__)
         await event.send(event.plain_result(thanks))
 
+    @staticmethod
+    def _quoted_upload_message_id(event: AstrMessageEvent) -> str | None:
+        """Find the original quoted QQ message before downloading its media."""
+        try:
+            components = event.get_messages()
+        except Exception:
+            return None
+        for component in components:
+            if isinstance(component, Reply):
+                reply_id = str(getattr(component, "id", "") or "").strip()
+                if reply_id and reply_id not in {"0", "None"}:
+                    return reply_id
+        return None
+
     async def _handle_upload(self, event: AstrMessageEvent, category: str):
         if not self._is_allowed(event):
             await event.send(event.plain_result("没有权限执行此操作。"))
@@ -3750,6 +3766,28 @@ class Main(Star):
         if not self._upload_once.claim(event, "upload"):
             logger.debug("[Gallery] 同一 QQ 消息的重复上传入口已忽略。")
             return
+
+        reply_id = self._quoted_upload_message_id(event)
+        state, ticket = self._quoted_upload_guard.claim(event, category, reply_id)
+        if state in {"running", "recent"}:
+            if state == "running":
+                message = "这条引用消息的图片正在上传或查重中，已忽略重复命令。"
+            else:
+                message = "这条引用消息刚刚处理过，已忽略重复上传。若需重新尝试，请稍后再发。"
+            logger.info("[Gallery] 重复引用上传已拦截：%s；分类=%s", state, category)
+            await event.send(event.plain_result(message))
+            return
+
+        completed = False
+        try:
+            completed = await self._handle_upload_batch(event, category)
+        finally:
+            self._quoted_upload_guard.finish(
+                event, category, reply_id, ticket, completed=completed
+            )
+
+    async def _handle_upload_batch(self, event: AstrMessageEvent, category: str) -> bool:
+        """Process a claimed batch once; only successful checks enter cooldown."""
         category_dir = self._resolve_existing_category_dir(category)
         if not category_dir:
             await event.send(
@@ -3757,12 +3795,12 @@ class Main(Star):
                     f"分类【{category}】不存在，请先使用 /创建{category} 创建分类。"
                 )
             )
-            return
+            return False
 
         all_images = await self._get_reply_images(event)
         if not all_images:
             await event.send(event.plain_result("请先回复图片、多图或合并转发聊天记录，再发送 /上传<分类>。"))
-            return
+            return False
         if len(all_images) > UPLOAD_BATCH_MAX:
             all_images = all_images[:UPLOAD_BATCH_MAX]
 
@@ -3776,7 +3814,7 @@ class Main(Star):
                     "远程查重失败，为避免本地和 GitHub 查重状态不一致，本次没有放行上传。"
                 )
             )
-            return
+            return False
 
         uploaded: list[str] = []
         staged_paths: list[Path] = []
@@ -3818,12 +3856,13 @@ class Main(Star):
             if target_path is None:
                 if decision.reason == "exact_duplicate":
                     exact_count += 1
-                    await self._send_upload_decision_hint(
-                        event,
-                        decision,
-                        pending_image_bytes=image_bytes,
-                        pending_name=pending_name,
-                    )
+                    if exact_count <= UPLOAD_DUPLICATE_PREVIEW_LIMIT:
+                        await self._send_upload_decision_hint(
+                            event,
+                            decision,
+                            pending_image_bytes=image_bytes,
+                            pending_name=pending_name,
+                        )
                     continue
                 if decision.reason == "similar":
                     similar_count += 1
@@ -3858,6 +3897,8 @@ class Main(Star):
         parts = [f"成功上传 {len(uploaded)} 张到【{category_name}】"]
         if exact_count:
             parts.append(f"完全重复 {exact_count} 张已拦截")
+            if exact_count > UPLOAD_DUPLICATE_PREVIEW_LIMIT:
+                parts.append(f"仅展示前 {UPLOAD_DUPLICATE_PREVIEW_LIMIT} 张重复图片的对比")
         if similar_count:
             parts.append("1 张相似图片等待 /强制上传 确认")
         if compressed_count:
@@ -3867,6 +3908,8 @@ class Main(Star):
         await self._send_chat_upload_success(
             event, "；".join(parts) + "。", len(uploaded)
         )
+        return True
+
 
     async def _handle_delete(self, event: AstrMessageEvent, numbers: list[int]):
         deleted_names: list[str] = []
