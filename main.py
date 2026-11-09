@@ -3891,7 +3891,7 @@ class Main(Star):
             )
             if not committed:
                 await event.send(event.plain_result("远程上传事务失败，已执行一致性补偿，请立即同步核对状态。"))
-                return
+                return False
             uploaded = [path.name for path in staged_paths]
 
         parts = [f"成功上传 {len(uploaded)} 张到【{category_name}】"]
