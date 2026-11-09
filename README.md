@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.1-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.2-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.2
+- **QQ 引用聊天记录重复上传防护**：同一 QQ 发送者在同一会话中短时间内两次引用同一条聊天记录向同一分类上传，第二条命令会被即时拦截；正在执行时提示“正在上传”，完成后的 2 分钟内提示“刚刚处理过”，无需重新抓取大量表情包。远程查重失败、上传失败等未完成批次可立即重试；不同用户、分类和引用消息互不影响。
+- **批量查重防刷屏**：完全重复图片依然逐张拦截并计数，但仅对前 2 张发送查重对比提示与图片，其余统一写入最终汇总结果；保留相似图片需要 `/强制上传` 确认的原有行为。
+
 ### v2.12.1
 
 - **修复 QQ `/查看贡献` 无回复**：兼容 AstrBot 唤醒阶段剥离命令 `/` 前缀后的消息文本，同时使用原始消息验证用户确实发送了带 `/` 的完整命令，避免普通私聊误触发；原有贡献计数和持久化文件不变。
