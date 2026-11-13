@@ -70,6 +70,16 @@
           </div>
           <div class="gallery-tools">
             <button class="btn btn-quiet btn-small" id="move-mode-btn" type="button" aria-pressed="false">批量移动</button>
+            <div class="browse-sort-field">
+              <label for="browse-sort">排序</label>
+              <select id="browse-sort" aria-label="图片排序方式">
+                <option value="time_desc">修改时间：最新优先</option>
+                <option value="time_asc">修改时间：最早优先</option>
+                <option value="index_desc">编号：从大到小</option>
+                <option value="index_asc">编号：从小到大</option>
+                <option value="name_asc">文件名：A–Z</option>
+              </select>
+            </div>
             <div class="page-size">
               <label for="per-page-input">每页</label>
             <input type="number" id="per-page-input" value="21" min="1" max="200" />
@@ -86,6 +96,7 @@
             <button class="btn btn-primary btn-small" type="button" id="move-open" disabled>移动所选图片</button>
           </div>
         </div>
+        <p class="browse-sort-note">修改时间以服务器本地文件时间为准；重新同步或复制图片后可能改变，不一定等于原始上传日期。</p>
         <div id="grid" class="image-grid"></div>
         <nav class="pager" id="pager" aria-label="图库分页" hidden>
           <button class="btn btn-quiet btn-small" id="first-btn" type="button" hidden>首页</button>
