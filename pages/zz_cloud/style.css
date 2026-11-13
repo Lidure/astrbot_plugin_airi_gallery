@@ -658,3 +658,12 @@ select { cursor: pointer; appearance: auto; }
  .cloud-move-preview-grid { grid-template-columns:repeat(3,minmax(0,1fr)); max-height:min(30vh,240px); }
  .cloud-move-preview-grid.single { grid-template-columns:minmax(150px,240px); }
 }
+
+/* Cloud All tab and transparent approximate upload-time sorting. */
+.grid-toolbar { flex-wrap: wrap; }
+#browse-sort { min-height: 34px; max-width: min(100%, 270px); padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--card); }
+.browse-sort-note { margin: 0 0 14px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.grid-item .category-chip { position: absolute; bottom: 6px; left: 6px; z-index: 2; max-width: calc(100% - 12px); padding: 3px 7px; border-radius: 6px; background: rgba(28, 25, 34, .8); color: white; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
+@media (max-width: 560px) {
+  #browse-sort { flex: 1; min-width: 160px; }
+}
