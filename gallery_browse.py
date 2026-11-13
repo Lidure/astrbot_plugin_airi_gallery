@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from collections.abc import Iterable
 
-SORT_MODES = frozenset({"time_desc", "time_asc", "index_asc", "index_desc", "name_asc", "name_desc"})
+SORT_MODES = frozenset({"time_desc", "time_asc", "index_asc", "index_desc", "name_asc"})
 
 
 def sort_gallery_images(
@@ -31,8 +31,6 @@ def sort_gallery_images(
             return (number is None, -(number or 0), *suffix)
         if requested == "index_asc":
             return (number is None, number or 0, *suffix)
-        if requested == "name_desc":
-            return tuple(-ord(c) for c in path.name.casefold()), *suffix
         return (path.name.casefold(), *suffix)
 
     return sorted(images, key=parts)
