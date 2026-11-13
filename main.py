@@ -117,6 +117,11 @@ except ImportError:
     )
 
 try:
+    from .gallery_browse import sort_gallery_images
+except ImportError:
+    from gallery_browse import sort_gallery_images
+
+try:
     from .gallery_upload_once import UploadOnceGuard
 except ImportError:
     from gallery_upload_once import UploadOnceGuard
@@ -1376,29 +1381,57 @@ class Main(Star):
         from quart import request, jsonify
         if not _is_authenticated_web_request():
             return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+        scope_all = request.args.get("scope", "") == "all"
         category = request.args.get("category", "").strip()
-        page = max(1, int(request.args.get("page", 1)))
-        per_page = max(1, min(50, int(request.args.get("per_page", 20))))
-        if not category:
+        sort_mode = request.args.get("sort", "time_desc").strip()
+        try:
+            page = max(1, int(request.args.get("page", 1)))
+            per_page = max(1, min(50, int(request.args.get("per_page", 20))))
+        except (ValueError, TypeError):
+            return jsonify({"error": "page 和 per_page 必须是整数"}), 400
+
+        if not scope_all and not category:
             return jsonify({"error": "缺少 category 参数"}), 400
-        category_dir = resolve_gallery_category_dir(self.gallery_root, category)
-        if category_dir is None:
-            return jsonify({"error": "invalid category"}), 400
-        if not category_dir.exists():
-            return jsonify({"images": [], "total": 0, "page": page, "per_page": per_page})
-        all_files = []
-        for path in category_dir.iterdir():
-            safe_path = resolve_gallery_image_path(
-                self.gallery_root, category, path.name
-            )
-            if safe_path is not None and _is_image_file(safe_path):
-                all_files.append(safe_path)
-        all_files.sort(key=lambda x: _image_sort_key(x, category_dir))
-        total = len(all_files)
+
+        if scope_all:
+            category_dirs = [
+                safe for folder in self.gallery_root.iterdir()
+                if folder.is_dir() and folder.name != "generated"
+                for safe in [resolve_gallery_category_dir(self.gallery_root, folder.name)]
+                if safe is not None and safe.is_dir()
+            ] if self.gallery_root.exists() else []
+        else:
+            safe = resolve_gallery_category_dir(self.gallery_root, category)
+            if safe is None:
+                return jsonify({"error": "invalid category"}), 400
+            category_dirs = [safe] if safe.exists() else []
+
+        items = []
+        for category_dir in category_dirs:
+            for path in category_dir.iterdir():
+                safe_path = resolve_gallery_image_path(
+                    self.gallery_root, category_dir.name, path.name
+                )
+                if safe_path is None or not _is_image_file(safe_path):
+                    continue
+                try:
+                    local_mtime = safe_path.stat().st_mtime
+                except OSError:
+                    continue
+                items.append((category_dir.name, safe_path, local_mtime))
+        ordered = sort_gallery_images(items, sort_mode)
+        total = len(ordered)
         start = (page - 1) * per_page
-        page_files = all_files[start:start + per_page]
-        result = [{"name": path.name} for path in page_files]
-        return jsonify({"images": result, "total": total, "page": page, "per_page": per_page, "category": category})
+        images = [
+            {"name": path.name, "category": cat, "mtime": mtime}
+            for cat, path, mtime in ordered[start:start + per_page]
+        ]
+        return jsonify({
+            "images": images, "total": total, "page": page, "per_page": per_page,
+            "category": category if not scope_all else "",
+            "scope": "all" if scope_all else "category",
+        })
 
     def _cache_api_similar_upload(
         self,
