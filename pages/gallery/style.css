@@ -553,3 +553,14 @@ input:focus, select:focus { border-color: var(--accent); outline: 3px solid var(
   .move-preview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: min(32vh, 250px); }
   .move-preview-grid.single { grid-template-columns: minmax(140px, 230px); }
 }
+
+/* Unified All tab, global sorting, and category provenance in the grid. */
+.browse-sort-field { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.browse-sort-field select { min-height: 34px; max-width: min(100%, 235px); padding: 0 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.browse-sort-note { margin: -2px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.grid-item .category-chip { position: absolute; bottom: 6px; left: 6px; max-width: calc(100% - 12px); padding: 3px 7px; border-radius: 6px; background: rgba(30, 27, 35, .78); color: #fff; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+@media (max-width: 680px) {
+  .gallery-tools { flex-wrap: wrap; justify-content: flex-start; }
+  .browse-sort-field { flex: 1 1 100%; }
+  .browse-sort-field select { flex: 1; }
+}

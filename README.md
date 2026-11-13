@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.1-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.3-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.3
+- **图库「全部」标签**：AstrBot 插件 WebUI 与云端 Pages 均增加「全部」，可统一浏览跨分类图片、分页并标注每张图片所属分类；仍可切换到单一分类。全部视图允许查看/单图删除，不提供跨来源批量移动，需回到具体分类操作。
+- **全局排序**：两个页面新增时间倒序、时间正序、编号升降序及文件名排序；排序在分页之前完成，切换排序自动回到第 1 页。插件 WebUI 使用服务器本地文件修改时间（重新同步可能改变该时间）；GitHub/Gitee 文件树没有逐图时间，云端将“时间”明确标记为**按全局数字编号近似**，不伪称真实上传日期。
+- **兼容性**：原有 category_images 接口不带 sort 参数时维持旧版返回格式和默认编号顺序，新页面显式请求新排序与分类标识。禁止读取越界/符号链接图片；云端和本地的单分类迁移流程保持不变。
+
 ### v2.12.1
 
 - **修复 QQ `/查看贡献` 无回复**：兼容 AstrBot 唤醒阶段剥离命令 `/` 前缀后的消息文本，同时使用原始消息验证用户确实发送了带 `/` 的完整命令，避免普通私聊误触发；原有贡献计数和持久化文件不变。
