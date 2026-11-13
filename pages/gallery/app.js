@@ -31,8 +31,11 @@ async function apiPost(endpoint, data) {
   return await response.json();
 }
 
+const ALL_CATEGORY = "\u0000ALL";
 let categories = [];
 let currentCat = "";
+let sortMode = "time_desc";
+let gridRequestId = 0;
 let currentPage = 1;
 let totalPages = 1;
 let perPage = 21;
@@ -86,6 +89,7 @@ const firstBtn = $("first-btn");
 const lastBtn = $("last-btn");
 const pageSel = $("page-sel");
 const perPageInput = $("per-page-input");
+const browseSort = $("browse-sort");
 const aliasInput = $("alias-input");
 const aliasCategorySelect = $("alias-category-select");
 const aliasCategoryInput = $("alias-category-input");
@@ -393,17 +397,18 @@ function updateMoveCard(card) {
   const check = card.querySelector(".move-check");
   const single = card.querySelector(".move-single");
   if (check) {
-    check.hidden = !moveMode;
+    check.hidden = !moveMode || currentCat === ALL_CATEGORY;
     check.textContent = selected ? "✓" : "+";
     check.setAttribute("aria-pressed", String(selected));
   }
-  if (single) single.hidden = moveMode;
+  if (single) single.hidden = moveMode || currentCat === ALL_CATEGORY;
   const remove = card.querySelector(".del-btn");
   if (remove) remove.hidden = moveMode;
 }
 
 function updateMoveSelectionUI() {
   moveModeBtn.textContent = moveMode ? "退出批量移动" : "批量移动";
+  moveModeBtn.disabled = currentCat === ALL_CATEGORY;
   moveModeBtn.setAttribute("aria-pressed", String(moveMode));
   moveToolbar.hidden = !moveMode;
   moveCount.textContent = "已选择 " + moveSelection.count + " / 50 张";
@@ -445,7 +450,7 @@ function setMoveDialogBusy(busy) {
 }
 
 function openMoveDialog(names) {
-  if (!currentCat || moveBusy || !names.length) return;
+  if (!currentCat || currentCat === ALL_CATEGORY || moveBusy || !names.length) return;
   moveDialogState = { source: currentCat, names: [...names], ticket: "", target: "" };
   moveDescription.textContent = "从「" + currentCat + "」移动 " + names.length + " 张图片，请核对下方缩略图。";
   moveTargetNew.value = "";
@@ -470,7 +475,7 @@ function closeMoveDialog() {
 }
 
 moveModeBtn.addEventListener("click", () => {
-  if (moveBusy) return;
+  if (moveBusy || currentCat === ALL_CATEGORY) return;
   moveMode = !moveMode;
   moveSelection.reset(currentCat);
   updateMoveSelectionUI();
@@ -570,15 +575,18 @@ function renderTabs() {
     tabs.appendChild(empty);
     return;
   }
-  for (const category of categories) {
+  const entries = [{ label: "全部", key: ALL_CATEGORY }, ...categories.map(name => ({ label: name, key: name }))];
+  for (const entry of entries) {
     const tab = document.createElement("button");
     tab.type = "button";
-    tab.className = `tab${category === currentCat ? " active" : ""}`;
-    tab.textContent = category;
+    tab.className = `tab${entry.key === currentCat ? " active" : ""}`;
+    tab.textContent = entry.label;
+    tab.setAttribute("aria-pressed", String(entry.key === currentCat));
     tab.addEventListener("click", () => {
-      currentCat = category;
+      currentCat = entry.key;
       currentPage = 1;
-      moveSelection.reset(category);
+      moveMode = false;
+      moveSelection.reset(entry.key === ALL_CATEGORY ? "" : entry.key);
       updateMoveSelectionUI();
       renderTabs();
       void loadImgs();
@@ -618,13 +626,15 @@ function clearImageCache(category = "") {
 }
 
 async function loadImgs() {
+  const requestId = ++gridRequestId;
   if (!currentCat) {
     releaseGridImageResources();
     grid.innerHTML = '<div class="empty">选择一个分类查看图片</div>';
     pager.hidden = true;
     return;
   }
-  const cacheKey = `${currentCat}_${currentPage}_${perPage}`;
+  const allMode = currentCat === ALL_CATEGORY;
+  const cacheKey = JSON.stringify([currentCat, currentPage, perPage, sortMode]);
   if (imgCache[cacheKey]) {
     renderGrid(imgCache[cacheKey]);
     renderPagination();
@@ -633,19 +643,27 @@ async function loadImgs() {
   releaseGridImageResources();
   grid.innerHTML = '<div class="empty">加载中...</div>';
   try {
-    const data = await apiGet("category_images", {
-      category: currentCat,
+    const params = {
       page: currentPage,
       per_page: perPage,
-    });
+      sort: sortMode,
+      ...(allMode ? { scope: "all" } : { category: currentCat }),
+    };
+    const data = await apiGet("category_images", params);
+    if (requestId !== gridRequestId) return;
     const images = Array.isArray(data.images) ? data.images : [];
     const total = Number(data.total) || 0;
     totalPages = Math.max(1, Math.ceil(total / perPage));
-    if (currentPage > totalPages) currentPage = totalPages;
+    if (currentPage > totalPages) {
+      currentPage = totalPages;
+      void loadImgs();
+      return;
+    }
     imgCache[cacheKey] = { imgs: images, total };
     renderGrid(imgCache[cacheKey]);
     renderPagination();
   } catch (error) {
+    if (requestId !== gridRequestId) return;
     releaseGridImageResources();
     grid.innerHTML = '<div class="empty">加载失败，请稍后重试</div>';
     pager.hidden = true;
@@ -667,6 +685,7 @@ function renderGrid(data) {
 
   for (const item of images) {
     const name = String(item.name || "");
+    const itemCategory = String(item.category || (currentCat === ALL_CATEGORY ? "" : currentCat));
     const indexMatch = name.match(/^(\d+)/);
     const imageItem = document.createElement("div");
     imageItem.className = "grid-item";
@@ -677,8 +696,8 @@ function renderGrid(data) {
     const image = document.createElement("img");
     image.loading = "lazy";
     image.decoding = "async";
-    image.alt = name;
-    image.dataset.category = currentCat;
+    image.alt = itemCategory ? `${itemCategory} / ${name}` : name;
+    image.dataset.category = itemCategory;
     image.dataset.name = name;
     image.dataset.loadState = "idle";
 
@@ -700,6 +719,7 @@ function renderGrid(data) {
         const result = await apiPost("delete_image", { category, name });
         if (result?.ok === false) throw new Error(result.error || "删除失败");
         clearImageCache(category);
+        clearImageCache(ALL_CATEGORY);
         await loadImgs();
         showMsg(`已删除 ${name}`);
       } catch (error) {
@@ -713,7 +733,7 @@ function renderGrid(data) {
     moveButton.className = "move-single";
     moveButton.textContent = "移动";
     moveButton.setAttribute("aria-label", "移动 " + name + " 到其他分类");
-    moveButton.hidden = moveMode;
+    moveButton.hidden = moveMode || currentCat === ALL_CATEGORY;
     moveButton.addEventListener("click", event => {
       event.stopPropagation();
       openMoveDialog([name]);
@@ -722,7 +742,7 @@ function renderGrid(data) {
     checkButton.type = "button";
     checkButton.className = "move-check";
     checkButton.setAttribute("aria-label", "选择 " + name);
-    checkButton.hidden = !moveMode;
+    checkButton.hidden = !moveMode || currentCat === ALL_CATEGORY;
     checkButton.addEventListener("click", event => {
       event.stopPropagation();
       toggleMoveImage(name);
@@ -741,6 +761,13 @@ function renderGrid(data) {
     });
 
     imageItem.append(image, badge, deleteButton, moveButton, checkButton);
+    if (currentCat === ALL_CATEGORY) {
+      const categoryChip = document.createElement("span");
+      categoryChip.className = "category-chip";
+      categoryChip.textContent = itemCategory;
+      categoryChip.title = `分类：${itemCategory}`;
+      imageItem.appendChild(categoryChip);
+    }
     grid.appendChild(imageItem);
     updateMoveCard(imageItem);
     observeGridImage(image);
@@ -769,6 +796,11 @@ nextBtn.addEventListener("click", () => { if (currentPage < totalPages) currentP
 lastBtn.addEventListener("click", () => { currentPage = totalPages; void loadImgs(); });
 pageSel.addEventListener("change", () => {
   currentPage = Number.parseInt(pageSel.value, 10) || 1;
+  void loadImgs();
+});
+browseSort.addEventListener("change", () => {
+  sortMode = browseSort.value;
+  currentPage = 1;
   void loadImgs();
 });
 perPageInput.addEventListener("change", () => {
