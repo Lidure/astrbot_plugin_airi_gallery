@@ -90,7 +90,7 @@ def test_real_category_named_all_is_not_merged_and_unsafe_symlinks_are_skipped(t
         (root / "甲" / "fake.png").symlink_to(outside)
     except (OSError, NotImplementedError):
         pass
-    one = request_endpoint(tmp_path, {"category": "全部"}, monkeypatch)
+    one = request_endpoint(tmp_path, {"category": "全部", "sort": "time_desc"}, monkeypatch)
     assert one["total"] == 1
     assert one["images"][0]["category"] == "全部"
     both = request_endpoint(tmp_path, {"scope": "all"}, monkeypatch)
