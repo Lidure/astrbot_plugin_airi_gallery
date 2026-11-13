@@ -621,7 +621,13 @@ function renderAliasCategoryOptions() {
 
 function clearImageCache(category = "") {
   for (const key of Object.keys(imgCache)) {
-    if (!category || key.startsWith(`${category}_`)) delete imgCache[key];
+    // Cache keys include [category, page, page size, sort mode].
+    if (!category) { delete imgCache[key]; continue; }
+    try {
+      if (JSON.parse(key)[0] === category) delete imgCache[key];
+    } catch {
+      delete imgCache[key];
+    }
   }
 }
 
