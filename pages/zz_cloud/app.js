@@ -873,7 +873,8 @@ function getNextIndex() {
 // ──────────────────────────────────────────────
 function cloudMoveAllowed() {
   // Moving across multiple source categories requires separate transactions.
-  return state.currentCat !== ALL_CATEGORY && config.platform === 'github' && canWrite() && state.connected;
+  if (state.currentCat === ALL_CATEGORY) return false;
+  return config.platform === 'github' && canWrite() && state.connected;
 }
 function cloudMoveReset() {
   cloudMoveSelected.clear();
