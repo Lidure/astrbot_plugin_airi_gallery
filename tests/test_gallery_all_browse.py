@@ -118,7 +118,7 @@ def test_all_tab_and_sort_controls_are_present_in_both_browsers():
     assert "name: '全部'" in cloud_script
     assert 'scope: "all"' in web_script
     assert "sortBrowseFiles(cat.files, state.sortMode)" in cloud_script
-    assert "state.currentCat !== ALL_CATEGORY && config.platform" in cloud_script
+    assert "if (state.currentCat === ALL_CATEGORY) return false" in cloud_script
 
 
 def test_cloud_browse_sort_node_suite():
