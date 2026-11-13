@@ -538,6 +538,7 @@ moveContinue.addEventListener("click", async () => {
     moveSelection.reset(currentCat);
     clearImageCache(state.source);
     clearImageCache(state.target);
+    clearImageCache(ALL_CATEGORY);
     currentPage = 1;
     await loadCats();
     await loadImgs();
@@ -812,7 +813,7 @@ browseSort.addEventListener("change", () => {
 perPageInput.addEventListener("change", () => {
   let value = Number.parseInt(perPageInput.value, 10);
   if (!Number.isFinite(value)) value = 21;
-  perPage = Math.max(1, Math.min(200, value));
+  perPage = Math.max(1, Math.min(50, value));
   perPageInput.value = String(perPage);
   currentPage = 1;
   clearImageCache();
