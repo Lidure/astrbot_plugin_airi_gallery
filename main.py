@@ -1384,7 +1384,8 @@ class Main(Star):
 
         scope_all = request.args.get("scope", "") == "all"
         category = request.args.get("category", "").strip()
-        sort_mode = request.args.get("sort", "time_desc").strip()
+        requested_sort = request.args.get("sort")
+        sort_mode = str(requested_sort or "index_asc").strip()
         try:
             page = max(1, int(request.args.get("page", 1)))
             per_page = max(1, min(50, int(request.args.get("per_page", 20))))
@@ -1423,10 +1424,14 @@ class Main(Star):
         ordered = sort_gallery_images(items, sort_mode)
         total = len(ordered)
         start = (page - 1) * per_page
-        images = [
-            {"name": path.name, "category": cat, "mtime": mtime}
-            for cat, path, mtime in ordered[start:start + per_page]
-        ]
+        if requested_sort is None and not scope_all:
+            # Preserve the original lightweight response for older WebUI clients.
+            images = [{"name": path.name} for _, path, _ in ordered[start:start + per_page]]
+        else:
+            images = [
+                {"name": path.name, "category": cat, "mtime": mtime}
+                for cat, path, mtime in ordered[start:start + per_page]
+            ]
         return jsonify({
             "images": images, "total": total, "page": page, "per_page": per_page,
             "category": category if not scope_all else "",
