@@ -6,12 +6,14 @@ import {
 } from './upload_transaction.mjs';
 import { createBase64UploadStream } from './blob_stream.mjs';
 import { manifestIndexToTree } from './manifest_tree.mjs';
+import { sortBrowseFiles } from './browse_sort.mjs';
 import { previewCloudMove, confirmCloudMove } from './move_transaction.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
 // ──────────────────────────────────────────────
 const LS_KEY = 'airi_gallery_cloud_config';
+const ALL_CATEGORY = '\u0000ALL';
 const IMAGE_SUFFIXES = new Set(['.bmp','.gif','.jpeg','.jpg','.jfif','.png','.tif','.tiff','.webp']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const CLOUD_PROXY_BLOB_THRESHOLD_BYTES = 4 * 1024 * 1024;
@@ -31,6 +33,7 @@ let state = {
   currentPage: 1,
   totalPages: 1,
   perPage: 21,
+  sortMode: 'time_desc',
   pendingFiles: [],
   shaCache: {},           // path -> sha
   treeFetched: false,
@@ -63,7 +66,7 @@ const upSel = $('up-sel'), upInput = $('up-input');
 const dropZone = $('drop'), fileInput = $('file'), previewEl = $('preview');
 const upActions = $('up-actions'), upBtn = $('up-btn'), upCount = $('up-count');
 const progressWrap = $('progress-wrap'), progressBar = $('progress-bar'), progressText = $('progress-text');
-const tabsEl = $('tabs'), gridEl = $('grid');
+const tabsEl = $('tabs'), gridEl = $('grid'), browseSort = $('browse-sort');
 const cloudMoveModeBtn = $('cloud-move-mode'), cloudMoveToolbar = $('cloud-move-toolbar');
 const cloudMoveCount = $('cloud-move-count'), cloudMovePage = $('cloud-move-page');
 const cloudMoveClear = $('cloud-move-clear'), cloudMoveOpen = $('cloud-move-open');
@@ -869,7 +872,8 @@ function getNextIndex() {
 // Cloud image moves: select, preview thumbnails, then atomic GitHub ref update.
 // ──────────────────────────────────────────────
 function cloudMoveAllowed() {
-  return config.platform === 'github' && canWrite() && state.connected;
+  // Moving across multiple source categories requires separate transactions.
+  return state.currentCat !== ALL_CATEGORY && config.platform === 'github' && canWrite() && state.connected;
 }
 function cloudMoveReset() {
   cloudMoveSelected.clear();
@@ -1216,8 +1220,10 @@ async function syncFromRemote({ force = false } = {}) {
       renderTabs();
       renderOptions();
       showMainUI(true);
-      if (state.categories.length && !state.currentCat) {
+      if (state.categories.length && (!state.currentCat ||
+          (state.currentCat !== ALL_CATEGORY && !state.categories.some(cat => cat.name === state.currentCat)))) {
         state.currentCat = state.categories[0].name;
+        state.currentPage = 1;
         renderTabs();
       }
       if (state.currentCat) await loadCategoryImages();
@@ -1251,7 +1257,7 @@ async function syncFromRemote({ force = false } = {}) {
 // UI: Tabs
 // ──────────────────────────────────────────────
 function renderTabs() {
-  tabsEl.innerHTML = '';
+  tabsEl.replaceChildren();
   if (!state.categories.length) {
     const empty = document.createElement('span');
     empty.className = 'tabs-empty';
@@ -1259,22 +1265,30 @@ function renderTabs() {
     tabsEl.appendChild(empty);
     return;
   }
-  for (const cat of state.categories) {
-    const t = document.createElement('div');
-    t.className = 'tab' + (cat.name === state.currentCat ? ' active' : '');
+
+  const totalImages = state.categories.reduce((sum, cat) => sum + cat.files.length, 0);
+  const options = [
+    { name: '全部', key: ALL_CATEGORY, count: totalImages },
+    ...state.categories.map(cat => ({ name: cat.name, key: cat.name, count: cat.files.length })),
+  ];
+  for (const cat of options) {
+    const t = document.createElement('button');
+    t.type = 'button';
+    t.className = 'tab' + (cat.key === state.currentCat ? ' active' : '');
+    t.setAttribute('aria-pressed', String(cat.key === state.currentCat));
     const catName = document.createElement('span');
     catName.textContent = cat.name;
     const count = document.createElement('span');
     count.className = 'count';
-    count.textContent = `(${cat.files.length})`;
+    count.textContent = `(${cat.count})`;
     t.append(catName, count);
     t.onclick = () => {
       if (cloudMoveBusy) return;
       cloudMoveReset();
-      state.currentCat = cat.name;
+      state.currentCat = cat.key;
       state.currentPage = 1;
       renderTabs();
-      loadCategoryImages();
+      void loadCategoryImages();
     };
     tabsEl.appendChild(t);
   }
@@ -1307,13 +1321,16 @@ async function hideDeletedPathImmediately(path) {
     .map(cat => ({ ...cat, files: cat.files.filter(file => file.path !== path) }))
     .filter(cat => cat.files.length > 0);
 
-  if (!state.categories.some(cat => cat.name === state.currentCat)) {
+  if (state.currentCat !== ALL_CATEGORY && !state.categories.some(cat => cat.name === state.currentCat)) {
     state.currentCat = state.categories[0]?.name || '';
     state.currentPage = 1;
   }
 
   const current = state.categories.find(cat => cat.name === state.currentCat);
-  const maxPage = Math.max(1, Math.ceil((current?.files.length || 0) / state.perPage));
+  const visibleCount = state.currentCat === ALL_CATEGORY
+    ? state.categories.reduce((sum, cat) => sum + cat.files.length, 0)
+    : (current?.files.length || 0);
+  const maxPage = Math.max(1, Math.ceil(visibleCount / state.perPage));
   state.currentPage = Math.min(state.currentPage, maxPage);
 
   const totalImages = state.categories.reduce((sum, cat) => sum + cat.files.length, 0);
@@ -1328,23 +1345,27 @@ async function hideDeletedPathImmediately(path) {
 // ──────────────────────────────────────────────
 async function loadCategoryImages() {
   const renderToken = ++state.imageRenderToken;
-  const cat = state.categories.find(c => c.name === state.currentCat);
+  const allMode = state.currentCat === ALL_CATEGORY;
+  const cat = allMode
+    ? { files: state.categories.flatMap(c => c.files) }
+    : state.categories.find(c => c.name === state.currentCat);
   if (!cat) {
     pruneImageCache(new Set());
     gridEl.innerHTML = '<div class="empty"><div class="icon">📂</div>选择一个分类查看图片</div>';
     return;
   }
 
-  const total = cat.files.length;
+  const sortedFiles = sortBrowseFiles(cat.files, state.sortMode);
+  const total = sortedFiles.length;
   state.totalPages = Math.max(1, Math.ceil(total / state.perPage));
   if (state.currentPage > state.totalPages) state.currentPage = state.totalPages;
 
   const start = (state.currentPage - 1) * state.perPage;
-  const pageFiles = cat.files.slice(start, start + state.perPage);
+  const pageFiles = sortedFiles.slice(start, start + state.perPage);
   pruneImageCache(new Set(pageFiles.map(file => file.path)));
 
   if (!pageFiles.length) {
-    gridEl.innerHTML = '<div class="empty"><div class="icon">🍃</div>该分类暂无图片</div>';
+    gridEl.innerHTML = '<div class="empty"><div class="icon">🍃</div>当前范围暂无图片</div>';
     renderPagination();
     return;
   }
@@ -1355,6 +1376,11 @@ async function loadCategoryImages() {
     div.className = 'grid-item';
     const fileName = file.path.split('/').pop();
     const idx = fileName.match(/^(\d+)/);
+    const categoryName = file.path.split('/')[1] || '';
+    const categoryBadge = document.createElement('span');
+    categoryBadge.className = 'category-chip';
+    categoryBadge.textContent = categoryName;
+    categoryBadge.title = `分类：${categoryName}`;
 
     // Placeholder
     const placeholder = document.createElement('div');
@@ -1387,6 +1413,7 @@ async function loadCategoryImages() {
     };
 
     div.appendChild(badge);
+    if (allMode) div.appendChild(categoryBadge);
     if (canWrite()) div.appendChild(del);
 
     const directUrl = config.platform === 'github' ? rawImageUrl(file) : '';
@@ -1417,12 +1444,14 @@ async function loadCategoryImages() {
           errorHint.textContent = '点击重试';
           errorBox.append(errorTitle, errorHint);
           div.append(errorBox, badge);
+          if (allMode) div.appendChild(categoryBadge);
           if (canWrite()) div.appendChild(del);
           addCloudMoveControls(div, file);
         });
       };
       div.appendChild(img);
       div.appendChild(badge);
+      if (allMode) div.appendChild(categoryBadge);
       if (canWrite()) div.appendChild(del);
     } else {
       // Load image via Contents API with concurrency pool & retry
@@ -1435,6 +1464,7 @@ async function loadCategoryImages() {
       img.src = blobUrl; img.loading = 'lazy';
       div.appendChild(img);
       div.appendChild(badge);
+      if (allMode) div.appendChild(categoryBadge);
       if (canWrite()) div.appendChild(del);
       addCloudMoveControls(div, file);
       })).catch((err) => {
@@ -1450,6 +1480,7 @@ async function loadCategoryImages() {
       errorHint.textContent = '点击重试';
       errorBox.append(errorTitle, errorHint);
       div.append(errorBox, badge);
+      if (allMode) div.appendChild(categoryBadge);
       if (canWrite()) div.appendChild(del);
       addCloudMoveControls(div, file);
       });
@@ -1506,6 +1537,11 @@ firstBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage = 1; l
 prevBtn.onclick = () => { if (state.currentPage > 1) { state.currentPage--; loadCategoryImages(); } };
 nextBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage++; loadCategoryImages(); } };
 lastBtn.onclick = () => { if (state.currentPage < state.totalPages) { state.currentPage = state.totalPages; loadCategoryImages(); } };
+browseSort.onchange = () => {
+  state.sortMode = browseSort.value;
+  state.currentPage = 1;
+  void loadCategoryImages();
+};
 perPageInput.onchange = () => {
   let v = parseInt(perPageInput.value);
   if (isNaN(v) || v < 1) v = 21;
