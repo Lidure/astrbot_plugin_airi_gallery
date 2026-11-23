@@ -132,6 +132,7 @@ def test_registered_command_handlers_do_not_upgrade_chat_to_slash(handler, messa
     seen = []
     plugin = SimpleNamespace(
         _strip_at_prefix=lambda raw: raw,
+        _event_gallery_command_text=lambda event: event.message_str,
         _parse_action=lambda raw: seen.append(raw) or None,
     )
     event = SimpleNamespace(message_str=message)
