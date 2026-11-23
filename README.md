@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.5-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.6-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.6
+- **QQ / AstrBot 管理员分类删除命令**：`/删除分类 分类名` 检查真实目录。空分类立即删除；非空分类展示图片数量和风险，在 **5 分钟内**由原管理员在原会话中发送 `/确认删除分类 完整分类名` 才会执行。发送 `/取消删除分类` 可取消待确认操作；同一账号在其它群或私聊不能越权确认。
+- **权限与防误触**：使用 AstrBot `PermissionType.ADMIN` 检查和命令内部二次身份验证，**不受画廊的 `use_permission=false` 配置影响**。仅识别带 `/` 的原始消息，防止唤醒阶段剥离斜杠后将普通聊天当成删除命令；输入的是**真实分类名称，不是分类昵称**。
+- **事务安全**：复用 v2.12.5 的预览票据、文件哈希复核、本地/远端一致性检查与 GitHub 原子删除，不提供绕过 Gitee 非空分类删除限制的路径。确认前取消或超时不会删除任何图片；管理员权限无法识别时直接拒绝。
+
 ### v2.12.5
 - **分类删除**：本地 AstrBot 插件 WebUI 新增“删除分类”。空分类直接删除；非空分类先显示图片数量，再输入完整分类名确认，预览票据 5 分钟有效。删除前再次检查图片内容，防止期间上传或修改造成误删。
 - **GitHub 原子删除**：当同步开启且使用 GitHub 时，非空分类与对应感知索引在同一个非强制 Git Commit 中删除；远端内容不一致、GitHub HEAD 变化或失败时保留本地文件并提示核对。Gitee 的非空批量删除暂不开放，避免逐文件删除后部分失败。
