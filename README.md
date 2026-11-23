@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.4-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.5-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.5
+- **分类删除**：本地 AstrBot 插件 WebUI 新增“删除分类”。空分类直接删除；非空分类先显示图片数量，再输入完整分类名确认，预览票据 5 分钟有效。删除前再次检查图片内容，防止期间上传或修改造成误删。
+- **GitHub 原子删除**：当同步开启且使用 GitHub 时，非空分类与对应感知索引在同一个非强制 Git Commit 中删除；远端内容不一致、GitHub HEAD 变化或失败时保留本地文件并提示核对。Gitee 的非空批量删除暂不开放，避免逐文件删除后部分失败。
+- **云端画廊**：GitHub 写入模式同样支持删除分类，预览后输入完整分类名二次确认，使用单次原子提交更新远程感知索引；只读或 Gitee 模式不提供入口。Git 不保存空目录，云端不会显示纯本地空分类。
+- **安全边界**：拒绝删除 generated、链接目录、含非图片文件或子目录的分类，保留其它分类、昵称与管理员配置。提供本地/云端故障、过期、重复确认和一致性回归测试。
+
 ### v2.12.4
 - **修复“看命令前缀”模式下的浏览无响应**：AstrBot 使用 `/` 作为唤醒前缀时，会先从 `event.message_str` 剥离 `/`。画廊现优先从未修改的 `event.message_obj.message_str` 识别用户实际输入的斜杠命令，兼容普通群友、管理员与 `@Bot /看看分类`。原有前缀模式规则不变：必须明确输入 `/`，未带斜杠的正常聊天不会误触发。
 - **覆盖多种浏览形式**：`/看看爱莉`、`/看全部爱莉`、`/看看123`、`/看看爱莉 2`、`/看随机图片 2`、`/看最近`；补充成员/管理员一致性和误触发回归测试，不更改上传/删除权限配置。
