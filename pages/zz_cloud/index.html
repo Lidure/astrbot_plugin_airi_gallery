@@ -103,6 +103,7 @@
     <div class="tabs" id="tabs"></div>
     <div class="grid-toolbar">
       <button class="btn btn-sm btn-ghost is-hidden" id="cloud-move-mode" type="button" aria-pressed="false">批量移动</button>
+      <button class="btn btn-sm btn-ghost is-hidden" id="cloud-delete-category-btn" type="button">删除分类</button>
       <label for="browse-sort">排序</label>
       <select id="browse-sort" class="input-sm" aria-label="图片排序方式">
         <option value="time_desc">时间倒序（按编号近似）</option>
@@ -141,6 +142,23 @@
       <p class="welcome-copy">点击右上角 ⚙️ 配置你的 GitHub/Gitee 仓库信息，<br>即可随时随地通过网页管理图库。</p>
     </div>
   </div>
+</div>
+
+<!-- Cloud category delete: one preview + explicit typed confirmation -->
+<div id="cloud-delete-category-mask" class="cloud-move-mask is-hidden" role="dialog" aria-modal="true" aria-labelledby="cloud-delete-category-title">
+  <section class="cloud-move-dialog">
+    <h2 id="cloud-delete-category-title">确认删除整个分类</h2>
+    <p id="cloud-delete-category-summary" class="hint"></p>
+    <p class="hint">将从 GitHub 一次性删除该分类下的全部图片并更新感知索引。删除后无法在画廊中直接恢复；如需恢复，请使用 Git 历史。</p>
+    <div class="field">
+      <label class="field-label" for="cloud-delete-category-name">输入完整分类名以确认删除</label>
+      <input type="text" id="cloud-delete-category-name" autocomplete="off" spellcheck="false" maxlength="100" />
+    </div>
+    <div class="cloud-move-actions">
+      <button id="cloud-delete-category-cancel" class="btn btn-ghost" type="button">取消</button>
+      <button id="cloud-delete-category-confirm" class="btn btn-pink" type="button" disabled>确认永久删除</button>
+    </div>
+  </section>
 </div>
 
 <!-- Cloud gallery move dialog: read-only preview, then one atomic GitHub commit -->
