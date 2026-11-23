@@ -227,6 +227,8 @@ class GalleryCategoryDeletion:
             for path in expected_paths:
                 if not isinstance(files.get(path), dict):
                     raise ValueError("待删除图片在索引中缺失")
+            if {p for p in files if str(p).startswith(prefix)} != set(expected_paths):
+                raise ValueError("分类索引中有多余或缺失的图片记录")
             files = dict(files)
             for path in expected_paths:
                 files.pop(path)
