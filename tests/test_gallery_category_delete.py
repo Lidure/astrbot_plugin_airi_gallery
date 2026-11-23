@@ -246,3 +246,24 @@ def test_expired_preview_requires_new_ticket(state):
     time_value[0] = 405.
     assert "过期" in engine.confirm("admin", plan["ticket"], "miku")["error"]
     assert (root / "miku").exists()
+
+
+def test_cancel_preview_is_bound_to_actor_and_prevents_deletion(state):
+    root, store, sync, remote, engine = state
+    plan = engine.preview("first-admin", "miku")
+    assert plan["ok"] and plan["count"] == 1
+    assert not engine.cancel("second-admin", plan["ticket"])
+    assert (root / "miku" / "13.png").exists()
+    assert engine.cancel("first-admin", plan["ticket"])
+    assert not engine.confirm("first-admin", plan["ticket"], "miku")["ok"]
+    assert (root / "miku" / "13.png").exists()
+    assert not engine.cancel("first-admin", plan["ticket"])
+
+
+def test_empty_category_can_be_cancelled_before_commit(state):
+    root, store, sync, remote, engine = state
+    plan = engine.preview("admin", "airi")
+    assert plan["empty"]
+    assert engine.cancel("admin", plan["ticket"])
+    assert not engine.confirm("admin", plan["ticket"])["ok"]
+    assert (root / "airi").exists()

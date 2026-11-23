@@ -22,6 +22,13 @@ def _load_main(monkeypatch, tmp_path):
         class EventMessageType:
             ALL = object()
 
+        class PermissionType:
+            ADMIN = object()
+
+        @staticmethod
+        def permission_type(*_args, **_kwargs):
+            return lambda fn: fn
+
         @staticmethod
         def event_message_type(*_args, **_kwargs):
             return lambda fn: fn
