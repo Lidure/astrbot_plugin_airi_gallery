@@ -233,6 +233,8 @@ def main_module(monkeypatch):
 
     class FilterStub:
         EventMessageType = types.SimpleNamespace(ALL="all")
+        PermissionType = types.SimpleNamespace(ADMIN="admin")
+        permission_type = staticmethod(_identity_decorator)
         command = staticmethod(_identity_decorator)
         regex = staticmethod(_identity_decorator)
         event_message_type = staticmethod(_identity_decorator)
