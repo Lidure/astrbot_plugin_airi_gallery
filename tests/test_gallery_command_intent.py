@@ -12,6 +12,7 @@ from gallery_commands import (
     match_view_command,
     match_view_all_command,
     parse_view_target,
+    parse_delete_command,
     sanitize_component,
     should_handle_gallery_category_view,
 )
@@ -66,6 +67,7 @@ def compile_main_methods(*names):
         "DEFAULT_CATEGORY": "default",
         "_sanitize_component": sanitize_component,
         "_parse_gallery_view_target": parse_view_target,
+        "_parse_gallery_delete_command": parse_delete_command,
         "_should_handle_gallery_category_view": should_handle_gallery_category_view,
     }
     exec(compile(module, "main.py", "exec", flags=__future__.annotations.compiler_flag), scope)
