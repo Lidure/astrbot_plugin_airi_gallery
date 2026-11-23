@@ -153,6 +153,11 @@ except ImportError:
     from gallery_migration import GalleryMigration, parse_migration_request
 
 try:
+    from .gallery_category_delete import GalleryCategoryDeletion
+except ImportError:
+    from gallery_category_delete import GalleryCategoryDeletion
+
+try:
     from .gallery_web_migration import GalleryWebMigration
 except ImportError:
     from gallery_web_migration import GalleryWebMigration
@@ -534,6 +539,7 @@ class Main(Star):
         )
         self.migration = GalleryMigration(self.store, self.sync, self.remote)
         self.web_migration = GalleryWebMigration(self.migration, self.sync)
+        self.category_deletion = GalleryCategoryDeletion(self.store, self.sync, self.remote)
         self._migration_previews: dict[str, dict] = {}
         self._migration_preview_lock = threading.RLock()
         self.diagnostics = GalleryDiagnostics(
@@ -582,6 +588,12 @@ class Main(Star):
             self._api_category_images,
             ["GET"],
             "Get images in category",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/delete_category",
+            self._api_delete_category,
+            ["POST"],
+            "Preview and confirm safe category deletion",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/upload",
@@ -1387,6 +1399,28 @@ class Main(Star):
                 key=lambda s: s.lower(),
             )
         return jsonify({"categories": cats})
+
+    async def _api_delete_category(self):
+        from quart import request, jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        body = await request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "JSON 参数无效"}), 400
+        action = body.get("action")
+        if action == "preview":
+            result = await asyncio.to_thread(
+                self.category_deletion.preview, actor, body.get("category")
+            )
+        elif action == "confirm":
+            result = await asyncio.to_thread(
+                self.category_deletion.confirm, actor,
+                body.get("ticket"), body.get("confirm_name", "")
+            )
+        else:
+            return jsonify({"ok": False, "error": "无效的分类删除操作"}), 400
+        return jsonify(result)
 
     async def _api_category_images(self):
         from quart import request, jsonify
