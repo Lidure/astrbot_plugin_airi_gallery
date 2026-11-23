@@ -191,6 +191,7 @@ def test_registered_random_handler_preserves_raw_command_text():
     seen = []
     stub = SimpleNamespace(
         _strip_at_prefix=lambda text: text,
+        _event_gallery_command_text=lambda event: event.message_str,
         _parse_action=lambda text: seen.append(text) or None,
     )
     event = SimpleNamespace(message_str="看随机图片")

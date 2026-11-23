@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.3-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.4-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,10 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.4
+- **修复“看命令前缀”模式下的浏览无响应**：AstrBot 使用 `/` 作为唤醒前缀时，会先从 `event.message_str` 剥离 `/`。画廊现优先从未修改的 `event.message_obj.message_str` 识别用户实际输入的斜杠命令，兼容普通群友、管理员与 `@Bot /看看分类`。原有前缀模式规则不变：必须明确输入 `/`，未带斜杠的正常聊天不会误触发。
+- **覆盖多种浏览形式**：`/看看爱莉`、`/看全部爱莉`、`/看看123`、`/看看爱莉 2`、`/看随机图片 2`、`/看最近`；补充成员/管理员一致性和误触发回归测试，不更改上传/删除权限配置。
+
 ### v2.12.3
 - **图库「全部」标签**：AstrBot 插件 WebUI 与云端 Pages 均增加「全部」，可统一浏览跨分类图片、分页并标注每张图片所属分类；仍可切换到单一分类。全部视图允许查看/单图删除，不提供跨来源批量移动，需回到具体分类操作。
 - **全局排序**：两个页面新增时间倒序、时间正序、编号升降序及文件名排序；排序在分页之前完成，切换排序自动回到第 1 页。插件 WebUI 使用服务器本地文件修改时间（重新同步可能改变该时间）；GitHub/Gitee 文件树没有逐图时间，云端将“时间”明确标记为**按全局数字编号近似**，不伪称真实上传日期。

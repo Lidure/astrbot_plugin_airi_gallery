@@ -266,7 +266,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.12.3"
+CURRENT_PLUGIN_VERSION = "v2.12.4"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -654,14 +654,25 @@ class Main(Star):
 
         await self.diagnostics.stop_background()
 
+    def _event_gallery_command_text(self, event: AstrMessageEvent) -> str:
+        """Use the real user-entered / even after AstrBot strips wake prefixes.
+
+        AstrBot's WakingCheck consumes the '/' wake prefix from
+        event.message_str before plugin handlers run. Prefix-only gallery
+        commands must inspect the preserved event.message_obj.message_str.
+        Never synthesize '/' for ordinary chat or @Bot messages.
+        """
+        processed = self._strip_at_prefix((event.message_str or "").strip())
+        raw = getattr(getattr(event, "message_obj", None), "message_str", None)
+        if isinstance(raw, str):
+            original = self._strip_at_prefix(raw.strip())
+            if original.startswith("/"):
+                return original
+        return processed
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1)
     async def handle_gallery_message(self, event: AstrMessageEvent):
-        text = (event.message_str or "").strip()
-        if not text:
-            return
-
-        # 去掉回复/@bot 时自动附加的前缀，确保正则 ^/命令 能正确匹配
-        text = self._strip_at_prefix(text)
+        text = self._event_gallery_command_text(event)
         if not text:
             return
 
@@ -808,7 +819,7 @@ class Main(Star):
     async def cmd_look(self, event: AstrMessageEvent):
         """兼容性的展示命令占位，用于在 AstrBot 命令列表中显示 `/看看` 前缀形式。"""
         # 使用原始消息解析，避免将普通聊天自动补成 '/看看' 命令。
-        text = self._strip_at_prefix((event.message_str or "").strip())
+        text = self._event_gallery_command_text(event)
         action = self._parse_action(text)
         if action and action[0] == "view_category":
             await self._handle_view_category(event, str(action[1]))
@@ -816,7 +827,7 @@ class Main(Star):
     @filter.command("看随机图片")
     async def cmd_random_category_images(self, event: AstrMessageEvent):
         """只从分类名含「图片」的分类中随机看图，沿用看图前缀模式。"""
-        text = self._strip_at_prefix((event.message_str or "").strip())
+        text = self._event_gallery_command_text(event)
         action = self._parse_action(text)
         if action and action[0] == "random_category_images":
             await self._handle_random_category_images(event, int(action[1]))
@@ -1300,7 +1311,7 @@ class Main(Star):
     @filter.command("看全部")
     async def cmd_view_all(self, event: AstrMessageEvent):
         """注册 `/看全部` 命令并展示分类总览（需要带参数）。"""
-        text = self._strip_at_prefix((event.message_str or "").strip())
+        text = self._event_gallery_command_text(event)
         action = self._parse_action(text)
         if action and action[0] == "view_all_category":
             await self._handle_view_all_category(event, str(action[1]))
