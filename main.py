@@ -73,6 +73,7 @@ try:
     from .gallery_commands import (
         build_category_card_entry as _build_category_card_entry,
         match_view_all_command as _match_gallery_view_all_command,
+        parse_delete_command as _parse_gallery_delete_command,
         match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
         parse_aliases as _parse_gallery_aliases,
@@ -87,6 +88,7 @@ except ImportError:
     from gallery_commands import (
         build_category_card_entry as _build_category_card_entry,
         match_view_all_command as _match_gallery_view_all_command,
+        parse_delete_command as _parse_gallery_delete_command,
         match_view_command as _match_gallery_view_command,
         normalize_match_text as _normalize_gallery_match_text,
         parse_aliases as _parse_gallery_aliases,
@@ -799,6 +801,8 @@ class Main(Star):
                         await event.send(event.plain_result(f"已清理全局重复图片 {removed} 张。"))
                     if details:
                         await event.send(event.plain_result("示例删除：" + "，".join(details[:5])))
+            elif kind == "delete_invalid":
+                await event.send(event.plain_result("格式：/删除123 或 /删除 123 456（仅支持数字编号）"))
             elif kind == "delete":
                 if not self._is_allowed(event):
                     await event.send(event.plain_result("没有权限执行此操作。"))
@@ -947,14 +951,28 @@ class Main(Star):
 
     @filter.command("删除")
     async def cmd_delete(self, event: AstrMessageEvent):
-        """注册 `/删除` 命令显示在命令列表并删除指定编号图片。"""
-        text = self._normalize_command_text(event, "删除")
+        """Handle only an explicit slash delete command, never LLM chat."""
+        # WakingCheck removes '/' from event.message_str but preserves the raw
+        # message in message_obj.message_str. Never invent a slash here.
+        text = self._event_gallery_command_text(event)
+        if not text.startswith("/"):
+            return
         action = self._parse_action(text)
-        if action and action[0] == "delete":
-            if not self._is_allowed(event):
+        if not action or action[0] not in {"delete", "delete_invalid"}:
+            return
+        try:
+            if action[0] == "delete_invalid":
+                await event.send(event.plain_result(
+                    "格式：/删除123 或 /删除 123 456（仅支持数字编号）"
+                ))
+            elif not self._is_allowed(event):
                 await event.send(event.plain_result("没有权限执行此操作。"))
             else:
                 await self._handle_delete(event, action[1])
+        finally:
+            # A recognized command must not fall through to the LLM, even if
+            # the parameters were rejected or a handler failed.
+            event.stop_event()
 
     @staticmethod
     def _chat_category_delete_arg(event: AstrMessageEvent, command: str) -> str | None:
@@ -2932,7 +2950,7 @@ class Main(Star):
 
         create_match = re.match(r"^/创建\s*(.+)$", normalized)
         upload_match = re.match(r"^/上传\s*(.+)$", normalized)
-        delete_match = re.match(r"^/删除\s*(.+)$", normalized)
+        delete_action = _parse_gallery_delete_command(normalized)
 
         if create_match:
             target = create_match.group(1).strip()
@@ -2945,11 +2963,8 @@ class Main(Star):
             category = parts[0] if parts else DEFAULT_CATEGORY
             return "upload", _sanitize_component(self._resolve_alias(category))
 
-        if delete_match:
-            numbers = [int(item) for item in delete_match.group(1).split() if item.isdigit()]
-            if numbers:
-                return "delete", numbers
-            return None
+        if delete_action is not None:
+            return delete_action
 
         # /看最近上传 或 /看最近上传 N（兼容无前缀）
         recent_match = re.match(r"^(?:/)?看最近上传(?:\s+(\d+))?$", normalized)
