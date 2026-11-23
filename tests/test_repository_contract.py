@@ -90,7 +90,7 @@ def test_release_version_is_current_everywhere():
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
     version = metadata["version"]
-    assert re.fullmatch(r"v\\d+\\.\\d+\\.\\d+", version)
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", version)
     assert badge == version
     assert changelog == version
     assert f'CURRENT_PLUGIN_VERSION = "{version}"' in main_source
