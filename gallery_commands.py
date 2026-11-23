@@ -48,7 +48,7 @@ def parse_delete_command(text: str) -> tuple[str, list[int]] | None:
         return "delete_invalid", []
     # Also support the documented compact form `/删除123`.
     # Require a command boundary; `/删除分类 123` must not delete image 123.
-    if re.match(r"^/删除(?=[ \t0-9])", normalized) is None:
+    if re.match(r"^/删除(?=[\s\d])", normalized) is None:
         return None
     tail = normalized[len("/删除"):].strip()
     if re.fullmatch(r"[0-9]+(?:[ \t]+[0-9]+)*", tail) is None:
