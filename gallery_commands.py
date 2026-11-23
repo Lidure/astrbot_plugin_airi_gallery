@@ -36,6 +36,26 @@ def replace_command_aliases(
     return text
 
 
+
+def parse_delete_command(text: str) -> tuple[str, list[int]] | None:
+    """Parse `/删除` picture IDs without swallowing `/删除分类` commands.
+
+    Explicit delete commands with invalid arguments are still consumed by the
+    plugin, so AstrBot's '/' LLM wake prefix cannot turn them into chat.
+    """
+    normalized = text.strip()
+    if normalized == "/删除":
+        return "delete_invalid", []
+    # Also support the documented compact form `/删除123`.
+    # Require a command boundary; `/删除分类 123` must not delete image 123.
+    if re.match(r"^/删除(?=[ \t0-9])", normalized) is None:
+        return None
+    tail = normalized[len("/删除"):].strip()
+    if re.fullmatch(r"[0-9]+(?:[ \t]+[0-9]+)*", tail) is None:
+        return "delete_invalid", []
+    return "delete", [int(part) for part in tail.split()]
+
+
 def parse_aliases(entries: Sequence[str]) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for entry in entries:
