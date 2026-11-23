@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.6-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.7-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -415,6 +415,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.7
+- **修复 `/删除` 误唤醒 LLM**：当 AstrBot 使用 `/` 作为 LLM 唤醒前缀时，`/删除`、`/删除 abc`、`/删除 123 abc` 等无效格式会由画廊回复正确用法并终止事件传播，不再作为普通聊天交给 LLM；权限拒绝和删除异常同样阻止 LLM 继续回复。
+- **严格区分图片与分类删除**：`/删除123`、`/删除 123 456` 仍可正常使用；`/删除分类 123`、`/确认删除分类 ...` 等分类管理命令不再被图片删除解析器误判，禁止混合数字和文字参数导致部分删除。
+- **回归测试**：覆盖原始斜杠前缀恢复、非法参数、命令边界、权限拒绝及异常停止传播；不改变原有权限配置或同步策略。
+
 ### v2.12.6
 - **QQ / AstrBot 管理员分类删除命令**：`/删除分类 分类名` 检查真实目录。空分类立即删除；非空分类展示图片数量和风险，在 **5 分钟内**由原管理员在原会话中发送 `/确认删除分类 完整分类名` 才会执行。发送 `/取消删除分类` 可取消待确认操作；同一账号在其它群或私聊不能越权确认。
 - **权限与防误触**：使用 AstrBot `PermissionType.ADMIN` 检查和命令内部二次身份验证，**不受画廊的 `use_permission=false` 配置影响**。仅识别带 `/` 的原始消息，防止唤醒阶段剥离斜杠后将普通聊天当成删除命令；输入的是**真实分类名称，不是分类昵称**。
