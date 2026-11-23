@@ -70,6 +70,7 @@
           </div>
           <div class="gallery-tools">
             <button class="btn btn-quiet btn-small" id="move-mode-btn" type="button" aria-pressed="false">批量移动</button>
+            <button class="btn btn-quiet btn-small" id="delete-category-btn" type="button" hidden>删除分类</button>
             <div class="browse-sort-field">
               <label for="browse-sort">排序</label>
               <select id="browse-sort" aria-label="图片排序方式">
@@ -199,6 +200,22 @@
       <div class="move-dialog-actions">
         <button id="move-cancel" class="btn btn-quiet" type="button">取消</button>
         <button id="move-continue" class="btn btn-primary" type="button">预览迁移</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="move-mask" id="delete-category-mask" role="dialog" aria-modal="true" aria-labelledby="delete-category-title" hidden>
+    <section class="move-dialog">
+      <h2 id="delete-category-title">确认删除非空分类</h2>
+      <p id="delete-category-summary" class="move-description"></p>
+      <p class="move-preview-hint">该操作将删除分类下的所有图片。开启 GitHub 同步时，还会在同一个 Git 提交中移除远端分类图片和更新索引。请确认没有其他上传任务正在进行。</p>
+      <div class="field">
+        <label for="delete-category-name">输入完整分类名以确认删除</label>
+        <input id="delete-category-name" type="text" autocomplete="off" maxlength="100" spellcheck="false" />
+      </div>
+      <div class="move-dialog-actions">
+        <button class="btn btn-quiet" id="delete-category-cancel" type="button">取消</button>
+        <button class="btn btn-primary" id="delete-category-confirm" type="button" disabled>确认永久删除</button>
       </div>
     </section>
   </div>
