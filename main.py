@@ -158,6 +158,11 @@ except ImportError:
     from gallery_category_delete import GalleryCategoryDeletion
 
 try:
+    from .gallery_chat_category_delete import GalleryChatCategoryDelete
+except ImportError:
+    from gallery_chat_category_delete import GalleryChatCategoryDelete
+
+try:
     from .gallery_web_migration import GalleryWebMigration
 except ImportError:
     from gallery_web_migration import GalleryWebMigration
@@ -540,6 +545,7 @@ class Main(Star):
         self.migration = GalleryMigration(self.store, self.sync, self.remote)
         self.web_migration = GalleryWebMigration(self.migration, self.sync)
         self.category_deletion = GalleryCategoryDeletion(self.store, self.sync, self.remote)
+        self.chat_category_delete = GalleryChatCategoryDelete(self.category_deletion)
         self._migration_previews: dict[str, dict] = {}
         self._migration_preview_lock = threading.RLock()
         self.diagnostics = GalleryDiagnostics(
@@ -949,6 +955,121 @@ class Main(Star):
                 await event.send(event.plain_result("没有权限执行此操作。"))
             else:
                 await self._handle_delete(event, action[1])
+
+    @staticmethod
+    def _chat_category_delete_arg(event: AstrMessageEvent, command: str) -> str | None:
+        """Parse only a literal / command from the original, pre-wake message.
+
+        WakingCheck consumes '/' in event.message_str, so don't infer slash
+        from processed text: that could turn ordinary chat into a deletion.
+        """
+        original = getattr(getattr(event, "message_obj", None), "message_str", None)
+        if not isinstance(original, str):
+            return None
+        original = _strip_gallery_at_prefix(original.strip())
+        match = re.fullmatch(
+            rf"/{re.escape(command)}(?:[ \\t]+([^\\r\\n]*))?", original
+        )
+        return match.group(1).strip() if match and match.group(1) else (
+            "" if match else None
+        )
+
+    @staticmethod
+    def _chat_category_delete_actor(event: AstrMessageEvent) -> str | None:
+        """Bind a pending deletion to the real AstrBot admin, bot and chat."""
+        try:
+            if not event.is_admin():
+                return None
+            platform = str(event.get_platform_name() or "").strip()
+            bot = str(event.get_self_id() or "").strip()
+            group = str(event.get_group_id() or "private").strip()
+            sender = str(event.get_sender_id() or "").strip()
+            if not platform or not bot or not sender:
+                return None
+            return f"chat:{platform}|{bot}|{group}|{sender}"
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    @filter.command("删除分类")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_delete_category(self, event: AstrMessageEvent):
+        """Admin-only: delete empty categories, or preview non-empty ones."""
+        category = self._chat_category_delete_arg(event, "删除分类")
+        if category is None:
+            return
+        actor = self._chat_category_delete_actor(event)
+        if actor is None:
+            await event.send(event.plain_result("仅 AstrBot 管理员可以删除画廊分类。"))
+            return
+        if not category:
+            await event.send(event.plain_result("格式：/删除分类 分类名（请填写真实分类名，不是昵称）"))
+            return
+        result = await asyncio.to_thread(self.chat_category_delete.start, actor, category)
+        if not result.get("ok"):
+            await event.send(event.plain_result(
+                "删除分类预览失败：" + str(result.get("error", "未知错误"))
+            ))
+        elif result.get("pending"):
+            await event.send(event.plain_result(
+                f"⚠️ 分类「{result['category']}」共有 {result['count']} 张图片。"
+                "确定后将删除该分类及全部图片"
+                + ("，并同步更新 GitHub 索引。" if result.get("remote") else "。")
+                + f"\\n请在 5 分钟内发送：/确认删除分类 {result['category']}"
+                + "\\n如需放弃，发送：/取消删除分类"
+            ))
+        else:
+            await event.send(event.plain_result(
+                f"已删除空分类「{result['category']}」，其余图片未受影响。"
+            ))
+
+    @filter.command("确认删除分类")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_confirm_delete_category(self, event: AstrMessageEvent):
+        """Admin-only: execute a confirmed, same-session category deletion."""
+        category = self._chat_category_delete_arg(event, "确认删除分类")
+        if category is None:
+            return
+        actor = self._chat_category_delete_actor(event)
+        if actor is None:
+            await event.send(event.plain_result("仅 AstrBot 管理员可以确认删除。"))
+            return
+        if not category:
+            await event.send(event.plain_result("格式：/确认删除分类 完整分类名"))
+            return
+        result = await asyncio.to_thread(self.chat_category_delete.confirm, actor, category)
+        if result.get("ok"):
+            await event.send(event.plain_result(
+                f"已删除分类「{result['category']}」及其 {result['deleted']} 张图片。"
+                + (" GitHub 索引已同步更新。" if result.get("remote") else "")
+            ))
+        else:
+            await event.send(event.plain_result(
+                "删除分类未执行：" + str(result.get("error", "未知错误"))
+            ))
+
+    @filter.command("取消删除分类")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def cmd_cancel_delete_category(self, event: AstrMessageEvent):
+        """Admin-only: revoke this chat actor's pending deletion."""
+        tail = self._chat_category_delete_arg(event, "取消删除分类")
+        if tail is None:
+            return
+        actor = self._chat_category_delete_actor(event)
+        if actor is None:
+            await event.send(event.plain_result("仅 AstrBot 管理员可以取消删除。"))
+            return
+        if tail:
+            await event.send(event.plain_result("格式：/取消删除分类（无需追加分类名）"))
+            return
+        result = await asyncio.to_thread(self.chat_category_delete.cancel, actor)
+        if result.get("ok"):
+            await event.send(event.plain_result(
+                f"已取消删除分类「{result['category']}」，所有图片均已保留。"
+            ))
+        else:
+            await event.send(event.plain_result(
+                str(result.get("error", "没有待取消的分类删除"))
+            ))
 
     @filter.command("看最近上传")
     async def cmd_view_recent(self, event: AstrMessageEvent):
