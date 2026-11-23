@@ -46,6 +46,8 @@ let moveDialogState = null;
 let movePreviewGallery = null;
 let moveThumbReturnFocus = null;
 let moveBusy = false;
+let categoryDeletePlan = null;
+let categoryDeleteBusy = false;
 const moveSelection = new MoveSelection(50);
 let activeView = "gallery";
 let aliases = [];
@@ -100,6 +102,12 @@ const aliasReloadBtn = $("alias-reload-btn");
 const aliasSummary = $("alias-summary");
 const aliasDirtyState = $("alias-dirty-state");
 const moveModeBtn = $("move-mode-btn");
+const deleteCategoryBtn = $("delete-category-btn");
+const deleteCategoryMask = $("delete-category-mask");
+const deleteCategorySummary = $("delete-category-summary");
+const deleteCategoryName = $("delete-category-name");
+const deleteCategoryCancel = $("delete-category-cancel");
+const deleteCategoryConfirm = $("delete-category-confirm");
 const moveToolbar = $("move-toolbar");
 const moveCount = $("move-selected-count");
 const moveSelectPage = $("move-select-page");
@@ -553,6 +561,99 @@ moveContinue.addEventListener("click", async () => {
   } finally { setMoveDialogBusy(false); }
 });
 
+async function finishCategoryDeletion(plan) {
+  if (!plan?.ticket) return;
+  const result = await apiPost("delete_category", {
+    action: "confirm", ticket: plan.ticket,
+    confirm_name: plan.empty ? "" : plan.category,
+  });
+  if (!result?.ok) throw new Error(result?.error || "删除分类失败");
+  clearImageCache(plan.category);
+  clearImageCache(ALL_CATEGORY);
+  if (currentCat === plan.category) currentCat = ALL_CATEGORY;
+  currentPage = 1;
+  moveMode = false;
+  moveSelection.reset("");
+  await loadCats();
+  await loadImgs();
+  updateMoveSelectionUI();
+  showMsg(`已删除分类「${plan.category}」` + (result.deleted ? `，移除 ${result.deleted} 张图片` : "（空分类）"));
+}
+
+function closeCategoryDeleteDialog() {
+  deleteCategoryMask.hidden = true;
+  categoryDeletePlan = null;
+  deleteCategoryName.value = "";
+  deleteCategoryConfirm.disabled = true;
+  deleteCategoryBtn.focus();
+}
+
+deleteCategoryBtn.addEventListener("click", async () => {
+  if (!categories.includes(currentCat) || currentCat === ALL_CATEGORY || categoryDeleteBusy || moveBusy) return;
+  categoryDeleteBusy = true;
+  deleteCategoryBtn.disabled = true;
+  try {
+    const plan = await apiPost("delete_category", { action: "preview", category: currentCat });
+    if (!plan?.ok) throw new Error(plan?.error || "无法检查分类");
+    if (plan.empty) {
+      await finishCategoryDeletion(plan);
+    } else {
+      categoryDeletePlan = plan;
+      deleteCategorySummary.textContent = `分类「${plan.category}」中有 ${plan.count} 张图片。删除后这些图片将从${plan.remote ? "本地和 GitHub" : "本地"}移除，不能在页面上直接恢复。`;
+      deleteCategoryName.value = "";
+      deleteCategoryName.placeholder = plan.category;
+      deleteCategoryConfirm.disabled = true;
+      deleteCategoryMask.hidden = false;
+      deleteCategoryName.focus();
+    }
+  } catch (error) {
+    showMsg(error.message || "删除分类失败", false);
+  } finally {
+    categoryDeleteBusy = false;
+    renderTabs();
+  }
+});
+deleteCategoryName.addEventListener("input", () => {
+  deleteCategoryConfirm.disabled = !categoryDeletePlan
+    || deleteCategoryName.value !== categoryDeletePlan.category || categoryDeleteBusy;
+});
+deleteCategoryCancel.addEventListener("click", closeCategoryDeleteDialog);
+deleteCategoryConfirm.addEventListener("click", async () => {
+  if (!categoryDeletePlan || deleteCategoryBusy
+    || deleteCategoryName.value !== categoryDeletePlan.category) return;
+  const plan = categoryDeletePlan;
+  categoryDeleteBusy = true;
+  deleteCategoryConfirm.disabled = true;
+  deleteCategoryCancel.disabled = true;
+  try {
+    const response = await apiPost("delete_category", {
+      action: "confirm", ticket: plan.ticket, confirm_name: deleteCategoryName.value,
+    });
+    if (!response?.ok) throw new Error(response?.error || "删除分类失败");
+    // Avoid consuming the same ticket a second time; refresh UI after success.
+    categoryDeletePlan = null;
+    deleteCategoryMask.hidden = true;
+    clearImageCache(plan.category);
+    clearImageCache(ALL_CATEGORY);
+    if (currentCat === plan.category) currentCat = ALL_CATEGORY;
+    moveMode = false;
+    moveSelection.reset("");
+    currentPage = 1;
+    await loadCats();
+    await loadImgs();
+    updateMoveSelectionUI();
+    showMsg(`已删除分类「${plan.category}」，共 ${response.deleted} 张图片`);
+  } catch (error) {
+    categoryDeletePlan = null;
+    deleteCategoryMask.hidden = true;
+    showMsg(error.message || "删除分类失败，请重新检查分类", false);
+  } finally {
+    categoryDeleteBusy = false;
+    deleteCategoryCancel.disabled = false;
+    renderTabs();
+  }
+});
+
 async function loadCats() {
   try {
     const data = await apiGet("categories");
@@ -568,6 +669,8 @@ async function loadCats() {
 }
 
 function renderTabs() {
+  deleteCategoryBtn.hidden = !categories.includes(currentCat) || currentCat === ALL_CATEGORY;
+  deleteCategoryBtn.disabled = categoryDeleteBusy || moveBusy || moveMode;
   tabs.replaceChildren();
   if (!categories.length) {
     const empty = document.createElement("span");

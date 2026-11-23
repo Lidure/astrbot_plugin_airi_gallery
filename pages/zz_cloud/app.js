@@ -8,6 +8,7 @@ import { createBase64UploadStream } from './blob_stream.mjs';
 import { manifestIndexToTree } from './manifest_tree.mjs';
 import { sortBrowseFiles } from './browse_sort.mjs';
 import { previewCloudMove, confirmCloudMove } from './move_transaction.mjs';
+import { previewCloudCategoryDelete, confirmCloudCategoryDelete } from './delete_category_transaction.mjs';
 
 // ──────────────────────────────────────────────
 // Config & State
@@ -20,6 +21,8 @@ const CLOUD_PROXY_BLOB_THRESHOLD_BYTES = 4 * 1024 * 1024;
 const CLOUD_PROXY_MAX_RAW_BYTES = 64 * 1024 * 1024;
 
 let config = loadConfig();
+let cloudCategoryDeleteBusy = false;
+let cloudCategoryDeletePlan = null;
 let cloudMoveMode = false;
 let cloudMoveBusy = false;
 let cloudMoveDialog = null;
@@ -72,6 +75,12 @@ const cloudMoveCount = $('cloud-move-count'), cloudMovePage = $('cloud-move-page
 const cloudMoveClear = $('cloud-move-clear'), cloudMoveOpen = $('cloud-move-open');
 const cloudMoveMask = $('cloud-move-mask'), cloudMoveDescription = $('cloud-move-description');
 const cloudMovePreviewGrid = $('cloud-move-preview-grid');
+const cloudDeleteCategoryBtn = $('cloud-delete-category-btn');
+const cloudDeleteCategoryMask = $('cloud-delete-category-mask');
+const cloudDeleteCategorySummary = $('cloud-delete-category-summary');
+const cloudDeleteCategoryName = $('cloud-delete-category-name');
+const cloudDeleteCategoryCancel = $('cloud-delete-category-cancel');
+const cloudDeleteCategoryConfirm = $('cloud-delete-category-confirm');
 const cloudMoveTarget = $('cloud-move-target'), cloudMoveNew = $('cloud-move-new');
 const cloudMoveReview = $('cloud-move-review'), cloudMoveCancel = $('cloud-move-cancel');
 const cloudMoveContinue = $('cloud-move-continue');
@@ -1160,6 +1169,86 @@ function closeCloudMoveDialogForced() {
   closeCloudMoveDialog();
 }
 
+function closeCloudDeleteCategory() {
+  cloudCategoryDeleteMaskHide();
+  cloudCategoryDeletePlan = null;
+  cloudDeleteCategoryName.value = '';
+  cloudDeleteCategoryConfirm.disabled = true;
+}
+function cloudCategoryDeleteMaskHide() {
+  cloudDeleteCategoryMask.classList.add('is-hidden');
+}
+cloudDeleteCategoryCancel.addEventListener('click', closeCloudDeleteCategory);
+cloudDeleteCategoryName.addEventListener('input', () => {
+  cloudDeleteCategoryConfirm.disabled = cloudCategoryDeleteBusy || !cloudCategoryDeletePlan
+    || cloudDeleteCategoryName.value !== cloudCategoryDeletePlan.category;
+});
+cloudDeleteCategoryBtn.addEventListener('click', async () => {
+  const category = state.currentCat;
+  if (!canWrite() || config.platform !== 'github' || cloudCategoryDeleteBusy
+    || !state.categories.some(cat => cat.name === category)) return;
+  cloudCategoryDeleteBusy = true;
+  renderTabs();
+  try {
+    const plan = await previewCloudCategoryDelete({
+      owner: config.owner, repo: config.repo, branch: config.branch || 'main',
+      category, request: (method, path, options) => ghRequest(method, path, options),
+    });
+    cloudCategoryDeletePlan = {
+      ...plan,
+      configKey: [config.platform, config.owner, config.repo, config.branch, config.token].join('\0'),
+    };
+    cloudDeleteCategoryName.value = '';
+    cloudDeleteCategoryName.placeholder = plan.category;
+    cloudDeleteCategorySummary.textContent = '分类「' + plan.category + '」包含 ' + plan.items.length
+      + ' 张图片。确认后将从 GitHub 永久删除该分类及其图片。';
+    cloudDeleteCategoryConfirm.disabled = true;
+    cloudDeleteCategoryMask.classList.remove('is-hidden');
+    cloudDeleteCategoryName.focus();
+  } catch (error) {
+    toast('删除分类预览失败：' + error.message, false);
+  } finally {
+    cloudCategoryDeleteBusy = false;
+    renderTabs();
+  }
+});
+cloudDeleteCategoryConfirm.addEventListener('click', async () => {
+  const plan = cloudCategoryDeletePlan;
+  if (!plan || cloudCategoryDeleteBusy || cloudDeleteCategoryName.value !== plan.category) return;
+  if (plan.configKey !== [config.platform, config.owner, config.repo, config.branch, config.token].join('\0')) {
+    closeCloudDeleteCategory();
+    toast('仓库设置已改变，请重新预览删除', false);
+    return;
+  }
+  cloudCategoryDeleteBusy = true;
+  cloudDeleteCategoryConfirm.disabled = true;
+  cloudDeleteCategoryCancel.disabled = true;
+  cloudCategoryDeletePlan = null; // single-use browser confirmation
+  try {
+    const result = await confirmCloudCategoryDelete({
+      plan, typedCategory: cloudDeleteCategoryName.value,
+      request: (method, path, options) => ghRequest(method, path, options),
+    });
+    cloudCategoryDeleteMaskHide();
+    cloudMoveReset();
+    for (const path of result.paths) state.pendingDeletedPaths.add(path);
+    state.categories = state.categories.filter(cat => cat.name !== plan.category);
+    state.currentCat = ALL_CATEGORY;
+    state.currentPage = 1;
+    clearImageCache();
+    const synced = await syncFromRemote({ force: true });
+    if (!synced) toast('分类远端删除成功，但页面刷新失败，请手动同步核对', false);
+    else toast('已删除分类「' + plan.category + '」及 ' + result.deleted + ' 张图片');
+  } catch (error) {
+    cloudCategoryDeleteMaskHide();
+    toast('删除分类未确认：' + error.message, false);
+  } finally {
+    cloudCategoryDeleteBusy = false;
+    cloudDeleteCategoryCancel.disabled = false;
+    renderTabs();
+  }
+});
+
 // ──────────────────────────────────────────────
 // UI: Status & connection
 // ──────────────────────────────────────────────
@@ -1258,6 +1347,11 @@ async function syncFromRemote({ force = false } = {}) {
 // UI: Tabs
 // ──────────────────────────────────────────────
 function renderTabs() {
+  const deletable = canWrite() && config.platform === 'github'
+    && !cloudCategoryDeleteBusy && !cloudMoveBusy && !cloudMoveMode
+    && state.categories.some(cat => cat.name === state.currentCat);
+  cloudDeleteCategoryBtn.classList.toggle('is-hidden', !deletable);
+  cloudDeleteCategoryBtn.disabled = !deletable;
   tabsEl.replaceChildren();
   if (!state.categories.length) {
     const empty = document.createElement('span');
