@@ -968,7 +968,7 @@ class Main(Star):
             return None
         original = _strip_gallery_at_prefix(original.strip())
         match = re.fullmatch(
-            rf"/{re.escape(command)}(?:[ \\t]+([^\\r\\n]*))?", original
+            rf"/{re.escape(command)}(?:[ \t]+([^\r\n]*))?", original
         )
         return match.group(1).strip() if match and match.group(1) else (
             "" if match else None
@@ -1014,8 +1014,8 @@ class Main(Star):
                 f"⚠️ 分类「{result['category']}」共有 {result['count']} 张图片。"
                 "确定后将删除该分类及全部图片"
                 + ("，并同步更新 GitHub 索引。" if result.get("remote") else "。")
-                + f"\\n请在 5 分钟内发送：/确认删除分类 {result['category']}"
-                + "\\n如需放弃，发送：/取消删除分类"
+                + f"\n请在 5 分钟内发送：/确认删除分类 {result['category']}"
+                + "\n如需放弃，发送：/取消删除分类"
             ))
         else:
             await event.send(event.plain_result(
