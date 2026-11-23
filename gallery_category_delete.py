@@ -101,6 +101,22 @@ class GalleryCategoryDeletion:
             "expires_in": DELETE_TTL,
         }
 
+    def cancel(self, actor: str, ticket: str) -> bool:
+        """Discard only this actor's unconsumed preview ticket (no deletion)."""
+        if not isinstance(actor, str) or not actor.strip() or not isinstance(ticket, str):
+            return False
+        with self._lock:
+            entry = self._pending.get(ticket)
+            if not entry or self.clock() - entry["at"] >= DELETE_TTL:
+                self._pending.pop(ticket, None)
+                return False
+            if not secrets.compare_digest(
+                entry["actor"].encode(), actor.strip().encode()
+            ):
+                return False
+            self._pending.pop(ticket, None)
+            return True
+
     def confirm(self, actor: str, ticket: str, confirm_name: str = "") -> dict:
         if not isinstance(actor, str) or not isinstance(ticket, str):
             return {"ok": False, "error": "登录信息或确认票据无效"}
