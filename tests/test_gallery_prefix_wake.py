@@ -19,6 +19,7 @@ from gallery_commands import (
     match_view_all_command,
     match_view_command,
     parse_view_target,
+    parse_delete_command,
     replace_command_aliases,
     sanitize_component,
     should_handle_gallery_category_view,
@@ -48,6 +49,7 @@ scope = {
     "DEFAULT_CATEGORY": DEFAULT_CATEGORY,
     "_sanitize_component": sanitize_component,
     "_parse_gallery_view_target": parse_view_target,
+    "_parse_gallery_delete_command": parse_delete_command,
     "_should_handle_gallery_category_view": should_handle_gallery_category_view,
     "MODE_PREFIX": "prefix",
 }
