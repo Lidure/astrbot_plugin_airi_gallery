@@ -89,10 +89,11 @@ def test_release_version_is_current_everywhere():
     badge = re.search(r"Version-(v\d+\.\d+\.\d+)-pink", readme).group(1)
     changelog = re.search(r"^### (v\d+\.\d+\.\d+)$", readme, re.MULTILINE).group(1)
 
-    assert metadata["version"] == "v2.12.3"
-    assert badge == "v2.12.3"
-    assert changelog == "v2.12.3"
-    assert 'CURRENT_PLUGIN_VERSION = "v2.12.3"' in main_source
+    version = metadata["version"]
+    assert re.fullmatch(r"v\\d+\\.\\d+\\.\\d+", version)
+    assert badge == version
+    assert changelog == version
+    assert f'CURRENT_PLUGIN_VERSION = "{version}"' in main_source
 
 
 def test_upload_command_accepts_category_without_space():
