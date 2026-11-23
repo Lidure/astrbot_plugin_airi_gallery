@@ -276,7 +276,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.12.5"
+CURRENT_PLUGIN_VERSION = "v2.12.6"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -2693,6 +2693,7 @@ class Main(Star):
                      f"- /抽表情 N：从全图库随机抽取 N 张；不写数字默认 1 张，最多 {self.view_multiple_max} 张",
                     "- /看最近上传 N：查看最近上传的图片；不写数字默认 10 张",
                     "- /查看贡献：QQ 群或私聊查询自己累计贡献的图片数量",
+                    "- /删除分类 分类名：仅 AstrBot 管理员可用，空分类直接删除，非空分类需要确认",
                     f"- /上传<分类>：先回复图片、多图或合并转发，再发送命令上传（快捷：/sz<分类>）",
                     "- 网页管理：AstrBot WebUI → 插件管理 → Airi Gallery → 图库管理，可选图并预览后移动分类",
                     "- /画廊帮助详细：查看完整命令说明",
@@ -2727,6 +2728,9 @@ class Main(Star):
                 "- /确认迁移图片 N：5 分钟内按预览数量确认；/取消迁移图片：取消",
                 "- /强制上传：仅在感知查重提示相似时确认仍然上传；完全重复不可绕过",
                 "- /去重图库：扫描并删除本地图库中的重复图片，可追加分类名只清理单个分类",
+                "- /删除分类 分类名：管理员专用；空分类直接删除，非空分类显示图片数量并等待确认",
+                "- /确认删除分类 完整分类名：仅原发起管理员在同一会话中 5 分钟内可确认永久删除",
+                "- /取消删除分类：撤销当前会话的待确认删除，不会删除图片",
                 "",
                 "WebUI 可视化分类移动（无需输入编号）：",
                 "- AstrBot WebUI → 插件管理 → Airi Gallery → 图库管理；需要登录 WebUI",
