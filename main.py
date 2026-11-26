@@ -150,6 +150,11 @@ except ImportError:
     from gallery_sync import GallerySync
 
 try:
+    from .gallery_sync_conflicts import GallerySyncConflictManager
+except ImportError:
+    from gallery_sync_conflicts import GallerySyncConflictManager
+
+try:
     from .gallery_migration import GalleryMigration, parse_migration_request
 except ImportError:
     from gallery_migration import GalleryMigration, parse_migration_request
@@ -278,7 +283,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.12.7"
+CURRENT_PLUGIN_VERSION = "v2.12.8"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -544,6 +549,14 @@ class Main(Star):
             manifest_payload_factory=self._gallery_manifest_payload,
             manifest_publisher=self._publish_gallery_manifest,
         )
+        self.sync_conflict_manager = GallerySyncConflictManager(
+            self.store,
+            self.sync,
+            self.remote,
+            image_suffixes=IMAGE_SUFFIXES,
+            backup_dir=self.plugin_data_dir / "sync_conflict_backups",
+            logger=logger,
+        )
         self.migration = GalleryMigration(self.store, self.sync, self.remote)
         self.web_migration = GalleryWebMigration(self.migration, self.sync)
         self.category_deletion = GalleryCategoryDeletion(self.store, self.sync, self.remote)
@@ -638,6 +651,24 @@ class Main(Star):
             self._api_move_images,
             ["POST"],
             "Preview, confirm, or cancel a safe category move",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/sync_conflicts",
+            self._api_sync_conflicts,
+            ["GET"],
+            "List authenticated GitHub gallery content conflicts",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/sync_conflict_preview",
+            self._api_sync_conflict_preview,
+            ["GET"],
+            "Preview both sides of a snapshot-bound gallery conflict",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/sync_conflicts",
+            self._api_resolve_sync_conflict,
+            ["POST"],
+            "Resolve one confirmed GitHub gallery content conflict",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/pub/categories",
@@ -1980,6 +2011,56 @@ class Main(Star):
         else:
             return jsonify({"ok": False, "error": "不支持的迁移操作"}), 400
         return jsonify(result)
+
+    async def _api_sync_conflicts(self):
+        from quart import jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        result = await asyncio.to_thread(
+            self.sync_conflict_manager.list_conflicts, actor
+        )
+        result = dict(result)
+        status = int(result.pop("status", 200))
+        return jsonify(result), status
+
+    async def _api_sync_conflict_preview(self):
+        from quart import request, jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        ticket = request.args.get("ticket", "").strip()
+        result = await asyncio.to_thread(
+            self.sync_conflict_manager.preview, actor, ticket
+        )
+        result = dict(result)
+        status = int(result.pop("status", 200))
+        if not result.get("ok"):
+            return jsonify(result), status
+        for side in ("local", "remote"):
+            payload = dict(result[side])
+            payload["image"] = b64mod.b64encode(payload["image"]).decode("ascii")
+            result[side] = payload
+        return jsonify(result), status
+
+    async def _api_resolve_sync_conflict(self):
+        from quart import request, jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        body = await request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "JSON 参数无效"}), 400
+        result = await asyncio.to_thread(
+            self.sync_conflict_manager.resolve,
+            actor,
+            body.get("ticket", ""),
+            body.get("action", ""),
+            body.get("confirmation", ""),
+        )
+        result = dict(result)
+        status = int(result.pop("status", 200))
+        return jsonify(result), status
 
     def _check_upload_token(self, token: str) -> bool:
         expected = str(self.config.get("upload_token", "")).strip()
