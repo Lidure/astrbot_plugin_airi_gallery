@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.9-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.10-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -416,6 +416,11 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.10
+- 紧急修复 WebUI 模块中重复函数声明导致页面无法初始化、点击无响应的问题。
+- 修复 IndexedDB 读写重复使用已关闭的数据库连接导致冲突清单和预览无法持久保存的问题。
+- 增加显式 ES Module 语法检查及 Firefox 页面初始化、缓存读写与恢复的回归测试。
+
 ### v2.12.9
 - 同步冲突页面增加 IndexedDB 本地快照缓存；离开/重新打开页面时优先恢复上次清单与已成功生成的预览，不会自动重新扫描 GitHub。
 - 缓存快照不保存短时、单次使用的冲突 ticket；缓存状态仅供查看，必须手动重新检查并取得新凭证后才能执行覆盖或跳过。

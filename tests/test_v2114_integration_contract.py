@@ -121,7 +121,8 @@ def test_javascript_syntax_for_local_and_cloud_pages(tmp_path: Path):
         pytest.skip("node is not installed")
 
     local_result = subprocess.run(
-        [node, "--check", "pages/gallery/app.js"],
+        [node, "--input-type=module", "--check"],
+        input=Path("pages/gallery/app.js").read_text(encoding="utf-8"),
         text=True,
         capture_output=True,
         check=False,
@@ -129,7 +130,8 @@ def test_javascript_syntax_for_local_and_cloud_pages(tmp_path: Path):
     assert local_result.returncode == 0, local_result.stderr
 
     cloud_result = subprocess.run(
-        [node, "--check", "pages/zz_cloud/app.js"],
+        [node, "--input-type=module", "--check"],
+        input=Path("pages/zz_cloud/app.js").read_text(encoding="utf-8"),
         text=True,
         capture_output=True,
         check=False,

@@ -58,7 +58,6 @@ let syncConflictLoadId = 0;
 let syncConflictSnapshot = [];
 let syncConflictSnapshotUpdatedAt = "";
 let syncConflictHistoryLoaded = false;
-let syncConflictDbPromise = null;
 const syncConflictPreviewUrls = new Set();
 let aliases = [];
 let aliasesLoaded = false;
@@ -225,24 +224,19 @@ const SYNC_CONFLICT_CACHE_STORE = "snapshots";
 
 function openSyncConflictCacheDb() {
   if (!("indexedDB" in window)) return Promise.reject(new Error("浏览器不支持本地缓存"));
-  if (!syncConflictDbPromise) {
-    syncConflictDbPromise = new Promise((resolve, reject) => {
-      const request = window.indexedDB.open(SYNC_CONFLICT_CACHE_DB, 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(SYNC_CONFLICT_CACHE_STORE)) {
-          db.createObjectStore(SYNC_CONFLICT_CACHE_STORE);
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error("打开本地缓存失败"));
-      request.onblocked = () => reject(new Error("本地缓存被其他页面占用"));
-    }).catch(error => {
-      syncConflictDbPromise = null;
-      throw error;
-    });
-  }
-  return syncConflictDbPromise;
+  // Each operation owns its connection; never reuse a promise to a closed database.
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(SYNC_CONFLICT_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SYNC_CONFLICT_CACHE_STORE)) {
+        db.createObjectStore(SYNC_CONFLICT_CACHE_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("打开本地缓存失败"));
+    request.onblocked = () => reject(new Error("本地缓存被其他页面占用"));
+  });
 }
 
 async function readSyncConflictCache() {
@@ -254,12 +248,12 @@ async function readSyncConflictCache() {
       const request = tx.objectStore(SYNC_CONFLICT_CACHE_STORE).get("latest");
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(request.error || new Error("读取冲突缓存失败"));
-      tx.oncomplete = () => db.close();
       tx.onerror = () => reject(tx.error || new Error("读取冲突缓存失败"));
     });
   } catch (error) {
-    try { db?.close(); } catch (closeError) { /* ignore */ }
     return null;
+  } finally {
+    db?.close();
   }
 }
 
@@ -286,11 +280,11 @@ async function writeSyncConflictCache() {
       tx.onerror = () => reject(tx.error || new Error("保存冲突缓存失败"));
       tx.onabort = () => reject(tx.error || new Error("保存冲突缓存失败"));
     });
-    db.close();
     return true;
   } catch (error) {
-    try { db?.close(); } catch (closeError) { /* ignore */ }
     return false;
+  } finally {
+    db?.close();
   }
 }
 
@@ -305,32 +299,6 @@ function conflictSnapshotKey(conflict) {
 function formatConflictDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString();
-}
-
-function appendConflictMeta(container, label, value, key = "") {
-  const row = document.createElement("div");
-  row.className = "sync-conflict-meta-row";
-  const name = document.createElement("span");
-  name.className = "sync-conflict-meta-label";
-  name.textContent = label;
-  const content = document.createElement("code");
-  content.className = "sync-conflict-meta-value";
-  if (key) content.dataset.meta = key;
-  content.textContent = value || "—";
-  row.append(name, content);
-  container.append(row);
-}
-
-function releaseConflictCardPreviews(card) {
-  for (const image of card.querySelectorAll("img[data-conflict-object-url]")) {
-    const url = image.dataset.conflictObjectUrl || "";
-    if (url) {
-      try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale preview URLs */ }
-      syncConflictPreviewUrls.delete(url);
-    }
-    delete image.dataset.conflictObjectUrl;
-    image.removeAttribute("src");
-  }
 }
 
 function createSyncConflictCard(conflict) {
