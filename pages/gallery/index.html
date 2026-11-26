@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=13" />
+  <link rel="stylesheet" href="./style.css?v=15" />
 </head>
 <body>
   <div class="container">
@@ -21,6 +21,8 @@
               aria-selected="true" aria-controls="view-gallery">图库管理</button>
       <button id="view-aliases-tab" class="view-tab" type="button" role="tab"
               aria-selected="false" aria-controls="view-aliases">分类昵称</button>
+      <button id="view-conflicts-tab" class="view-tab" type="button" role="tab"
+              aria-selected="false" aria-controls="view-conflicts">同步冲突</button>
     </div>
 
     <main id="view-gallery" class="view-panel" role="tabpanel" aria-labelledby="view-gallery-tab">
@@ -163,6 +165,24 @@
         </div>
       </section>
     </main>
+
+    <main id="view-conflicts" class="view-panel" role="tabpanel" aria-labelledby="view-conflicts-tab" hidden>
+      <section class="card" aria-labelledby="sync-conflicts-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="sync-conflicts-title">Git 同步冲突</h2>
+            <p>逐张对比树莓派本地图片与 GitHub 远端图片</p>
+          </div>
+          <button id="sync-conflict-reload" class="btn btn-quiet btn-small" type="button">刷新冲突</button>
+        </div>
+        <div class="sync-conflict-notice">
+          <strong>安全提示</strong>
+          <p>相同路径但文件内容不同才会出现在这里。预览和确认时都会重新核对双方 SHA；覆盖前会备份本地与远端原文件。若文件在预览后再次变化，操作会自动拒绝。</p>
+        </div>
+        <p id="sync-conflict-summary" class="sync-conflict-summary" role="status" aria-live="polite">打开此页面后读取远端冲突清单。</p>
+        <div id="sync-conflict-list" class="sync-conflict-list" aria-live="polite"></div>
+      </section>
+    </main>
   </div>
 
   <div class="compare-mask" id="compare-mask" role="dialog" aria-modal="true" aria-labelledby="compare-title">
@@ -227,6 +247,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=13"></script>
+  <script type="module" src="./app.js?v=15"></script>
 </body>
 </html>
