@@ -400,6 +400,111 @@ class GallerySync:
             self._remember_batch_shas(items)
             return True
 
+    def replace_github_conflict(
+        self, git_path: str, content: bytes, expected_remote_sha: str
+    ) -> bool:
+        """Atomically replace one existing GitHub blob after stale-SHA checks.
+
+        The expected remote SHA is rechecked against each immutable base tree.
+        A branch ref race may be retried once, but a changed target blob is
+        never overwritten. Uncertain ref responses are verified from the
+        current branch tree before reporting success.
+        """
+        parts = str(git_path).split("/")
+        if (
+            self.remote.platform() != "github"
+            or len(parts) != 3
+            or parts[0] != "gallery"
+            or any(part in {"", ".", ".."} for part in parts)
+            or not is_remote_gallery_image_path(str(git_path), self.image_suffixes)
+            or not str(expected_remote_sha).strip()
+        ):
+            return False
+
+        new_blob_sha = git_blob_sha(content)
+        with self.mutation_lock:
+            for attempt in range(2):
+                head = self.remote.get_head_commit_and_tree()
+                if not head:
+                    return False
+                parent_sha, base_tree_sha = head
+                tree = self.remote.list_tree_at(base_tree_sha)
+                if tree is None:
+                    return False
+                current_sha = next(
+                    (
+                        str(entry.get("sha", "")).strip()
+                        for entry in tree
+                        if isinstance(entry, dict)
+                        and entry.get("type") == "blob"
+                        and str(entry.get("path", "")) == git_path
+                    ),
+                    "",
+                )
+                if current_sha == new_blob_sha:
+                    self.remote.sha_cache[git_path] = new_blob_sha
+                    return True
+                if current_sha != str(expected_remote_sha).strip():
+                    self._warning(
+                        f"[Git Sync] 冲突解决已过期，远端 SHA 已变化: {git_path}"
+                    )
+                    return False
+
+                created_blob_sha = self.remote.create_github_blob(content)
+                if created_blob_sha != new_blob_sha:
+                    self._warning(
+                        f"[Git Sync] 冲突解决 blob 校验失败: {git_path}"
+                    )
+                    return False
+                new_tree_sha = self.remote.create_github_tree(
+                    base_tree_sha,
+                    [{
+                        "path": git_path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": new_blob_sha,
+                    }],
+                    context=f"sync-conflict path={git_path}",
+                )
+                if not new_tree_sha:
+                    return False
+                commit_sha = self.remote.create_github_commit(
+                    f"Resolve gallery content conflict: {git_path}",
+                    new_tree_sha,
+                    parent_sha,
+                )
+                if not commit_sha:
+                    return False
+                if self.remote.update_github_ref(commit_sha):
+                    self.remote.sha_cache[git_path] = new_blob_sha
+                    return True
+
+                outcome = self.remote.ref_update_outcome or "conflict"
+                if outcome == "uncertain":
+                    refreshed = self.remote.get_head_commit_and_tree()
+                    if not refreshed:
+                        return False
+                    refreshed_tree = self.remote.list_tree_at(refreshed[1])
+                    if refreshed_tree is None:
+                        return False
+                    confirmed = any(
+                        isinstance(entry, dict)
+                        and entry.get("type") == "blob"
+                        and str(entry.get("path", "")) == git_path
+                        and str(entry.get("sha", "")).strip() == new_blob_sha
+                        for entry in refreshed_tree
+                    )
+                    if confirmed:
+                        self.remote.sha_cache[git_path] = new_blob_sha
+                        return True
+                    return False
+                if outcome != "conflict" or attempt >= 1:
+                    return False
+                self._info(
+                    f"[Git Sync] 冲突解决遇到 GitHub ref 竞争，刷新后重新核对目标 SHA: {git_path}"
+                )
+        return False
+
     def sync_from_remote(self) -> dict[str, object]:
         """Pull remote gallery images and converge verified local cache paths."""
         result: dict[str, object] = {
