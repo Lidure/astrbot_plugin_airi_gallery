@@ -86,4 +86,4 @@ def test_move_dialog_shows_lazy_thumbnails_and_not_a_number_list():
     assert ".modal-mask.over-move" in css
     assert 'f"/{PLUGIN_NAME}/category_thumbnail"' in main
     assert "self._api_category_thumbnail" in main
-    assert 'src="./app.js?v=13"' in html
+    assert 'src="./app.js?v=15"' in html
