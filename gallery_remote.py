@@ -45,6 +45,7 @@ class GalleryRemote:
         self.request_state = request_state or threading.local()
         self.sha_cache: dict[str, str] = {}
         self.ref_update_outcome: str | None = None
+        self.last_tree_truncated = False
 
     def _info(self, message: str) -> None:
         if self.logger is not None:
@@ -182,6 +183,7 @@ class GalleryRemote:
         return status, body
 
     def list_tree(self) -> list[dict] | None:
+        self.last_tree_truncated = False
         base = self.api_base()
         owner = self.owner()
         repo = self.repo()
@@ -208,7 +210,8 @@ class GalleryRemote:
             self._warning(f"[Git Sync] 获取文件树失败 (HTTP {status})")
             return None
 
-        if data.get("truncated"):
+        self.last_tree_truncated = bool(data.get("truncated"))
+        if self.last_tree_truncated:
             self._warning("[Git Sync] 文件树被截断（>100k 文件），同步可能不完整。")
         return [
             {
@@ -276,7 +279,8 @@ class GalleryRemote:
         return result
 
     def get_file(self, path: str) -> bytes | None:
-        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{path}"
+        encoded_path = quote(str(path), safe="/")
+        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{encoded_path}"
         status, data = self.request("GET", url, params={"ref": self.branch()})
         if status != 200 or not data:
             self._warning(f"[Git Sync] 下载文件失败 {path} (HTTP {status})")
@@ -358,7 +362,8 @@ class GalleryRemote:
             return None
 
     def fetch_file_sha(self, path: str) -> str | None:
-        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{path}"
+        encoded_path = quote(str(path), safe="/")
+        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/contents/{encoded_path}"
         status, data = self.request("GET", url, params={"ref": self.branch()})
         if status == 200 and data:
             sha = data.get("sha", "")
@@ -431,6 +436,29 @@ class GalleryRemote:
 
             self._error(f"[Git Sync] 上传文件失败 {path} (HTTP {status})")
             return remote_put_result(False, None)
+
+    def get_file_last_commit_time(self, path: str) -> str | None:
+        """Return GitHub's latest commit timestamp for one path, if available."""
+        if self.platform() != "github":
+            return None
+        url = f"{self.api_base()}/repos/{self.owner()}/{self.repo()}/commits"
+        status, data = self.request(
+            "GET",
+            url,
+            params={"path": str(path), "sha": self.branch(), "per_page": 1},
+        )
+        if status != 200 or not isinstance(data, list) or not data:
+            return None
+        commit = data[0].get("commit") if isinstance(data[0], Mapping) else None
+        if not isinstance(commit, Mapping):
+            return None
+        committer = commit.get("committer")
+        author = commit.get("author")
+        metadata = committer if isinstance(committer, Mapping) else author
+        if not isinstance(metadata, Mapping):
+            return None
+        value = metadata.get("date")
+        return str(value).strip() if isinstance(value, str) and value.strip() else None
 
     def get_head_commit_and_tree(self) -> tuple[str, str] | None:
         if self.platform() != "github":
