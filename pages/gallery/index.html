@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Airi Gallery</title>
-  <link rel="stylesheet" href="./style.css?v=15" />
+  <link rel="stylesheet" href="./style.css?v=16" />
 </head>
 <body>
   <div class="container">
@@ -173,14 +173,25 @@
             <h2 id="sync-conflicts-title">Git 同步冲突</h2>
             <p>逐张对比树莓派本地图片与 GitHub 远端图片</p>
           </div>
-          <button id="sync-conflict-reload" class="btn btn-quiet btn-small" type="button">刷新冲突</button>
+          <button id="sync-conflict-reload" class="btn btn-quiet btn-small" type="button">重新检查</button>
         </div>
         <div class="sync-conflict-notice">
           <strong>安全提示</strong>
-          <p>相同路径但文件内容不同才会出现在这里。预览和确认时都会重新核对双方 SHA；覆盖前会备份本地与远端原文件。若文件在预览后再次变化，操作会自动拒绝。</p>
+          <p>相同路径但文件内容不同才会出现在这里。页面会保留上次清单与预览；只有点击“重新检查”才会重新读取 GitHub。覆盖前仍会重新核对双方 SHA 并备份原文件。</p>
         </div>
-        <p id="sync-conflict-summary" class="sync-conflict-summary" role="status" aria-live="polite">打开此页面后读取远端冲突清单。</p>
+        <p id="sync-conflict-summary" class="sync-conflict-summary" role="status" aria-live="polite">打开页面时优先恢复上次保存的清单；需要最新状态时再手动重新检查。</p>
         <div id="sync-conflict-list" class="sync-conflict-list" aria-live="polite"></div>
+      </section>
+
+      <section class="card sync-conflict-history-card" aria-labelledby="sync-conflict-history-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="sync-conflict-history-title">处理历史</h2>
+            <p>跳过和成功解决的冲突会保存在树莓派本地，可跨浏览器会话查看</p>
+          </div>
+        </div>
+        <p id="sync-conflict-history-summary" class="sync-conflict-summary" role="status" aria-live="polite">尚未读取处理历史。</p>
+        <div id="sync-conflict-history-list" class="sync-conflict-history-list"></div>
       </section>
     </main>
   </div>
@@ -247,6 +258,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=15"></script>
+  <script type="module" src="./app.js?v=16"></script>
 </body>
 </html>
