@@ -8,7 +8,7 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-brightgreen?style=for-the-badge&logo=github)](https://github.com/Soulter/AstrBot)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=for-the-badge&logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)]()
-[![Version](https://img.shields.io/badge/Version-v2.12.7-pink?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-v2.12.8-pink?style=for-the-badge)]()
 
 <a href="https://count.getloli.com" target="_blank">
 	<img alt="Moe Counter" src="https://count.getloli.com/@astrbot_plugin_airi_gallery2?theme=miku&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto">
@@ -44,6 +44,7 @@
 | 🤖 **LLM 工具** | 接入 LLM Function Calling，让 AI 在对话中自动发表情包 |
 | 🏷️ **分类昵称** | 为分类设置多个别名，「看看爱莉」等同于「看看airi」 |
 | 🌐 **统一管理页** | 在默认 Web UI 中浏览、上传、管理分类昵称，并通过缩略图预览安全移动单张或批量图片 |
+| 🧩 **同步冲突处理** | WebUI 对比本地与 GitHub 同路径图片，支持预览、哈希核对、保留本地/远端或跳过；覆盖前自动备份并复核文件版本 |
 | ☁️ **Git 远程同步** | 图片自动同步到 GitHub / Gitee 仓库，支持定时拉取与批量推送 |
 | 🖥️ **云端管理页** | 独立 Cloudflare Pages SPA，暗色模式、紧凑分页，无需 Bot 在线即可管理图片 |
 | 📤 **公开上传** | 通过 `upload_token` 密钥控制外部上传权限，支持网页端直接传图 |
@@ -83,7 +84,7 @@
 - `/抽表情 N`：从整个画廊随机抽取 N 张。
 - `/查看贡献`：在 QQ 群聊或私聊查询自己累计成功投稿的图片张数，未投稿过显示 0 张。
 
-需要上传、删除或远程同步等完整命令时，在 QQ 中发送 `/画廊帮助详细`。**无需记编号也能迁移图片：**登录 AstrBot WebUI，在插件管理中打开 Airi Gallery →「图库管理」，点击单张图片的「移动」或使用「批量移动」，预览缩略图后确认；聊天迁移命令和 WebUI 操作是两个独立入口。
+需要上传、删除或远程同步等完整命令时，在 QQ 中发送 `/画廊帮助详细`。**无需记编号也能迁移图片：**登录 AstrBot WebUI，在插件管理中打开 Airi Gallery →「图库管理」，点击单张图片的「移动」或使用「批量移动」，预览缩略图后确认；聊天迁移命令和 WebUI 操作是两个独立入口。GitHub 同路径图片内容不一致时，可切换到「同步冲突」逐张对比；覆盖前会要求二次确认并备份双方原图。
 
 ### 2. 查看图片
 
@@ -415,6 +416,12 @@ LLM 会在合适的对话场景中自动判断是否需要发表情包，并调�
 > **升级提醒**：贡献记录位于 `data/plugin_data/astrbot_plugin_airi_gallery/qq_upload_contributions.json`，它是持久化数据，不是缓存。请保留插件数据目录；**更新版本号不会重置已累计的张数**。
 
 ## 🚀 更新日志
+### v2.12.8
+- 新增 WebUI「同步冲突」页面，逐张对比树莓派本地与 GitHub 同路径图片，提供双侧预览、SHA-256、Git Blob SHA、文件大小与时间信息。
+- 支持保留本地覆盖 GitHub、保留 GitHub 覆盖本地或跳过；覆盖操作要求二次确认，使用短时、单次、绑定当前 WebUI 用户的冲突凭证，并在操作前备份双方原图。
+- 覆盖前重新核对本地文件与 GitHub 远端 SHA；检测到版本变化、分支变化、文件树不完整或并发同步时拒绝执行，避免误覆盖。
+- 冲突处理目前只开放 GitHub 原子提交路径；Gitee 仅显示不支持提示，不开放覆盖操作。
+
 ### v2.12.7
 - **修复 `/删除` 误唤醒 LLM**：当 AstrBot 使用 `/` 作为 LLM 唤醒前缀时，`/删除`、`/删除 abc`、`/删除 123 abc` 等无效格式会由画廊回复正确用法并终止事件传播，不再作为普通聊天交给 LLM；权限拒绝和删除异常同样阻止 LLM 继续回复。
 - **严格区分图片与分类删除**：`/删除123`、`/删除 123 456` 仍可正常使用；`/删除分类 123`、`/确认删除分类 ...` 等分类管理命令不再被图片删除解析器误判，禁止混合数字和文字参数导致部分删除。
