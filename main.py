@@ -283,7 +283,7 @@ GITHUB_TREE_CREATE_RETRY_STATUSES = {0, 500, 502, 503, 504}
 GITHUB_TREE_CREATE_RETRY_BASE_DELAY_SECONDS = 1.0
 GITHUB_TREE_CREATE_CHUNK_SIZE = 250
 GITHUB_TREE_MUTATION_CHUNK_SIZE = 100
-CURRENT_PLUGIN_VERSION = "v2.12.8"
+CURRENT_PLUGIN_VERSION = "v2.12.9"
 UPDATE_METADATA_URL = "https://raw.githubusercontent.com/Lidure/astrbot_plugin_airi_gallery/main/metadata.yaml"
 UPDATE_CACHE_SECONDS = 600.0
 _GIT_REQUEST_STATE = threading.local()
@@ -663,6 +663,12 @@ class Main(Star):
             self._api_sync_conflict_preview,
             ["GET"],
             "Preview both sides of a snapshot-bound gallery conflict",
+        )
+        context.register_web_api(
+            f"/{PLUGIN_NAME}/sync_conflict_history",
+            self._api_sync_conflict_history,
+            ["GET"],
+            "List authenticated gallery sync conflict handling history",
         )
         context.register_web_api(
             f"/{PLUGIN_NAME}/sync_conflicts",
@@ -2039,8 +2045,24 @@ class Main(Star):
             return jsonify(result), status
         for side in ("local", "remote"):
             payload = dict(result[side])
-            payload["image"] = b64mod.b64encode(payload["image"]).decode("ascii")
+            image_bytes = payload.get("image")
+            payload["image"] = (
+                b64mod.b64encode(image_bytes).decode("ascii")
+                if isinstance(image_bytes, (bytes, bytearray)) else None
+            )
             result[side] = payload
+        return jsonify(result), status
+
+    async def _api_sync_conflict_history(self):
+        from quart import jsonify
+        actor = _authenticated_web_username()
+        if not actor:
+            return jsonify({"ok": False, "error": "unauthorized"}), 403
+        result = await asyncio.to_thread(
+            self.sync_conflict_manager.list_history, actor
+        )
+        result = dict(result)
+        status = int(result.pop("status", 200))
         return jsonify(result), status
 
     async def _api_resolve_sync_conflict(self):
