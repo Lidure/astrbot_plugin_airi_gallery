@@ -422,7 +422,7 @@ function createSyncConflictCard(conflict) {
   if (conflict.cached_snapshot) {
     const cachedHint = document.createElement("p");
     cachedHint.className = "sync-conflict-cache-hint";
-    cachedHint.textContent = "这是上次保存的只读快照。刷新冲突并重新核对后，才能执行覆盖或跳过操作。";
+    cachedHint.textContent = "这是上次保存的只读快照。重新检查并重新核对后，才能执行覆盖或跳过操作。";
     actions.append(cachedHint);
   } else if (conflict.can_resolve && conflict.ticket) {
     const keepLocal = document.createElement("button");
@@ -594,7 +594,7 @@ async function resolveSyncConflict(conflict, card, action) {
       const badge = card.querySelector(".sync-conflict-badge");
       if (badge) badge.textContent = "已跳过";
       const actions = card.querySelector(".sync-conflict-actions");
-      if (actions) actions.textContent = "双方文件均未修改。该记录已保存；如需重新处理，请点击上方刷新冲突。";
+      if (actions) actions.textContent = "双方文件均未修改。该记录已保存；如需重新处理，请点击上方重新检查。";
       await writeSyncConflictCache();
       void loadSyncConflictHistory(true);
       showMsg("已跳过该冲突，双方文件均未修改。");
@@ -644,7 +644,7 @@ function renderSyncConflictSnapshot(conflicts, cached = false) {
       if (conflict.preview) applySyncConflictPreview(displayConflict, card, conflict.preview);
       else {
         for (const hint of card.querySelectorAll(".sync-conflict-preview-hint")) {
-          hint.textContent = "尚未保存预览；刷新冲突后可重新加载。";
+          hint.textContent = "尚未保存预览；重新检查后可重新加载。";
         }
       }
     } else if (conflict.preview) {
@@ -674,7 +674,7 @@ async function loadSyncConflicts(force = false) {
         renderSyncConflictSnapshot(syncConflictSnapshot, true);
         syncConflictSummary.textContent =
           "显示上次检查于 " + formatConflictDate(syncConflictSnapshotUpdatedAt) +
-          " 的本地缓存快照（只读，未访问 GitHub）。点击“刷新冲突”获取最新状态和新的操作凭证。";
+          " 的本地缓存快照（只读，未访问 GitHub）。点击“重新检查”获取最新状态和新的操作凭证。";
         return;
       }
     }
