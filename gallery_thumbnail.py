@@ -28,3 +28,23 @@ def make_gallery_thumbnail(path: Path) -> bytes:
         output = BytesIO()
         frame.save(output, format="JPEG", quality=78, optimize=True)
         return output.getvalue()
+
+
+def make_gallery_thumbnail_bytes(content: bytes) -> bytes:
+    """Return a bounded JPEG preview from in-memory image bytes."""
+    with Image.open(BytesIO(content)) as image:
+        if image.width * image.height > THUMBNAIL_MAX_PIXELS:
+            raise ValueError("图片尺寸超过安全限制")
+        image.seek(0)
+        frame = ImageOps.exif_transpose(image)
+        frame.thumbnail((THUMBNAIL_SIDE, THUMBNAIL_SIDE), Image.Resampling.LANCZOS)
+        if frame.mode in ("RGBA", "LA") or "transparency" in frame.info:
+            rgba = frame.convert("RGBA")
+            background = Image.new("RGB", rgba.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            frame = background
+        elif frame.mode != "RGB":
+            frame = frame.convert("RGB")
+        output = BytesIO()
+        frame.save(output, format="JPEG", quality=78, optimize=True)
+        return output.getvalue()
