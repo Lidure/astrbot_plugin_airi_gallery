@@ -45,9 +45,125 @@ class GallerySyncConflictManager:
         self.remote = remote
         self.image_suffixes = {str(value).lower() for value in (image_suffixes or ())}
         self.backup_dir = Path(backup_dir)
+        self.history_path = self.backup_dir.parent / "sync_conflict_history.json"
         self.logger = logger
         self._tickets: dict[str, dict[str, Any]] = {}
         self._ticket_lock = threading.RLock()
+        self._history_lock = threading.RLock()
+        self._history = self._load_history()
+
+    def _load_history(self) -> list[dict[str, Any]]:
+        try:
+            payload = json.loads(self.history_path.read_text(encoding="utf-8"))
+            entries = payload.get("entries", []) if isinstance(payload, dict) else []
+            if not isinstance(entries, list):
+                return []
+            return [entry for entry in entries if isinstance(entry, dict)][-500:]
+        except FileNotFoundError:
+            return []
+        except Exception as exc:
+            self._warning(f"[Git Sync] 读取冲突处理历史失败: {type(exc).__name__}")
+            return []
+
+    def _save_history_locked(self) -> bool:
+        self.history_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "entries": self._history[-500:],
+        }
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".sync-conflict-history-", suffix=".tmp", dir=str(self.history_path.parent)
+        )
+        try:
+            try:
+                os.chmod(temp_name, 0o600)
+            except OSError:
+                pass
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, self.history_path)
+            try:
+                os.chmod(self.history_path, 0o600)
+            except OSError:
+                pass
+            return True
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+            raise
+
+    def _record_history(self, actor: str, ticket: dict, action: str) -> bool:
+        entry = {
+            "actor": str(actor),
+            "path": str(ticket.get("path", "")),
+            "action": str(action),
+            "status": "skipped" if action == "skip" else "resolved",
+            "local_sha256": str(ticket.get("local_sha256", "")),
+            "local_blob_sha": str(ticket.get("local_git_sha", "")),
+            "remote_blob_sha": str(ticket.get("remote_git_sha", "")),
+            "branch": str(ticket.get("branch", "")),
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        try:
+            with self._history_lock:
+                key = (
+                    entry["actor"], entry["path"], entry["local_blob_sha"],
+                    entry["remote_blob_sha"],
+                )
+                self._history = [
+                    old for old in self._history
+                    if (
+                        str(old.get("actor", "")), str(old.get("path", "")),
+                        str(old.get("local_blob_sha", "")), str(old.get("remote_blob_sha", "")),
+                    ) != key
+                ]
+                self._history.append(entry)
+                self._history = self._history[-500:]
+                return self._save_history_locked()
+        except Exception as exc:
+            self._warning(f"[Git Sync] 保存冲突处理历史失败: {type(exc).__name__}")
+            return False
+
+    def _history_status_for(self, actor: str, path: str, local_sha: str, remote_sha: str):
+        with self._history_lock:
+            for entry in reversed(self._history):
+                if (
+                    str(entry.get("actor", "")) == actor
+                    and str(entry.get("path", "")) == path
+                    and str(entry.get("local_blob_sha", "")) == local_sha
+                    and str(entry.get("remote_blob_sha", "")) == remote_sha
+                ):
+                    return str(entry.get("status", "")), str(entry.get("created_at", ""))
+        return "", ""
+
+    def list_history(self, actor: str, limit: int = 100) -> dict:
+        if not isinstance(actor, str) or not actor.strip():
+            return {"ok": False, "status": 403, "error": "请先登录 AstrBot WebUI。"}
+        try:
+            bounded_limit = max(1, min(200, int(limit)))
+        except (TypeError, ValueError):
+            bounded_limit = 100
+        with self._history_lock:
+            entries = [
+                {
+                    "path": str(entry.get("path", "")),
+                    "action": str(entry.get("action", "")),
+                    "status": str(entry.get("status", "")),
+                    "local_sha256": str(entry.get("local_sha256", "")),
+                    "local_blob_sha": str(entry.get("local_blob_sha", "")),
+                    "remote_blob_sha": str(entry.get("remote_blob_sha", "")),
+                    "branch": str(entry.get("branch", "")),
+                    "created_at": str(entry.get("created_at", "")),
+                }
+                for entry in reversed(self._history)
+                if str(entry.get("actor", "")) == actor
+            ][:bounded_limit]
+        return {"ok": True, "count": len(entries), "history": entries}
 
     def _warning(self, message: str) -> None:
         if self.logger is not None:
@@ -154,7 +270,9 @@ class GallerySyncConflictManager:
         with self._ticket_lock:
             self._tickets.pop(token, None)
 
-    def _verify_snapshot(self, ticket: dict) -> tuple[Path | None, bytes | None, dict | None, dict | None]:
+    def _verify_snapshot(
+        self, ticket: dict, *, verify_remote_tree: bool = True
+    ) -> tuple[Path | None, bytes | None, dict | None, dict | None]:
         path = str(ticket.get("path", ""))
         if str(self.remote.branch()) != str(ticket.get("branch", "")):
             return None, None, None, {
@@ -175,19 +293,25 @@ class GallerySyncConflictManager:
             return None, None, None, {
                 "ok": False, "status": 409, "error": "本地图片在预览后发生变化，未执行覆盖；请刷新清单。"
             }
-        tree = self._remote_tree_map()
-        if tree is None:
-            return None, None, None, {
-                "ok": False, "status": 503, "error": "无法完整读取 GitHub 文件树，未执行任何覆盖。"
-            }
-        entry = tree.get(path)
-        if not entry:
-            return None, None, None, {
-                "ok": False, "status": 409, "error": "GitHub 远端文件已不存在，请刷新冲突清单。"
-            }
-        if str(entry.get("sha", "")).strip() != str(ticket.get("remote_git_sha", "")):
-            return None, None, None, {
-                "ok": False, "status": 409, "error": "GitHub 图片在预览后发生变化，未执行覆盖；请刷新清单。"
+        if verify_remote_tree:
+            tree = self._remote_tree_map()
+            if tree is None:
+                return None, None, None, {
+                    "ok": False, "status": 503, "error": "无法完整读取 GitHub 文件树，未执行任何覆盖。"
+                }
+            entry = tree.get(path)
+            if not entry:
+                return None, None, None, {
+                    "ok": False, "status": 409, "error": "GitHub 远端文件已不存在，请刷新冲突清单。"
+                }
+            if str(entry.get("sha", "")).strip() != str(ticket.get("remote_git_sha", "")):
+                return None, None, None, {
+                    "ok": False, "status": 409, "error": "GitHub 图片在预览后发生变化，请刷新清单。"
+                }
+        else:
+            entry = {
+                "sha": str(ticket.get("remote_git_sha", "")),
+                "size": int(ticket.get("remote_size", 0) or 0),
             }
         return local_path, local_content, entry, None
 
@@ -237,12 +361,17 @@ class GallerySyncConflictManager:
                     if local_blob_sha == remote_blob_sha:
                         continue
                     ticket = self._new_ticket(actor, git_path, local_content, local_stat, remote_entry)
+                    history_status, history_at = self._history_status_for(
+                        actor, git_path, local_blob_sha, remote_blob_sha
+                    )
                     conflicts.append({
                         "ticket": ticket,
                         "path": git_path,
                         "category": PurePosixPath(git_path).parts[1],
                         "name": PurePosixPath(git_path).name,
                         "can_resolve": True,
+                        "history_status": history_status or None,
+                        "history_at": history_at or None,
                         "local": {
                             "sha256": hashlib.sha256(local_content).hexdigest(),
                             "blob_sha": local_blob_sha,
@@ -277,23 +406,47 @@ class GallerySyncConflictManager:
         ticket, error = self._get_ticket(actor, token)
         if error:
             return error
-        # Previews are read-only. Serialize them with file mutations, but do
-        # not take sync_lock: several cards may request previews concurrently.
+        # Preview checks the remote bytes against the ticket's Git Blob SHA.
+        # That avoids one full recursive tree request for every preview card.
         with self.sync.mutation_lock:
-            local_path, local_content, entry, error = self._verify_snapshot(ticket)
+            local_path, local_content, entry, error = self._verify_snapshot(
+                ticket, verify_remote_tree=False
+            )
             if error:
                 self._consume_ticket(token)
                 return error
-            remote_content = self.remote.get_file(ticket["path"])
-            if remote_content is None or git_blob_sha(remote_content) != ticket["remote_git_sha"]:
-                self._consume_ticket(token)
-                return {"ok": False, "status": 409, "error": "无法读取或校验 GitHub 图片，冲突预览已失效。"}
+
+            local_thumbnail = None
+            local_preview_error = None
             try:
                 local_thumbnail = make_gallery_thumbnail_bytes(local_content)
-                remote_thumbnail = make_gallery_thumbnail_bytes(remote_content)
             except Exception as exc:
-                self._warning(f"[Git Sync] WebUI 冲突预览生成失败 {ticket['path']}: {type(exc).__name__}")
-                return {"ok": False, "status": 422, "error": "图片预览生成失败；原始文件未被修改。"}
+                local_preview_error = "本地文件内容无法识别为受支持的图片格式，原文件未修改。"
+                self._warning(
+                    f"[Git Sync] WebUI 本地冲突预览生成失败 {ticket['path']}: {type(exc).__name__}"
+                )
+
+            remote_content = None
+            remote_thumbnail = None
+            remote_preview_error = None
+            try:
+                remote_content = self.remote.get_file(ticket["path"])
+                if remote_content is None or git_blob_sha(remote_content) != ticket["remote_git_sha"]:
+                    remote_preview_error = "无法读取或校验 GitHub 图片；本地预览仍可单独查看。"
+                else:
+                    try:
+                        remote_thumbnail = make_gallery_thumbnail_bytes(remote_content)
+                    except Exception as exc:
+                        remote_preview_error = "GitHub 文件内容无法识别为受支持的图片格式。"
+                        self._warning(
+                            f"[Git Sync] WebUI 远端冲突预览生成失败 {ticket['path']}: {type(exc).__name__}"
+                        )
+            except Exception as exc:
+                remote_preview_error = "读取 GitHub 图片失败，请检查网络或稍后重试。"
+                self._warning(
+                    f"[Git Sync] WebUI 远端冲突预览读取失败 {ticket['path']}: {type(exc).__name__}"
+                )
+
             commit_time = None
             get_commit_time = getattr(self.remote, "get_file_last_commit_time", None)
             if callable(get_commit_time):
@@ -304,6 +457,7 @@ class GallerySyncConflictManager:
             with self._ticket_lock:
                 if token in self._tickets:
                     self._tickets[token]["remote_commit_time"] = commit_time
+
             return {
                 "ok": True,
                 "path": ticket["path"],
@@ -314,14 +468,16 @@ class GallerySyncConflictManager:
                     "blob_sha": git_blob_sha(local_content),
                     "size": len(local_content),
                     "mtime_text": self._now_iso(local_path.stat().st_mtime),
+                    "preview_error": local_preview_error,
                 },
                 "remote": {
                     "image": remote_thumbnail,
                     "content_type": "image/jpeg",
-                    "sha256": hashlib.sha256(remote_content).hexdigest(),
-                    "blob_sha": git_blob_sha(remote_content),
-                    "size": len(remote_content),
+                    "sha256": hashlib.sha256(remote_content).hexdigest() if remote_content is not None else "",
+                    "blob_sha": git_blob_sha(remote_content) if remote_content is not None else ticket["remote_git_sha"],
+                    "size": len(remote_content) if remote_content is not None else int(ticket.get("remote_size", 0)),
                     "commit_time": commit_time,
+                    "preview_error": remote_preview_error,
                 },
             }
 
@@ -400,8 +556,12 @@ class GallerySyncConflictManager:
             return error
         action = str(action or "").strip()
         if action == "skip":
+            history_saved = self._record_history(actor, ticket, "skip")
             self._consume_ticket(token)
-            return {"ok": True, "action": "skip", "changed": False}
+            return {
+                "ok": True, "action": "skip", "changed": False,
+                "history_saved": history_saved,
+            }
         if action not in {"keep_local", "keep_remote"}:
             return {"ok": False, "status": 400, "error": "不支持的冲突处理操作。"}
         expected_confirmation = "覆盖远端" if action == "keep_local" else "覆盖本地"
@@ -500,6 +660,7 @@ class GallerySyncConflictManager:
                         }
                     self.remote.sha_cache[ticket["path"]] = ticket["remote_git_sha"]
                     warning = ""
+                history_saved = self._record_history(actor, ticket, action)
                 self._consume_ticket(token)
                 return {
                     "ok": True,
@@ -508,6 +669,7 @@ class GallerySyncConflictManager:
                     "backup": str(backup),
                     "warning": warning,
                     "changed": True,
+                    "history_saved": history_saved,
                 }
         finally:
             self.sync.sync_lock.release()
