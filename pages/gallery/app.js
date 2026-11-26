@@ -16,8 +16,9 @@ async function apiGet(endpoint, params) {
     url += `?${query}`;
   }
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-  return await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || `请求失败 (${response.status})`);
+  return payload;
 }
 
 async function apiPost(endpoint, data) {
@@ -27,8 +28,9 @@ async function apiPost(endpoint, data) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!response.ok) throw new Error(`请求失败 (${response.status})`);
-  return await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || `请求失败 (${response.status})`);
+  return payload;
 }
 
 const ALL_CATEGORY = "\u0000ALL";
@@ -50,6 +52,10 @@ let categoryDeletePlan = null;
 let categoryDeleteBusy = false;
 const moveSelection = new MoveSelection(50);
 let activeView = "gallery";
+let syncConflictsLoaded = false;
+let syncConflictsBusy = false;
+let syncConflictLoadId = 0;
+const syncConflictPreviewUrls = new Set();
 let aliases = [];
 let aliasesLoaded = false;
 let aliasesDirty = false;
@@ -60,8 +66,13 @@ const uploadPreviewObjectUrls = new Set();
 
 const galleryViewTab = $("view-gallery-tab");
 const aliasesViewTab = $("view-aliases-tab");
+const syncConflictsViewTab = $("view-conflicts-tab");
 const galleryView = $("view-gallery");
 const aliasesView = $("view-aliases");
+const syncConflictsView = $("view-conflicts");
+const syncConflictReload = $("sync-conflict-reload");
+const syncConflictSummary = $("sync-conflict-summary");
+const syncConflictList = $("sync-conflict-list");
 const tabs = $("tabs");
 const grid = $("grid");
 const upSel = $("up-sel");
@@ -133,29 +144,350 @@ function showMsg(text, ok = true) {
 }
 
 function switchView(viewName) {
-  if (viewName !== "gallery" && viewName !== "aliases") return;
+  if (!["gallery", "aliases", "conflicts"].includes(viewName)) return;
   activeView = viewName;
   const showGallery = viewName === "gallery";
+  const showAliases = viewName === "aliases";
+  const showConflicts = viewName === "conflicts";
   galleryView.hidden = !showGallery;
-  aliasesView.hidden = showGallery;
+  aliasesView.hidden = !showAliases;
+  syncConflictsView.hidden = !showConflicts;
   galleryViewTab.classList.toggle("active", showGallery);
-  aliasesViewTab.classList.toggle("active", !showGallery);
+  aliasesViewTab.classList.toggle("active", showAliases);
+  syncConflictsViewTab.classList.toggle("active", showConflicts);
   galleryViewTab.setAttribute("aria-selected", String(showGallery));
-  aliasesViewTab.setAttribute("aria-selected", String(!showGallery));
-  if (!showGallery && !aliasesLoaded) void loadAliases(false);
+  aliasesViewTab.setAttribute("aria-selected", String(showAliases));
+  syncConflictsViewTab.setAttribute("aria-selected", String(showConflicts));
+  if (showAliases && !aliasesLoaded) void loadAliases(false);
+  if (showConflicts && !syncConflictsLoaded) void loadSyncConflicts(false);
 }
 
 galleryViewTab.addEventListener("click", () => switchView("gallery"));
 aliasesViewTab.addEventListener("click", () => switchView("aliases"));
-for (const tab of [galleryViewTab, aliasesViewTab]) {
+syncConflictsViewTab.addEventListener("click", () => switchView("conflicts"));
+for (const tab of [galleryViewTab, aliasesViewTab, syncConflictsViewTab]) {
   tab.addEventListener("keydown", event => {
-    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
     event.preventDefault();
-    const target = activeView === "gallery" ? aliasesViewTab : galleryViewTab;
-    target.focus();
-    target.click();
+    const viewTabs = [galleryViewTab, aliasesViewTab, syncConflictsViewTab];
+    const currentIndex = viewTabs.indexOf(tab);
+    const nextIndex = (currentIndex + (event.key === "ArrowRight" ? 1 : viewTabs.length - 1)) % viewTabs.length;
+    viewTabs[nextIndex].focus();
+    viewTabs[nextIndex].click();
   });
 }
+
+function formatConflictBytes(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size < 0) return "未知";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function appendConflictMeta(container, label, value, key = "") {
+  const row = document.createElement("div");
+  row.className = "sync-conflict-meta-row";
+  const name = document.createElement("span");
+  name.className = "sync-conflict-meta-label";
+  name.textContent = label;
+  const content = document.createElement("code");
+  content.className = "sync-conflict-meta-value";
+  if (key) content.dataset.meta = key;
+  content.textContent = value || "—";
+  row.append(name, content);
+  container.append(row);
+}
+
+function releaseConflictCardPreviews(card) {
+  for (const image of card.querySelectorAll("img[data-conflict-object-url]")) {
+    const url = image.dataset.conflictObjectUrl || "";
+    if (url) {
+      try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale preview URLs */ }
+      syncConflictPreviewUrls.delete(url);
+    }
+    delete image.dataset.conflictObjectUrl;
+    image.removeAttribute("src");
+  }
+}
+
+function createSyncConflictCard(conflict) {
+  const card = document.createElement("article");
+  card.className = "sync-conflict-card";
+  card.dataset.ticket = conflict.ticket || "";
+
+  const heading = document.createElement("div");
+  heading.className = "sync-conflict-card-heading";
+  const title = document.createElement("h3");
+  title.textContent = conflict.path || "未知文件";
+  const badge = document.createElement("span");
+  badge.className = "sync-conflict-badge";
+  badge.textContent = conflict.can_resolve ? "内容不同" : "无法安全读取";
+  heading.append(title, badge);
+  card.append(heading);
+
+  const compare = document.createElement("div");
+  compare.className = "sync-conflict-compare";
+
+  const sides = [
+    {
+      key: "local",
+      title: "树莓派本地",
+      source: "本地图库文件",
+      size: conflict.local?.size,
+      sha: conflict.local?.sha256,
+      timeLabel: "服务器文件时间",
+      time: conflict.local?.mtime_text,
+    },
+    {
+      key: "remote",
+      title: "GitHub 远端",
+      source: "GitHub 仓库文件",
+      size: conflict.remote?.size,
+      sha: "",
+      timeLabel: "最近提交时间",
+      time: conflict.remote?.commit_time,
+    },
+  ];
+
+  for (const side of sides) {
+    const panel = document.createElement("section");
+    panel.className = `sync-conflict-side sync-conflict-side-${side.key}`;
+    const panelTitle = document.createElement("h4");
+    panelTitle.textContent = side.title;
+    const imageButton = document.createElement("button");
+    imageButton.type = "button";
+    imageButton.className = "sync-conflict-preview-button";
+    imageButton.setAttribute("aria-label", `放大查看${side.title}图片`);
+    const image = document.createElement("img");
+    image.alt = `${side.title}：${conflict.name || ""}`;
+    image.loading = "lazy";
+    imageButton.append(image);
+    imageButton.addEventListener("click", () => {
+      const data = image.dataset.previewPayload;
+      if (!data) return;
+      try {
+        const payload = JSON.parse(data);
+        if (!setModalImagePayload(payload, `${side.title} · ${conflict.path}`)) {
+          showMsg("图片预览数据无效", false);
+        }
+      } catch (error) {
+        showMsg("图片预览数据无效", false);
+      }
+    });
+    const hint = document.createElement("p");
+    hint.className = "sync-conflict-preview-hint";
+    hint.textContent = conflict.ticket ? "正在加载预览…" : "本地文件不可读取，无法生成安全预览";
+    const meta = document.createElement("div");
+    meta.className = "sync-conflict-meta";
+    appendConflictMeta(meta, "文件大小", formatConflictBytes(side.size), `${side.key}-size`);
+    appendConflictMeta(meta, "SHA-256", side.sha || "预览后显示", `${side.key}-sha256`);
+    appendConflictMeta(
+      meta,
+      "Git Blob SHA",
+      side.key === "local" ? (conflict.local?.blob_sha || "—") : (conflict.remote?.blob_sha || "—"),
+      `${side.key}-blob-sha`,
+    );
+    appendConflictMeta(meta, side.timeLabel, side.time || "—", `${side.key}-time`);
+    panel.append(panelTitle, imageButton, hint, meta);
+    panel.dataset.side = side.key;
+    panel.dataset.hint = side.key;
+    compare.append(panel);
+  }
+  card.append(compare);
+
+  if (conflict.error) {
+    const warning = document.createElement("p");
+    warning.className = "sync-conflict-error";
+    warning.textContent = conflict.error;
+    card.append(warning);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "sync-conflict-actions";
+  if (conflict.can_resolve && conflict.ticket) {
+    const keepLocal = document.createElement("button");
+    keepLocal.type = "button";
+    keepLocal.className = "btn btn-primary";
+    keepLocal.textContent = "保留本地 → 覆盖 GitHub";
+    keepLocal.addEventListener("click", () => void resolveSyncConflict(conflict, card, "keep_local"));
+
+    const keepRemote = document.createElement("button");
+    keepRemote.type = "button";
+    keepRemote.className = "btn btn-save";
+    keepRemote.textContent = "保留 GitHub → 覆盖本地";
+    keepRemote.addEventListener("click", () => void resolveSyncConflict(conflict, card, "keep_remote"));
+
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.className = "btn btn-quiet";
+    skip.textContent = "暂时跳过";
+    skip.addEventListener("click", () => void resolveSyncConflict(conflict, card, "skip"));
+    actions.append(keepLocal, keepRemote, skip);
+  } else {
+    const unavailable = document.createElement("p");
+    unavailable.className = "sync-conflict-error";
+    unavailable.textContent = "该文件当前无法安全读取，暂不提供覆盖操作。";
+    actions.append(unavailable);
+  }
+  card.append(actions);
+  return card;
+}
+
+async function loadSyncConflictPreview(conflict, card) {
+  if (!conflict.ticket || !card.isConnected) return;
+  try {
+    const result = await apiGet("sync_conflict_preview", { ticket: conflict.ticket });
+    if (!result?.ok) throw new Error(result?.error || "预览加载失败");
+    if (!card.isConnected || card.dataset.ticket !== conflict.ticket) return;
+    for (const side of ["local", "remote"]) {
+      const panel = card.querySelector(`.sync-conflict-side-${side}`);
+      const image = panel?.querySelector("img");
+      const hint = panel?.querySelector(".sync-conflict-preview-hint");
+      const data = result[side];
+      if (!image || !data?.image) continue;
+      const payload = { image: data.image, contentType: data.content_type || "image/jpeg" };
+      image.dataset.previewPayload = JSON.stringify(payload);
+      const url = makeBlobUrl(data.image, data.content_type || "image/jpeg");
+      if (!url) throw new Error("图片预览数据无效");
+      image.dataset.conflictObjectUrl = url;
+      image.src = url;
+      syncConflictPreviewUrls.add(url);
+      if (hint) hint.textContent = "点击图片可放大查看";
+      const size = panel.querySelector('[data-meta="' + side + '-size"]');
+      const sha = panel.querySelector('[data-meta="' + side + '-sha256"]');
+      const blobSha = panel.querySelector('[data-meta="' + side + '-blob-sha"]');
+      const time = panel.querySelector('[data-meta="' + side + '-time"]');
+      if (size) size.textContent = formatConflictBytes(data.size);
+      if (sha) sha.textContent = data.sha256 || "—";
+      if (blobSha) blobSha.textContent = data.blob_sha || "—";
+      if (time && data.commit_time) time.textContent = data.commit_time;
+    }
+  } catch (error) {
+    if (!card.isConnected) return;
+    for (const hint of card.querySelectorAll(".sync-conflict-preview-hint")) {
+      hint.textContent = error.message || "预览加载失败，请刷新清单";
+    }
+    card.classList.add("preview-failed");
+  }
+}
+
+async function resolveSyncConflict(conflict, card, action) {
+  if (!conflict.ticket || card.dataset.busy === "true") return;
+  let confirmation = "";
+  if (action === "keep_local" || action === "keep_remote") {
+    const target = action === "keep_local" ? "GitHub 远端" : "树莓派本地";
+    const phrase = action === "keep_local" ? "覆盖远端" : "覆盖本地";
+    const accepted = window.confirm(
+      `确定使用${action === "keep_local" ? "树莓派本地" : "GitHub 远端"}版本，覆盖${target}文件？
+
+${conflict.path}
+
+操作前会备份双方原文件；若任一侧内容已变化，将拒绝执行。`
+    );
+    if (!accepted) return;
+    confirmation = window.prompt(`为防止误操作，请输入“${phrase}”继续：`, "");
+    if (confirmation !== phrase) {
+      if (confirmation !== null) showMsg("确认文本不匹配，未执行任何修改。", false);
+      return;
+    }
+  }
+
+  card.dataset.busy = "true";
+  const buttons = [...card.querySelectorAll(".sync-conflict-actions button")];
+  for (const button of buttons) button.disabled = true;
+  try {
+    const result = await apiPost("sync_conflicts", {
+      action,
+      ticket: conflict.ticket,
+      confirmation,
+    });
+    if (!result?.ok) throw new Error(result?.error || "冲突处理失败");
+    releaseConflictCardPreviews(card);
+    if (action === "skip") {
+      card.classList.add("is-skipped");
+      const badge = card.querySelector(".sync-conflict-badge");
+      if (badge) badge.textContent = "已跳过";
+      const actions = card.querySelector(".sync-conflict-actions");
+      if (actions) actions.textContent = "本次未修改本地或远端文件；刷新页面后仍可重新处理。";
+      showMsg("已跳过该冲突，双方文件均未修改。");
+    } else {
+      card.remove();
+      const remaining = syncConflictList.querySelectorAll(".sync-conflict-card").length;
+      syncConflictSummary.textContent = remaining
+        ? `尚有 ${remaining} 项冲突待处理。`
+        : "当前清单中的冲突已全部处理完成。";
+      showMsg(
+        `${action === "keep_local" ? "已保留本地版本并更新 GitHub" : "已保留 GitHub 版本并更新本地"}。` +
+        (result.warning ? ` ${result.warning}` : "")
+      );
+    }
+  } catch (error) {
+    showMsg(error.message || "冲突处理失败，请刷新后重试", false);
+    if (/已变化|已过期|已失效|SHA/.test(error.message || "")) {
+      syncConflictsLoaded = false;
+      void loadSyncConflicts(true);
+    } else {
+      card.dataset.busy = "false";
+      for (const button of buttons) button.disabled = false;
+    }
+  }
+}
+
+async function loadSyncConflicts(force = false) {
+  if (syncConflictsBusy || (syncConflictsLoaded && !force)) return;
+  syncConflictsBusy = true;
+  const requestId = ++syncConflictLoadId;
+  syncConflictReload.disabled = true;
+  syncConflictSummary.textContent = "正在读取 GitHub 文件树并检查同路径图片…";
+  releasePreviewObjectUrls(syncConflictPreviewUrls);
+  syncConflictList.replaceChildren();
+  try {
+    const result = await apiGet("sync_conflicts");
+    if (!result?.ok) throw new Error(result?.error || "读取同步冲突失败");
+    if (requestId !== syncConflictLoadId) return;
+    syncConflictsLoaded = true;
+    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    syncConflictSummary.textContent = conflicts.length
+      ? `发现 ${result.count ?? conflicts.length} 项同路径内容冲突。预览 SHA-256 后，再选择每一项的处理方式。`
+      : "未发现同路径内容冲突，本地与 GitHub 的同名图片内容一致。";
+    if (result.truncated) {
+      syncConflictSummary.textContent += " 当前最多显示 100 项，请处理后刷新查看剩余项目。";
+    }
+    if (!conflicts.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty sync-conflict-empty";
+      empty.textContent = "太好了，目前没有需要处理的同步冲突。";
+      syncConflictList.append(empty);
+      return;
+    }
+    for (const conflict of conflicts) {
+      const card = createSyncConflictCard(conflict);
+      syncConflictList.append(card);
+      if (conflict.ticket) void loadSyncConflictPreview(conflict, card);
+    }
+  } catch (error) {
+    if (requestId !== syncConflictLoadId) return;
+    syncConflictsLoaded = false;
+    syncConflictSummary.textContent = error.message || "同步冲突清单读取失败";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn btn-quiet";
+    retry.textContent = "重新尝试";
+    retry.addEventListener("click", () => void loadSyncConflicts(true));
+    syncConflictList.append(retry);
+  } finally {
+    if (requestId === syncConflictLoadId) {
+      syncConflictsBusy = false;
+      syncConflictReload.disabled = false;
+    }
+  }
+}
+
+syncConflictReload.addEventListener("click", () => {
+  syncConflictsLoaded = false;
+  void loadSyncConflicts(true);
+});
 
 function makeBlobUrl(data, contentType) {
   if (!data) return "";
@@ -1480,6 +1812,7 @@ aliasReloadBtn.addEventListener("click", async () => {
 window.addEventListener("beforeunload", event => {
   releaseGridImageResources();
   releasePreviewObjectUrls(uploadPreviewObjectUrls);
+  releasePreviewObjectUrls(syncConflictPreviewUrls);
   releaseModalObjectUrl();
   disposeMovePreviews();
   if (!aliasesDirty) return;
