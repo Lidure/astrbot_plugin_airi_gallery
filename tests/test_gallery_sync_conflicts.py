@@ -157,7 +157,9 @@ def test_skip_consumes_ticket_without_mutating_either_side(tmp_path):
 
     result = manager.resolve("dashboard-admin", conflict["ticket"], "skip")
 
-    assert result == {"ok": True, "action": "skip", "changed": False}
+    assert result == {
+        "ok": True, "action": "skip", "changed": False, "history_saved": True
+    }
     assert local_path.read_bytes() == local_bytes
     assert remote.remote_bytes == remote_bytes
     assert sync.replacements == 0
@@ -165,6 +167,65 @@ def test_skip_consumes_ticket_without_mutating_either_side(tmp_path):
     assert not manager.backup_dir.exists()
     assert manager.preview("dashboard-admin", conflict["ticket"])["status"] == 410
 
+
+
+def test_preview_keeps_remote_image_when_local_file_is_not_a_real_image(tmp_path):
+    manager, _, _, _, local_path, _, _ = make_manager(tmp_path)
+    local_path.write_bytes(b"not a decodable image despite the .png suffix")
+
+    conflict = list_one(manager)
+    preview = manager.preview("dashboard-admin", conflict["ticket"])
+
+    assert preview["ok"] is True
+    assert preview["local"]["image"] is None
+    assert "无法识别" in preview["local"]["preview_error"]
+    assert preview["remote"]["image"].startswith(b"\xff\xd8")
+
+
+def test_preview_keeps_local_image_when_remote_file_is_not_a_real_image(tmp_path):
+    manager, _, _, remote, _, _, _ = make_manager(tmp_path)
+    remote.remote_bytes = b"not a decodable image despite the .png suffix"
+
+    conflict = list_one(manager)
+    preview = manager.preview("dashboard-admin", conflict["ticket"])
+
+    assert preview["ok"] is True
+    assert preview["local"]["image"].startswith(b"\xff\xd8")
+    assert preview["remote"]["image"] is None
+    assert "无法识别" in preview["remote"]["preview_error"]
+
+
+def test_skip_history_persists_and_marks_same_snapshot_after_manager_restart(tmp_path):
+    manager, store, sync, remote, _, _, _ = make_manager(tmp_path)
+    conflict = list_one(manager)
+
+    result = manager.resolve("dashboard-admin", conflict["ticket"], "skip")
+
+    assert result["ok"] is True
+    assert result["history_saved"] is True
+    history = manager.list_history("dashboard-admin")
+    assert history["count"] == 1
+    assert history["history"][0]["status"] == "skipped"
+    assert history["history"][0]["path"] == GIT_PATH
+
+    restored = GallerySyncConflictManager(
+        store,
+        sync,
+        remote,
+        image_suffixes={".png", ".gif", ".jpg"},
+        backup_dir=manager.backup_dir,
+    )
+    assert restored.list_history("dashboard-admin")["count"] == 1
+    refreshed = restored.list_conflicts("dashboard-admin")
+    assert refreshed["conflicts"][0]["history_status"] == "skipped"
+
+
+def test_history_is_isolated_by_authenticated_actor(tmp_path):
+    manager, *_ = make_manager(tmp_path)
+    conflict = list_one(manager)
+    manager.resolve("dashboard-admin", conflict["ticket"], "skip")
+
+    assert manager.list_history("someone-else")["history"] == []
 
 def test_keep_remote_backups_both_files_then_replaces_local_atomically(tmp_path):
     manager, store, sync, remote, local_path, local_bytes, remote_bytes = make_manager(tmp_path)
