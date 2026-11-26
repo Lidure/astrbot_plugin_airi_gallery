@@ -55,6 +55,10 @@ let activeView = "gallery";
 let syncConflictsLoaded = false;
 let syncConflictsBusy = false;
 let syncConflictLoadId = 0;
+let syncConflictSnapshot = [];
+let syncConflictSnapshotUpdatedAt = "";
+let syncConflictHistoryLoaded = false;
+let syncConflictDbPromise = null;
 const syncConflictPreviewUrls = new Set();
 let aliases = [];
 let aliasesLoaded = false;
@@ -73,6 +77,8 @@ const syncConflictsView = $("view-conflicts");
 const syncConflictReload = $("sync-conflict-reload");
 const syncConflictSummary = $("sync-conflict-summary");
 const syncConflictList = $("sync-conflict-list");
+const syncConflictHistorySummary = $("sync-conflict-history-summary");
+const syncConflictHistoryList = $("sync-conflict-history-list");
 const tabs = $("tabs");
 const grid = $("grid");
 const upSel = $("up-sel");
@@ -159,7 +165,10 @@ function switchView(viewName) {
   aliasesViewTab.setAttribute("aria-selected", String(showAliases));
   syncConflictsViewTab.setAttribute("aria-selected", String(showConflicts));
   if (showAliases && !aliasesLoaded) void loadAliases(false);
-  if (showConflicts && !syncConflictsLoaded) void loadSyncConflicts(false);
+  if (showConflicts) {
+    if (!syncConflictsLoaded) void loadSyncConflicts(false);
+    if (!syncConflictHistoryLoaded) void loadSyncConflictHistory(false);
+  }
 }
 
 galleryViewTab.addEventListener("click", () => switchView("gallery"));
@@ -211,9 +220,123 @@ function releaseConflictCardPreviews(card) {
   }
 }
 
+const SYNC_CONFLICT_CACHE_DB = "airi-gallery-webui-cache";
+const SYNC_CONFLICT_CACHE_STORE = "snapshots";
+
+function openSyncConflictCacheDb() {
+  if (!("indexedDB" in window)) return Promise.reject(new Error("浏览器不支持本地缓存"));
+  if (!syncConflictDbPromise) {
+    syncConflictDbPromise = new Promise((resolve, reject) => {
+      const request = window.indexedDB.open(SYNC_CONFLICT_CACHE_DB, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(SYNC_CONFLICT_CACHE_STORE)) {
+          db.createObjectStore(SYNC_CONFLICT_CACHE_STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("打开本地缓存失败"));
+      request.onblocked = () => reject(new Error("本地缓存被其他页面占用"));
+    }).catch(error => {
+      syncConflictDbPromise = null;
+      throw error;
+    });
+  }
+  return syncConflictDbPromise;
+}
+
+async function readSyncConflictCache() {
+  let db;
+  try {
+    db = await openSyncConflictCacheDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SYNC_CONFLICT_CACHE_STORE, "readonly");
+      const request = tx.objectStore(SYNC_CONFLICT_CACHE_STORE).get("latest");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("读取冲突缓存失败"));
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => reject(tx.error || new Error("读取冲突缓存失败"));
+    });
+  } catch (error) {
+    try { db?.close(); } catch (closeError) { /* ignore */ }
+    return null;
+  }
+}
+
+async function writeSyncConflictCache() {
+  let db;
+  try {
+    db = await openSyncConflictCacheDb();
+    const conflicts = syncConflictSnapshot.map(conflict => {
+      const cached = JSON.parse(JSON.stringify(conflict));
+      // A ticket is short-lived, single-use and must never survive in browser storage.
+      delete cached.ticket;
+      cached.cached_snapshot = true;
+      return cached;
+    });
+    const snapshot = {
+      version: 1,
+      updatedAt: syncConflictSnapshotUpdatedAt || new Date().toISOString(),
+      conflicts,
+    };
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SYNC_CONFLICT_CACHE_STORE, "readwrite");
+      tx.objectStore(SYNC_CONFLICT_CACHE_STORE).put(snapshot, "latest");
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error("保存冲突缓存失败"));
+      tx.onabort = () => reject(tx.error || new Error("保存冲突缓存失败"));
+    });
+    db.close();
+    return true;
+  } catch (error) {
+    try { db?.close(); } catch (closeError) { /* ignore */ }
+    return false;
+  }
+}
+
+function conflictSnapshotKey(conflict) {
+  return [
+    conflict?.path || "",
+    conflict?.local?.blob_sha || "",
+    conflict?.remote?.blob_sha || "",
+  ].join("|");
+}
+
+function formatConflictDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString();
+}
+
+function appendConflictMeta(container, label, value, key = "") {
+  const row = document.createElement("div");
+  row.className = "sync-conflict-meta-row";
+  const name = document.createElement("span");
+  name.className = "sync-conflict-meta-label";
+  name.textContent = label;
+  const content = document.createElement("code");
+  content.className = "sync-conflict-meta-value";
+  if (key) content.dataset.meta = key;
+  content.textContent = value || "—";
+  row.append(name, content);
+  container.append(row);
+}
+
+function releaseConflictCardPreviews(card) {
+  for (const image of card.querySelectorAll("img[data-conflict-object-url]")) {
+    const url = image.dataset.conflictObjectUrl || "";
+    if (url) {
+      try { URL.revokeObjectURL(url); } catch (error) { /* ignore stale preview URLs */ }
+      syncConflictPreviewUrls.delete(url);
+    }
+    delete image.dataset.conflictObjectUrl;
+    image.removeAttribute("src");
+  }
+}
+
 function createSyncConflictCard(conflict) {
   const card = document.createElement("article");
   card.className = "sync-conflict-card";
+  if (conflict.history_status === "skipped") card.classList.add("is-skipped");
   card.dataset.ticket = conflict.ticket || "";
 
   const heading = document.createElement("div");
@@ -222,53 +345,44 @@ function createSyncConflictCard(conflict) {
   title.textContent = conflict.path || "未知文件";
   const badge = document.createElement("span");
   badge.className = "sync-conflict-badge";
-  badge.textContent = conflict.can_resolve ? "内容不同" : "无法安全读取";
+  badge.textContent = conflict.history_status === "skipped"
+    ? "此前已跳过 · 可重新处理"
+    : (conflict.can_resolve ? "内容不同" : "无法安全读取");
   heading.append(title, badge);
   card.append(heading);
 
   const compare = document.createElement("div");
   compare.className = "sync-conflict-compare";
-
   const sides = [
-    {
-      key: "local",
-      title: "树莓派本地",
-      source: "本地图库文件",
-      size: conflict.local?.size,
-      sha: conflict.local?.sha256,
-      timeLabel: "服务器文件时间",
-      time: conflict.local?.mtime_text,
-    },
-    {
-      key: "remote",
-      title: "GitHub 远端",
-      source: "GitHub 仓库文件",
-      size: conflict.remote?.size,
-      sha: "",
-      timeLabel: "最近提交时间",
-      time: conflict.remote?.commit_time,
-    },
+    { key: "local", title: "树莓派本地", size: conflict.local?.size, sha: conflict.local?.sha256, timeLabel: "服务器文件时间", time: conflict.local?.mtime_text },
+    { key: "remote", title: "GitHub 远端", size: conflict.remote?.size, sha: "", timeLabel: "最近提交时间", time: conflict.remote?.commit_time },
   ];
 
   for (const side of sides) {
     const panel = document.createElement("section");
-    panel.className = `sync-conflict-side sync-conflict-side-${side.key}`;
+    panel.className = "sync-conflict-side sync-conflict-side-" + side.key;
     const panelTitle = document.createElement("h4");
     panelTitle.textContent = side.title;
     const imageButton = document.createElement("button");
     imageButton.type = "button";
     imageButton.className = "sync-conflict-preview-button";
-    imageButton.setAttribute("aria-label", `放大查看${side.title}图片`);
+    imageButton.setAttribute("aria-label", "放大查看" + side.title + "图片");
     const image = document.createElement("img");
-    image.alt = `${side.title}：${conflict.name || ""}`;
+    image.alt = side.title + "：" + (conflict.name || "");
     image.loading = "lazy";
+    image.hidden = true;
+    image.onerror = () => {
+      const hint = panel.querySelector(".sync-conflict-preview-hint");
+      if (hint) hint.textContent = "浏览器无法解码该预览图片，请刷新后重试。";
+      panel.classList.add("preview-unavailable");
+    };
     imageButton.append(image);
     imageButton.addEventListener("click", () => {
       const data = image.dataset.previewPayload;
       if (!data) return;
       try {
         const payload = JSON.parse(data);
-        if (!setModalImagePayload(payload, `${side.title} · ${conflict.path}`)) {
+        if (!setModalImagePayload(payload, side.title + " · " + conflict.path)) {
           showMsg("图片预览数据无效", false);
         }
       } catch (error) {
@@ -277,21 +391,21 @@ function createSyncConflictCard(conflict) {
     });
     const hint = document.createElement("p");
     hint.className = "sync-conflict-preview-hint";
-    hint.textContent = conflict.ticket ? "正在加载预览…" : "本地文件不可读取，无法生成安全预览";
+    hint.textContent = conflict.cached_snapshot
+      ? "上次保存的预览"
+      : (conflict.ticket ? "正在加载预览…" : "当前没有可用预览");
     const meta = document.createElement("div");
     meta.className = "sync-conflict-meta";
-    appendConflictMeta(meta, "文件大小", formatConflictBytes(side.size), `${side.key}-size`);
-    appendConflictMeta(meta, "SHA-256", side.sha || "预览后显示", `${side.key}-sha256`);
+    appendConflictMeta(meta, "文件大小", formatConflictBytes(side.size), side.key + "-size");
+    appendConflictMeta(meta, "SHA-256", side.sha || "预览后显示", side.key + "-sha256");
     appendConflictMeta(
       meta,
       "Git Blob SHA",
       side.key === "local" ? (conflict.local?.blob_sha || "—") : (conflict.remote?.blob_sha || "—"),
-      `${side.key}-blob-sha`,
+      side.key + "-blob-sha",
     );
-    appendConflictMeta(meta, side.timeLabel, side.time || "—", `${side.key}-time`);
+    appendConflictMeta(meta, side.timeLabel, side.time || "—", side.key + "-time");
     panel.append(panelTitle, imageButton, hint, meta);
-    panel.dataset.side = side.key;
-    panel.dataset.hint = side.key;
     compare.append(panel);
   }
   card.append(compare);
@@ -305,7 +419,12 @@ function createSyncConflictCard(conflict) {
 
   const actions = document.createElement("div");
   actions.className = "sync-conflict-actions";
-  if (conflict.can_resolve && conflict.ticket) {
+  if (conflict.cached_snapshot) {
+    const cachedHint = document.createElement("p");
+    cachedHint.className = "sync-conflict-cache-hint";
+    cachedHint.textContent = "这是上次保存的只读快照。刷新冲突并重新核对后，才能执行覆盖或跳过操作。";
+    actions.append(cachedHint);
+  } else if (conflict.can_resolve && conflict.ticket) {
     const keepLocal = document.createElement("button");
     keepLocal.type = "button";
     keepLocal.className = "btn btn-primary";
@@ -334,41 +453,104 @@ function createSyncConflictCard(conflict) {
   return card;
 }
 
+function applySyncConflictPreview(conflict, card, preview) {
+  if (!preview || !card.isConnected) return;
+  for (const side of ["local", "remote"]) {
+    const panel = card.querySelector(".sync-conflict-side-" + side);
+    const image = panel?.querySelector("img");
+    const hint = panel?.querySelector(".sync-conflict-preview-hint");
+    const data = preview[side] || {};
+    if (!panel || !image) continue;
+
+    const size = panel.querySelector('[data-meta="' + side + '-size"]');
+    const sha = panel.querySelector('[data-meta="' + side + '-sha256"]');
+    const blobSha = panel.querySelector('[data-meta="' + side + '-blob-sha"]');
+    const time = panel.querySelector('[data-meta="' + side + '-time"]');
+    if (size && Number.isFinite(Number(data.size))) size.textContent = formatConflictBytes(data.size);
+    if (sha && data.sha256) sha.textContent = data.sha256;
+    if (blobSha && data.blob_sha) blobSha.textContent = data.blob_sha;
+    if (time && (data.commit_time || data.mtime_text)) time.textContent = data.commit_time || data.mtime_text;
+
+    if (!data.image) {
+      if (hint) hint.textContent = data.preview_error || "该侧暂时无法生成预览；另一侧仍可单独查看。";
+      panel.classList.add("preview-unavailable");
+      continue;
+    }
+
+    const payload = { image: data.image, contentType: data.content_type || "image/jpeg" };
+    image.dataset.previewPayload = JSON.stringify(payload);
+    const url = makeBlobUrl(data.image, data.content_type || "image/jpeg");
+    if (!url) {
+      if (hint) hint.textContent = "预览数据解码失败，请刷新后重试。";
+      panel.classList.add("preview-unavailable");
+      continue;
+    }
+    image.dataset.conflictObjectUrl = url;
+    image.hidden = false;
+    image.src = url;
+    syncConflictPreviewUrls.add(url);
+    if (hint) hint.textContent = "点击图片可放大查看";
+    panel.classList.remove("preview-unavailable");
+  }
+}
+
 async function loadSyncConflictPreview(conflict, card) {
   if (!conflict.ticket || !card.isConnected) return;
   try {
     const result = await apiGet("sync_conflict_preview", { ticket: conflict.ticket });
     if (!result?.ok) throw new Error(result?.error || "预览加载失败");
     if (!card.isConnected || card.dataset.ticket !== conflict.ticket) return;
-    for (const side of ["local", "remote"]) {
-      const panel = card.querySelector(`.sync-conflict-side-${side}`);
-      const image = panel?.querySelector("img");
-      const hint = panel?.querySelector(".sync-conflict-preview-hint");
-      const data = result[side];
-      if (!image || !data?.image) continue;
-      const payload = { image: data.image, contentType: data.content_type || "image/jpeg" };
-      image.dataset.previewPayload = JSON.stringify(payload);
-      const url = makeBlobUrl(data.image, data.content_type || "image/jpeg");
-      if (!url) throw new Error("图片预览数据无效");
-      image.dataset.conflictObjectUrl = url;
-      image.src = url;
-      syncConflictPreviewUrls.add(url);
-      if (hint) hint.textContent = "点击图片可放大查看";
-      const size = panel.querySelector('[data-meta="' + side + '-size"]');
-      const sha = panel.querySelector('[data-meta="' + side + '-sha256"]');
-      const blobSha = panel.querySelector('[data-meta="' + side + '-blob-sha"]');
-      const time = panel.querySelector('[data-meta="' + side + '-time"]');
-      if (size) size.textContent = formatConflictBytes(data.size);
-      if (sha) sha.textContent = data.sha256 || "—";
-      if (blobSha) blobSha.textContent = data.blob_sha || "—";
-      if (time && data.commit_time) time.textContent = data.commit_time;
-    }
+    conflict.preview = result;
+    applySyncConflictPreview(conflict, card, result);
+    void writeSyncConflictCache();
   } catch (error) {
     if (!card.isConnected) return;
-    for (const hint of card.querySelectorAll(".sync-conflict-preview-hint")) {
-      hint.textContent = error.message || "预览加载失败，请刷新清单";
-    }
+    conflict.preview = {
+      local: { preview_error: error.message || "本地预览加载失败" },
+      remote: { preview_error: error.message || "远端预览加载失败" },
+    };
+    applySyncConflictPreview(conflict, card, conflict.preview);
     card.classList.add("preview-failed");
+    void writeSyncConflictCache();
+  }
+}
+
+async function loadSyncConflictHistory(force = false) {
+  if (syncConflictHistoryLoaded && !force) return;
+  syncConflictHistorySummary.textContent = "正在读取处理历史…";
+  try {
+    const result = await apiGet("sync_conflict_history");
+    if (!result?.ok) throw new Error(result?.error || "读取处理历史失败");
+    syncConflictHistoryLoaded = true;
+    const entries = Array.isArray(result.history) ? result.history : [];
+    syncConflictHistoryList.replaceChildren();
+    if (!entries.length) {
+      syncConflictHistorySummary.textContent = "还没有处理记录。跳过或成功解决的冲突会保留在这里。";
+      return;
+    }
+    syncConflictHistorySummary.textContent = "共保存 " + entries.length + " 条记录，最多显示最近 100 条。";
+    for (const entry of entries) {
+      const row = document.createElement("article");
+      row.className = "sync-conflict-history-row";
+      const main = document.createElement("div");
+      main.className = "sync-conflict-history-main";
+      const path = document.createElement("strong");
+      path.textContent = entry.path || "未知文件";
+      const detail = document.createElement("span");
+      const actionLabel = entry.action === "skip"
+        ? "暂时跳过"
+        : (entry.action === "keep_local" ? "保留本地并覆盖 GitHub" : "保留 GitHub 并覆盖本地");
+      detail.textContent = actionLabel + " · " + formatConflictDate(entry.created_at);
+      main.append(path, detail);
+      const state = document.createElement("span");
+      state.className = "sync-conflict-history-status " + (entry.status === "skipped" ? "is-skipped" : "is-resolved");
+      state.textContent = entry.status === "skipped" ? "已跳过" : "已解决";
+      row.append(main, state);
+      syncConflictHistoryList.append(row);
+    }
+  } catch (error) {
+    syncConflictHistoryLoaded = false;
+    syncConflictHistorySummary.textContent = error.message || "处理历史读取失败";
   }
 }
 
@@ -379,14 +561,12 @@ async function resolveSyncConflict(conflict, card, action) {
     const target = action === "keep_local" ? "GitHub 远端" : "树莓派本地";
     const phrase = action === "keep_local" ? "覆盖远端" : "覆盖本地";
     const accepted = window.confirm(
-      `确定使用${action === "keep_local" ? "树莓派本地" : "GitHub 远端"}版本，覆盖${target}文件？
-
-${conflict.path}
-
-操作前会备份双方原文件；若任一侧内容已变化，将拒绝执行。`
+      "确定使用" + (action === "keep_local" ? "树莓派本地" : "GitHub 远端") +
+      "版本，覆盖" + target + "文件？\n\n" + conflict.path +
+      "\n\n操作前会备份双方原文件；若任一侧内容已变化，将拒绝执行。"
     );
     if (!accepted) return;
-    confirmation = window.prompt(`为防止误操作，请输入“${phrase}”继续：`, "");
+    confirmation = window.prompt("为防止误操作，请输入“" + phrase + "”继续：", "");
     if (confirmation !== phrase) {
       if (confirmation !== null) showMsg("确认文本不匹配，未执行任何修改。", false);
       return;
@@ -405,21 +585,31 @@ ${conflict.path}
     if (!result?.ok) throw new Error(result?.error || "冲突处理失败");
     releaseConflictCardPreviews(card);
     if (action === "skip") {
+      conflict.ticket = "";
+      conflict.history_status = "skipped";
+      conflict.history_at = new Date().toISOString();
+      conflict.cached_snapshot = true;
+      card.dataset.ticket = "";
       card.classList.add("is-skipped");
       const badge = card.querySelector(".sync-conflict-badge");
       if (badge) badge.textContent = "已跳过";
       const actions = card.querySelector(".sync-conflict-actions");
-      if (actions) actions.textContent = "本次未修改本地或远端文件；刷新页面后仍可重新处理。";
+      if (actions) actions.textContent = "双方文件均未修改。该记录已保存；如需重新处理，请点击上方刷新冲突。";
+      await writeSyncConflictCache();
+      void loadSyncConflictHistory(true);
       showMsg("已跳过该冲突，双方文件均未修改。");
     } else {
+      syncConflictSnapshot = syncConflictSnapshot.filter(item => conflictSnapshotKey(item) !== conflictSnapshotKey(conflict));
+      await writeSyncConflictCache();
       card.remove();
       const remaining = syncConflictList.querySelectorAll(".sync-conflict-card").length;
       syncConflictSummary.textContent = remaining
-        ? `尚有 ${remaining} 项冲突待处理。`
+        ? "尚有 " + remaining + " 项冲突待处理。"
         : "当前清单中的冲突已全部处理完成。";
+      void loadSyncConflictHistory(true);
       showMsg(
-        `${action === "keep_local" ? "已保留本地版本并更新 GitHub" : "已保留 GitHub 版本并更新本地"}。` +
-        (result.warning ? ` ${result.warning}` : "")
+        (action === "keep_local" ? "已保留本地版本并更新 GitHub" : "已保留 GitHub 版本并更新本地") + "。" +
+        (result.warning ? " " + result.warning : "")
       );
     }
   } catch (error) {
@@ -434,48 +624,98 @@ ${conflict.path}
   }
 }
 
+function renderSyncConflictSnapshot(conflicts, cached = false) {
+  releasePreviewObjectUrls(syncConflictPreviewUrls);
+  syncConflictList.replaceChildren();
+  if (!conflicts.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty sync-conflict-empty";
+    empty.textContent = "当前保存的清单中没有待处理的同步冲突。";
+    syncConflictList.append(empty);
+    return;
+  }
+  for (const conflict of conflicts) {
+    const displayConflict = cached
+      ? { ...conflict, ticket: "", cached_snapshot: true }
+      : conflict;
+    const card = createSyncConflictCard(displayConflict);
+    syncConflictList.append(card);
+    if (cached) {
+      if (conflict.preview) applySyncConflictPreview(displayConflict, card, conflict.preview);
+      else {
+        for (const hint of card.querySelectorAll(".sync-conflict-preview-hint")) {
+          hint.textContent = "尚未保存预览；刷新冲突后可重新加载。";
+        }
+      }
+    } else if (conflict.preview) {
+      applySyncConflictPreview(conflict, card, conflict.preview);
+    } else if (conflict.ticket) {
+      void loadSyncConflictPreview(conflict, card);
+    }
+  }
+}
+
 async function loadSyncConflicts(force = false) {
   if (syncConflictsBusy || (syncConflictsLoaded && !force)) return;
   syncConflictsBusy = true;
   const requestId = ++syncConflictLoadId;
   syncConflictReload.disabled = true;
-  syncConflictSummary.textContent = "正在读取 GitHub 文件树并检查同路径图片…";
-  releasePreviewObjectUrls(syncConflictPreviewUrls);
-  syncConflictList.replaceChildren();
+  syncConflictSummary.textContent = force
+    ? "正在重新检查 GitHub 文件树与本地图库…"
+    : "正在恢复上次保存的冲突清单…";
   try {
+    if (!force) {
+      const cached = await readSyncConflictCache();
+      if (requestId !== syncConflictLoadId) return;
+      if (cached?.version === 1 && Array.isArray(cached.conflicts)) {
+        syncConflictSnapshot = cached.conflicts;
+        syncConflictSnapshotUpdatedAt = cached.updatedAt || "";
+        syncConflictsLoaded = true;
+        renderSyncConflictSnapshot(syncConflictSnapshot, true);
+        syncConflictSummary.textContent =
+          "显示上次检查于 " + formatConflictDate(syncConflictSnapshotUpdatedAt) +
+          " 的本地缓存快照（只读，未访问 GitHub）。点击“刷新冲突”获取最新状态和新的操作凭证。";
+        return;
+      }
+    }
+
+    const previousByKey = new Map(syncConflictSnapshot.map(item => [conflictSnapshotKey(item), item]));
     const result = await apiGet("sync_conflicts");
     if (!result?.ok) throw new Error(result?.error || "读取同步冲突失败");
     if (requestId !== syncConflictLoadId) return;
-    syncConflictsLoaded = true;
     const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+    for (const conflict of conflicts) {
+      const previous = previousByKey.get(conflictSnapshotKey(conflict));
+      if (previous?.preview) conflict.preview = previous.preview;
+    }
+    syncConflictSnapshot = conflicts;
+    syncConflictSnapshotUpdatedAt = new Date().toISOString();
+    syncConflictsLoaded = true;
+    await writeSyncConflictCache();
     syncConflictSummary.textContent = conflicts.length
-      ? `发现 ${result.count ?? conflicts.length} 项同路径内容冲突。预览 SHA-256 后，再选择每一项的处理方式。`
+      ? "发现 " + (result.count ?? conflicts.length) + " 项同路径内容冲突。预览可分别加载；无法识别的一侧不会影响另一侧。"
       : "未发现同路径内容冲突，本地与 GitHub 的同名图片内容一致。";
     if (result.truncated) {
       syncConflictSummary.textContent += " 当前最多显示 100 项，请处理后刷新查看剩余项目。";
     }
-    if (!conflicts.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty sync-conflict-empty";
-      empty.textContent = "太好了，目前没有需要处理的同步冲突。";
-      syncConflictList.append(empty);
-      return;
-    }
-    for (const conflict of conflicts) {
-      const card = createSyncConflictCard(conflict);
-      syncConflictList.append(card);
-      if (conflict.ticket) void loadSyncConflictPreview(conflict, card);
-    }
+    renderSyncConflictSnapshot(conflicts, false);
+    void loadSyncConflictHistory(true);
   } catch (error) {
     if (requestId !== syncConflictLoadId) return;
     syncConflictsLoaded = false;
-    syncConflictSummary.textContent = error.message || "同步冲突清单读取失败";
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "btn btn-quiet";
-    retry.textContent = "重新尝试";
-    retry.addEventListener("click", () => void loadSyncConflicts(true));
-    syncConflictList.append(retry);
+    syncConflictSummary.textContent = syncConflictSnapshot.length
+      ? "重新检查失败：" + (error.message || "未知错误") + "。仍保留上次清单，可稍后重试。"
+      : (error.message || "同步冲突清单读取失败");
+    if (!syncConflictSnapshot.length) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "btn btn-quiet";
+      retry.textContent = "重新尝试";
+      retry.addEventListener("click", () => void loadSyncConflicts(true));
+      syncConflictList.replaceChildren(retry);
+    } else {
+      syncConflictSummary.textContent += "（上次清单时间：" + formatConflictDate(syncConflictSnapshotUpdatedAt) + "）";
+    }
   } finally {
     if (requestId === syncConflictLoadId) {
       syncConflictsBusy = false;
@@ -487,6 +727,7 @@ async function loadSyncConflicts(force = false) {
 syncConflictReload.addEventListener("click", () => {
   syncConflictsLoaded = false;
   void loadSyncConflicts(true);
+  void loadSyncConflictHistory(true);
 });
 
 function makeBlobUrl(data, contentType) {
